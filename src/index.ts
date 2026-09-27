@@ -7,7 +7,7 @@
  */
 
 import { Command } from 'commander';
-import { createInterface } from 'readline';
+import { createInterface } from 'node:readline';
 import { FranklinWHService, TeslaService } from './services/index.js';
 import { credentialStore } from './utils/credentials.js';
 
@@ -33,14 +33,18 @@ async function prompt(question: string): Promise<string> {
   });
 }
 
+/**
+ * The intent of having promptPassword separate from prompt is be able to
+ * hide the password input in the terminal. GenAI provided a borked implementation,
+ * so this is a placeholder for now.
+ * 
+ * TODO: try a lib like 'readline-sync' or 'inquirer' to handle hidden input properly.
+ */
 async function promptPassword(question: string): Promise<string> {
   const rl = createReadline();
+
   return new Promise((resolve) => {
-    process.stdout.write(question);
-    
-    // Note: In a real terminal, you'd want to hide the password
-    // This is a simplified version
-    rl.question('', (answer) => {
+    rl.question(question, (answer) => {
       rl.close();
       resolve(answer);
     });
