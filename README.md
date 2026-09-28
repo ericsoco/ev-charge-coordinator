@@ -31,7 +31,7 @@ Coordinate electric vehicle (EV) charging with home solar battery storage. This 
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/ev-charge-coordinator.git
+git clone https://github.com/ericsoco/ev-charge-coordinator.git
 cd ev-charge-coordinator
 ```
 

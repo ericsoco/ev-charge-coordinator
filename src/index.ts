@@ -35,7 +35,7 @@ async function prompt(question: string): Promise<string> {
 
 /**
  * The intent of having promptPassword separate from prompt is be able to
- * hide the password input in the terminal. GenAI provided a borked implementation,
+ * hide the password input in the terminal. LLM provided a borked implementation,
  * so this is a placeholder for now.
  * 
  * TODO: try a lib like 'readline-sync' or 'inquirer' to handle hidden input properly.
