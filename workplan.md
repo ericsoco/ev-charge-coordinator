@@ -35,7 +35,7 @@ Several spec'd features exist but are non-functional against the real APIs.
 | TS/Node CLI, extensible to any EV / any battery | ✅ done | `src/types/ev.ts` (`EVService`), `src/types/battery.ts` (`BatteryService`), both implemented |
 | Python `franklinwh` via localhost proxy (not `python-shell`) | ✅ done | `python/franklin_proxy.py` Flask server; spawned by `FranklinWHService.ts:78-139` |
 | All 9 CLI commands exist | ✅ done | verified via `--help` |
-| MIT license + README + CLI docs | 🟡 mostly | `LICENSE` says `Copyright (c) 2024` w/ no holder; `README.md:34` placeholder `your-username`; `package.json:22` `"author": ""` |
+| MIT license + README + CLI docs | ✅ done | `LICENSE`, `README.md`, `package.json` cleaned up |
 | **Tesla: correct token endpoint** | 🔴 **broken** | `TeslaService.ts:14,130,157` POST to `auth.tesla.com/oauth2/v3/token`. Docs: *"calls to `/token` must use the `fleet-auth.prd.vn.cloud.tesla.com` domain"* |
 | **Tesla: form-encoded body** | 🔴 **broken** | `TeslaService.ts:137,163` send `application/json`; docs require `application/x-www-form-urlencoded` |
 | **Tesla: `audience` param** | 🔴 **broken** | `audience` (Fleet API base URL) is **required** on code exchange — omitted entirely (`TeslaService.ts:129-147`) |
@@ -97,7 +97,7 @@ docs-confirmed path above.
 
 Lock in what works before touching it.
 
-1. Commit the current uncommitted WIP (`package.json`, `package-lock.json`, `src/index.ts`)
+1. ✅ Done manually by user | Commit the current uncommitted WIP (`package.json`, `package-lock.json`, `src/index.ts`)
    as a `chore:` commit so Phase 1's diff is reviewable on its own.
 2. Add `.venv/` to `.gitignore`.
 3. Add `vitest` + `typescript-eslint` flat config (`eslint.config.js`) — get
@@ -377,7 +377,6 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 Suggested commit sequence:
 
 ```
-chore: commit in-progress CLI WIP
 test: characterization suite + eslint flat config + vitest
 fix(tesla): correct token host, form encoding, audience param
 fix(tesla): PKCE + crypto-random OAuth state + refresh-token rotation

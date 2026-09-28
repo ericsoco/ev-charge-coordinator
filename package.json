@@ -19,7 +19,7 @@
     "solar",
     "battery"
   ],
-  "author": "",
+  "author": "ericsoco",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
