@@ -10,6 +10,8 @@ dist/
 .env
 .env.local
 .env.*.local
+.venv/
+venv/
 
 # Credentials (should never be committed)
 *.pem
