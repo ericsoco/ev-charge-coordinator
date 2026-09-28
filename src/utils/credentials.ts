@@ -11,7 +11,11 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 
 const SERVICE_NAME = 'ev-charge-coordinator';
-const CONFIG_DIR = path.join(os.homedir(), '.ev-charge-coordinator');
+// ECC_CONFIG_DIR redirects all credential I/O at another directory; it exists so the
+// test suite can run against a temp dir instead of a real ~/.ev-charge-coordinator.
+const CONFIG_DIR = process.env.ECC_CONFIG_DIR
+  ? path.resolve(process.env.ECC_CONFIG_DIR)
+  : path.join(os.homedir(), '.ev-charge-coordinator');
 const CREDENTIALS_FILE = path.join(CONFIG_DIR, 'credentials.enc');
 const KEY_FILE = path.join(CONFIG_DIR, '.key');
 
@@ -38,7 +42,13 @@ let keytar: typeof import('keytar') | null = null;
 
 async function getKeytar(): Promise<typeof import('keytar') | null> {
   if (keytar !== null) return keytar;
-  
+
+  // ECC_DISABLE_KEYCHAIN forces the encrypted-file path. Required in tests (a real
+  // macOS keychain is shared state) and in CI/headless runs.
+  if (process.env.ECC_DISABLE_KEYCHAIN) {
+    return null;
+  }
+
   try {
     keytar = await import('keytar');
     return keytar;

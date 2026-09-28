@@ -97,16 +97,47 @@ docs-confirmed path above.
 
 Lock in what works before touching it.
 
-1. ✅ Done manually by user | Commit the current uncommitted WIP (`package.json`, `package-lock.json`, `src/index.ts`)
-   as a `chore:` commit so Phase 1's diff is reviewable on its own.
-2. Add `.venv/` to `.gitignore`.
-3. Add `vitest` + `typescript-eslint` flat config (`eslint.config.js`) — get
-   `npm run lint` and `npm test` green against the **existing** code.
-4. Add characterization tests pinning current behavior: credential-store round-trip,
-   `charge-from-battery` math (pre-refactor), FranklinWH `snake_case` → camelCase DTO mapping.
-5. Add `"test"` and `"test:watch"` scripts to `package.json`.
+**✅ COMPLETE** (branch `chore/phase-0-baseline`). Exit criteria met: build, lint, typecheck and
+36/36 tests green; no behavior change (CLI `--help`/`--version` unchanged, tests never write to
+the real `~/.ev-charge-coordinator`).
 
-**Exit criteria:** `npm run build && npm run lint && npm test` all green, zero behavior change.
+1. ✅ Done manually by user | Commit the current uncommitted WIP (`package.json`,
+   `package-lock.json`, `src/index.ts`) as a `chore:` commit so Phase 1's diff is reviewable on
+   its own. (Landed as `455c6a6`, merged via PR #2.)
+2. ✅ `.gitignore` gained `.venv/` and `venv/`. Note: `.venv` was *already* invisible to git
+   because `python -m venv` writes a self-ignoring `.venv/.gitignore`; the root entry is for
+   contributors whose venv is created some other way.
+3. ✅ `vitest@5` + `typescript-eslint@9` flat config (`eslint.config.js`), plus
+   `vitest.config.ts` and `tsconfig.test.json`. `npm run lint` went from broken (no config
+   file existed) to 0 errors.
+4. ✅ Characterization suites under `tests/` (36 tests, ~160 ms, no network, no Python):
+   - `tests/utils/credentials.test.ts` (12) - encrypted round-trip, ciphertext-at-rest proof,
+     key-file permissions, tamper handling, buffer default, Tesla token rotation.
+   - `tests/services/franklin-wh.service.test.ts` (16) - full `snake_case` -> camelCase DTO
+     map, `/health`-gated `initialize()`, snake_case `/auth` body, guard errors, shutdown.
+   - `tests/characterization/legacy-charge-limit.test.ts` (8) - pins the Phase 4b percent rule
+     **and deletes itself as the signal that the rule is gone.**
+   Each suite was mutation-tested: perturbing the formula, the buffer default, or the DTO map
+   makes the suite fail, so it cannot pass vacuously.
+5. ✅ Scripts: `test`, `test:watch`, plus `typecheck` and a `check` gate
+   (`build && lint && typecheck && test`).
+
+### Notes Phase 1+ must inherit
+
+- **Two test seams were added to `src/utils/credentials.ts`** (the only source change in this
+  phase, and behavior-neutral for real users): `ECC_CONFIG_DIR` redirects the config dir, and
+  `ECC_DISABLE_KEYCHAIN` forces the encrypted-file path. Without them the suite would write to
+  the developer's real keychain/credential file. This shifts `credentials.ts` line numbers by
+  +9, so the references at lines 289 and 361 above are now ~35-37 and ~48-58.
+- **New lint debt, deliberately not fixed:** `isRunning` (`index.ts:17`) is assigned at `:230`
+  and `:417` and **never read** - there is no run loop. `eslint.config.js` downgrades
+  `no-unused-vars` to `warn` for `src/index.ts` only, with a comment ordering Phase 2 to remove
+  the override. This is the mechanical proof that `exit` cannot stop the REPL (Phase 2 item).
+- `getStats()`/`getStateOfCharge()` return `undefined` when the proxy omits `battery_soc`,
+  which flows into `Math.max(0, batterySoc - buffer)` as `NaN`. Pinned; Phase 4 must handle it.
+- `credentialStore` is a module singleton with a sticky `initialized` flag; tests must
+  instantiate `new CredentialStore()` to get a clean load.
+
 
 ---
 
