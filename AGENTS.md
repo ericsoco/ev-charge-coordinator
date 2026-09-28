@@ -30,6 +30,12 @@ pip install -r python/requirements.txt  # Python deps
 ## Testing
 - Run `node dist/index.js --help` to verify CLI
 - Run `python3 python/franklin_proxy.py` to test proxy startup
+- Run `npm run test` to run tests with vitest
+- Run `npm run lint` to run linter
+
+## Executing work
+Each user prompt to the agent should be written to a new local branch.
+Do not push the branch to remote; keep it local and let user check and land changes to main.
 
 ## Adding New Systems
 1. Implement `BatteryService` or `EVService` interface
