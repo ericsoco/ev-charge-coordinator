@@ -9,6 +9,7 @@
 import { Command } from 'commander';
 import { createInterface } from 'node:readline';
 import { FranklinWHService, TeslaService } from './services/index.js';
+import { resolveRegion } from './services/tesla/endpoints.js';
 import { credentialStore } from './utils/credentials.js';
 
 const program = new Command();
@@ -106,15 +107,19 @@ async function initializeTesla(): Promise<boolean> {
 
   const stored = await credentialStore.getTeslaCredentials();
   
-  if (stored?.accessToken && stored?.refreshToken) {
+  if (stored?.accessToken && stored?.refreshToken && stored.clientId && stored.clientSecret) {
     console.log('Using stored Tesla credentials...');
-    teslaService = new TeslaService();
+    teslaService = new TeslaService({
+      region: stored.region,
+      callbackPort: stored.callbackPort
+    });
     try {
       await teslaService.initialize({
         clientId: stored.clientId,
         clientSecret: stored.clientSecret,
         accessToken: stored.accessToken,
         refreshToken: stored.refreshToken,
+        expiresAt: stored.expiresAt,
         vin: stored.vin
       });
       
@@ -177,17 +182,21 @@ async function initializeTesla(): Promise<boolean> {
     }
     
     teslaService.setVin(selectedVin);
-    
-    const save = await prompt('Save credentials for future use? (y/n): ');
+
+    // Persist the selection now rather than gating it behind the secret prompt
+    // below: authenticate() already defaulted the stored VIN to the first vehicle,
+    // and a stale default would later operate on the wrong car. A VIN is not a
+    // secret, so storing it needs no consent.
+    await credentialStore.setTeslaVin(selectedVin);
+
+    const save = await prompt('Store the client ID/secret in the keychain? (y/n): ');
     if (save.toLowerCase() === 'y') {
-      await credentialStore.setTeslaCredentials(
+      // Merged write: the access/refresh tokens issued by authenticate() are left
+      // untouched here and only the app credentials are added.
+      await credentialStore.setTeslaCredentials({
         clientId,
-        clientSecret,
-        undefined,
-        undefined,
-        undefined,
-        selectedVin
-      );
+        clientSecret
+      });
       console.log('✓ Credentials saved securely');
     }
     
@@ -594,8 +603,21 @@ program
   .option('--clear-franklin', 'Clear FranklinWH credentials')
   .option('--clear-tesla', 'Clear Tesla credentials')
   .option('--clear-all', 'Clear all stored credentials')
+  .option('--tesla-region <region>', 'Set the Tesla Fleet API deployment (na | eu | cn)')
   .action(async (options) => {
-    if (options.clearFranklin) {
+    if (options.teslaRegion) {
+      // Validated through resolveRegion so a typo fails here instead of surfacing
+      // later as an HTTP 421 "incorrect region" from Tesla.
+      try {
+        const { region, coverage } = resolveRegion(options.teslaRegion);
+        await credentialStore.setTeslaCredentials({ region });
+        console.log(`✓ Tesla region set to ${region} (${coverage})`);
+        console.log('  Re-run the pairing step if this moves you to a different deployment.');
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exitCode = 1;
+      }
+    } else if (options.clearFranklin) {
       await credentialStore.clearFranklinCredentials();
       console.log('✓ FranklinWH credentials cleared');
     } else if (options.clearTesla) {
@@ -612,7 +634,7 @@ program
       
       console.log('\n--- Configuration ---');
       console.log(`FranklinWH: ${franklin ? `Configured (Gateway: ${franklin.gatewayId})` : 'Not configured'}`);
-      console.log(`Tesla: ${tesla ? `Configured${tesla.vin ? ` (VIN: ${tesla.vin})` : ''}` : 'Not configured'}`);
+      console.log(`Tesla: ${tesla ? `Configured${tesla.vin ? ` (VIN: ${tesla.vin})` : ''}${tesla.region ? ` Region: ${tesla.region}` : ''}` : 'Not configured'}`);
       console.log(`Battery Buffer: ${buffer}%`);
       console.log('');
     }

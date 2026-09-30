@@ -24,7 +24,11 @@ export interface EVCredentials {
   clientSecret: string;
   accessToken?: string;
   refreshToken?: string;
+  /** Absolute unix time in ms; without it a stored token looks freshly minted. */
+  expiresAt?: number;
   vin?: string;
+  /** Tesla deployment region ("na" | "eu" | "cn"); defaults to "na". */
+  region?: string;
 }
 
 export interface TeslaTokens {

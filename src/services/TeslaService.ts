@@ -1,27 +1,41 @@
 /**
  * Tesla Fleet API Service
- * 
+ *
  * Communicates with Tesla vehicles using the official Fleet API.
  * Handles OAuth2 authentication, token management, and vehicle commands.
+ *
+ * The OAuth wire format lives in ./tesla/oauth.ts and the hostnames in
+ * ./tesla/endpoints.ts; both were derived from the live Tesla Fleet API docs and
+ * are unit tested. This file owns orchestration: the local callback server, token
+ * persistence, and the vehicle commands.
  */
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as http from 'http';
-import * as url from 'url';
 import type { EVService, EVCredentials, EVStatus, EVBatteryStats, TeslaTokens } from '../types/ev.js';
 import { credentialStore } from '../utils/credentials.js';
+import {
+  buildRevokeConsentUrl,
+  resolveRegion,
+  TESLA_SCOPE_STRING,
+  TESLA_TOKEN_URL,
+  type TeslaRegionInfo,
+} from './tesla/endpoints.js';
+import {
+  buildAuthorizeUrl,
+  buildAuthorizationCodeTokenForm,
+  buildRefreshTokenForm,
+  createNonce,
+  createOAuthState,
+  createPkcePair,
+  describeTeslaError,
+  parseTokenResponse,
+  TOKEN_FORM_HEADERS,
+  type PkcePair,
+} from './tesla/oauth.js';
 
-const TESLA_AUTH_URL = 'https://auth.tesla.com';
-const TESLA_API_URL = 'https://fleet-api.prd.na.vn.cloud.tesla.com'; // North America
-const REDIRECT_URI = 'http://localhost:8089/callback';
-
-const REQUIRED_SCOPES = [
-  'openid',
-  'offline_access',
-  'vehicle_device_data',
-  'vehicle_cmds',
-  'vehicle_charging_cmds'
-].join(' ');
+/** Default loopback port for the OAuth redirect; also register this with Tesla. */
+const DEFAULT_CALLBACK_PORT = 8089;
 
 interface TeslaVehicle {
   id: number;
@@ -48,6 +62,21 @@ interface TeslaVehicleData {
   charge_state: TeslaChargeState;
 }
 
+export interface TeslaServiceConfig {
+  /** Tesla deployment region; selects the API base URL and token audience. */
+  region?: string;
+  /** Loopback port the OAuth redirect listener binds to. */
+  callbackPort?: number;
+  /**
+   * Attach PKCE to the authorize URL and send the verifier on the exchange.
+   * Enabled by default, but Tesla's documented parameter lists for /authorize and
+   * /token do not include PKCE, so ECC_TESLA_PKCE=0 restores the strictly
+   * documented request shape without a code change if the live flow ever rejects
+   * the extra parameters.
+   */
+  pkce?: boolean;
+}
+
 export class TeslaService implements EVService {
   private client: AxiosInstance;
   private authenticated = false;
@@ -55,10 +84,20 @@ export class TeslaService implements EVService {
   private clientId: string = '';
   private clientSecret: string = '';
   private vin: string = '';
+  private regionInfo: TeslaRegionInfo;
+  private readonly callbackPort: number;
+  private readonly pkceEnabled: boolean;
+  /** Single-use values held only for the duration of one authorize round trip. */
+  private pendingNonce?: string;
+  private pendingPkce?: PkcePair;
 
-  constructor() {
+  constructor(config: TeslaServiceConfig = {}) {
+    this.regionInfo = resolveRegion(config.region);
+    this.callbackPort = config.callbackPort ?? DEFAULT_CALLBACK_PORT;
+    this.pkceEnabled = config.pkce ?? process.env.ECC_TESLA_PKCE !== '0';
+
     this.client = axios.create({
-      baseURL: TESLA_API_URL,
+      baseURL: this.regionInfo.apiBaseUrl,
       timeout: 30000,
       headers: {
         'Content-Type': 'application/json'
@@ -81,23 +120,50 @@ export class TeslaService implements EVService {
     this.client.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
-        if (error.response?.status === 401 && this.tokens?.refreshToken) {
+        const config = error.config as (typeof error.config & { _eccRetried?: boolean }) | undefined;
+        // The retry is guarded because Tesla refresh tokens are single-use: an
+        // unguarded retry loop on a token Tesla keeps rejecting would burn every
+        // refresh token in turn and force a full re-pair.
+        if (error.response?.status === 401 && this.tokens?.refreshToken && !config?._eccRetried) {
           try {
             await this.refreshTokens();
             // Retry the request
-            const config = error.config;
             if (config) {
-              config.headers.Authorization = `Bearer ${this.tokens.accessToken}`;
+              config._eccRetried = true;
+              config.headers.Authorization = `Bearer ${this.tokens!.accessToken}`;
               return this.client.request(config);
             }
-          } catch {
-            // Refresh failed, will need to re-authenticate
+          } catch (refreshError) {
+            // Refresh failed, will need to re-authenticate. The reason is logged
+            // because the caller only ever sees the original 401 otherwise, and
+            // "your refresh token was burned" and "wrong region" look identical.
             this.authenticated = false;
+            console.error('Token refresh failed:', describeAxiosError(refreshError));
           }
         }
         throw error;
       }
     );
+  }
+
+  /** The resolved region name, e.g. "na". */
+  get region(): string {
+    return this.regionInfo.region;
+  }
+
+  /** The Fleet API base URL in use, which is also the token audience. */
+  get apiBaseUrl(): string {
+    return this.regionInfo.apiBaseUrl;
+  }
+
+  /** The OAuth redirect URI; must match the one registered on developer.tesla.com. */
+  get redirectUri(): string {
+    return `http://localhost:${this.callbackPort}/callback`;
+  }
+
+  /** URL a user visits to withdraw this application's access. */
+  getRevokeConsentUrl(): string {
+    return buildRevokeConsentUrl(this.clientId, this.regionInfo.region);
   }
 
   getName(): string {
@@ -110,66 +176,82 @@ export class TeslaService implements EVService {
 
   /**
    * Generate OAuth2 authorization URL.
+   *
+   * `nonce` is documented by Tesla and is what makes the returned ID token
+   * replay-resistant; `show_keypair_step` warns the user that a virtual key
+   * pairing follows. PKCE parameters are appended only when enabled.
    */
-  private generateAuthUrl(state: string): string {
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: this.clientId,
-      redirect_uri: REDIRECT_URI,
-      scope: REQUIRED_SCOPES,
-      state
+  private generateAuthUrl(state: string, options: { showKeypairStep?: boolean } = {}): string {
+    return buildAuthorizeUrl({
+      clientId: this.clientId,
+      redirectUri: this.redirectUri,
+      scope: TESLA_SCOPE_STRING,
+      state,
+      nonce: this.pendingNonce ?? createNonce(),
+      pkce: this.pendingPkce,
+      showKeypairStep: options.showKeypairStep,
+      promptMissingScopes: true,
     });
-
-    return `${TESLA_AUTH_URL}/oauth2/v3/authorize?${params.toString()}`;
   }
 
   /**
    * Exchange authorization code for tokens.
+   *
+   * Three corrections over the previous version: the token endpoint is on
+   * fleet-auth.prd.vn.cloud.tesla.com rather than auth.tesla.com, the body is
+   * application/x-www-form-urlencoded rather than JSON (the docs say "DO NOT use
+   * JSON encoded string as payload"), and `audience` is supplied because it is
+   * what selects the Fleet API deployment the token is minted for.
    */
   private async exchangeCode(code: string): Promise<TeslaTokens> {
-    const response = await axios.post(`${TESLA_AUTH_URL}/oauth2/v3/token`, {
-      grant_type: 'authorization_code',
-      client_id: this.clientId,
-      client_secret: this.clientSecret,
+    const form = buildAuthorizationCodeTokenForm({
+      clientId: this.clientId,
+      clientSecret: this.clientSecret,
+      audience: this.regionInfo.apiBaseUrl,
+      redirectUri: this.redirectUri,
       code,
-      redirect_uri: REDIRECT_URI
-    }, {
-      headers: { 'Content-Type': 'application/json' }
+      codeVerifier: this.pendingPkce?.codeVerifier,
     });
 
-    const data = response.data;
-    return {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresIn: data.expires_in,
-      expiresAt: Date.now() + (data.expires_in * 1000)
-    };
+    const response = await axios.post(TESLA_TOKEN_URL, form, {
+      headers: TOKEN_FORM_HEADERS,
+    });
+
+    return toTeslaTokens(parseTokenResponse(response.data));
   }
 
   /**
    * Refresh the access token using refresh token.
+   *
+   * Form-encoded, and sends only grant_type / client_id / refresh_token: Tesla
+   * documents no client_secret for this grant. Tesla rotates the refresh token on
+   * every call and the old one becomes unusable, so the new pair is persisted
+   * immediately -- losing it forces a full re-pair.
    */
   private async refreshTokens(): Promise<void> {
     if (!this.tokens?.refreshToken) {
       throw new Error('No refresh token available');
     }
 
-    const response = await axios.post(`${TESLA_AUTH_URL}/oauth2/v3/token`, {
-      grant_type: 'refresh_token',
-      client_id: this.clientId,
-      client_secret: this.clientSecret,
-      refresh_token: this.tokens.refreshToken
-    }, {
-      headers: { 'Content-Type': 'application/json' }
+    const form = buildRefreshTokenForm({
+      clientId: this.clientId,
+      refreshToken: this.tokens.refreshToken,
     });
 
-    const data = response.data;
-    this.tokens = {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token || this.tokens.refreshToken,
-      expiresIn: data.expires_in,
-      expiresAt: Date.now() + (data.expires_in * 1000)
-    };
+    const response = await axios.post(TESLA_TOKEN_URL, form, {
+      headers: TOKEN_FORM_HEADERS,
+    });
+
+    // Same parse path as the code exchange, so the 30s expiry margin and the
+    // access_token presence check are not silently reimplemented here. Tesla
+    // returns a new refresh token on every call; if one is ever omitted, keep the
+    // current one, which stays valid for ~24h after rotation.
+    this.tokens = toTeslaTokens(
+      parseTokenResponse({
+        ...response.data,
+        refresh_token: response.data?.refresh_token ?? this.tokens.refreshToken,
+      })
+    );
 
     // Save updated tokens
     await credentialStore.updateTeslaTokens(
@@ -184,30 +266,57 @@ export class TeslaService implements EVService {
    */
   private async waitForOAuthCallback(
     state: string,
-    onAuthUrl: (url: string) => void
+    onAuthUrl: (url: string) => void,
+    options: { showKeypairStep?: boolean } = {}
   ): Promise<string> {
     return new Promise((resolve, reject) => {
+      // The timeout is cleared on every exit path: an uncancelled 5-minute timer
+      // keeps the Node event loop alive, so a successful login still left the CLI
+      // hanging around for five minutes afterwards. Both `timeout` and `server`
+      // are referenced from these closures before their declarations below, which
+      // is safe because the handlers only ever run after this block completes.
+      const stop = (): void => {
+        clearTimeout(timeout);
+        server.close();
+      };
       const server = http.createServer((req, res) => {
-        const parsedUrl = url.parse(req.url || '', true);
-        
+        // WHATWG URL with a throwaway base rather than the deprecated url.parse():
+        // the request target is attacker-controlled input, and url.parse's
+        // leniency about exactly that has had CVEs filed against it.
+        const parsedUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
+
         if (parsedUrl.pathname === '/callback') {
-          const code = parsedUrl.query.code as string;
-          const returnedState = parsedUrl.query.state as string;
-          const error = parsedUrl.query.error as string;
+          const code = parsedUrl.searchParams.get('code') ?? undefined;
+          const returnedState = parsedUrl.searchParams.get('state') ?? undefined;
+          const error = parsedUrl.searchParams.get('error') ?? undefined;
 
           if (error) {
+            // Mapped so "access_denied" reads as "you declined consent" rather than
+            // the bare token Tesla returned, and escaped into the page because part
+            // of that text originated in the browser's redirect query.
+            const reason = describeTeslaError(undefined, error);
             res.writeHead(400, { 'Content-Type': 'text/html' });
-            res.end(`<html><body><h1>Authorization Failed</h1><p>${error}</p></body></html>`);
-            server.close();
-            reject(new Error(`OAuth error: ${error}`));
+            res.end(errorPage(reason));
+            stop();
+            reject(new Error(`OAuth error: ${reason}`));
+            return;
+          }
+
+          if (!code) {
+            // Without a code the exchange would fail later as an opaque
+            // invalid_auth_code; say what actually arrived.
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end(errorPage('The callback returned no authorization code.'));
+            stop();
+            reject(new Error('OAuth callback returned no authorization code'));
             return;
           }
 
           if (returnedState !== state) {
             res.writeHead(400, { 'Content-Type': 'text/html' });
             res.end('<html><body><h1>Invalid State</h1></body></html>');
-            server.close();
-            reject(new Error('OAuth state mismatch'));
+            stop();
+            reject(new Error('OAuth state mismatch - possible CSRF, run authentication again'));
             return;
           }
 
@@ -221,22 +330,29 @@ export class TeslaService implements EVService {
             </html>
           `);
           
-          server.close();
+          stop();
           resolve(code);
         }
       });
 
-      server.listen(8089, '127.0.0.1', () => {
-        const authUrl = this.generateAuthUrl(state);
+      server.listen(this.callbackPort, '127.0.0.1', () => {
+        const authUrl = this.generateAuthUrl(state, options);
         onAuthUrl(authUrl);
       });
 
-      server.on('error', (err) => {
-        reject(new Error(`Failed to start OAuth server: ${err.message}`));
+      server.on('error', (err: NodeJS.ErrnoException) => {
+        clearTimeout(timeout);
+        reject(
+          new Error(
+            err.code === 'EADDRINUSE'
+              ? `Port ${this.callbackPort} is already in use; close the other process or set a different callbackPort`
+              : `Failed to start OAuth server: ${err.message}`
+          )
+        );
       });
 
       // Timeout after 5 minutes
-      setTimeout(() => {
+      const timeout = setTimeout(() => {
         server.close();
         reject(new Error('OAuth timeout - authorization not completed within 5 minutes'));
       }, 5 * 60 * 1000);
@@ -250,13 +366,21 @@ export class TeslaService implements EVService {
     this.clientId = credentials.clientId;
     this.clientSecret = credentials.clientSecret;
 
+    if (credentials.region) {
+      this.regionInfo = resolveRegion(credentials.region);
+      this.client.defaults.baseURL = this.regionInfo.apiBaseUrl;
+    }
+
     if (credentials.accessToken && credentials.refreshToken) {
-      // Use provided tokens
+      // Use provided tokens. The real stored expiry is honoured rather than a
+      // fabricated hour: pretending a token minted days ago is fresh makes the
+      // first request after every restart a guaranteed 401 round trip.
+      const expiresAt = credentials.expiresAt ?? Date.now() + 3600000;
       this.tokens = {
         accessToken: credentials.accessToken,
         refreshToken: credentials.refreshToken,
-        expiresIn: 3600,
-        expiresAt: Date.now() + 3600000
+        expiresIn: Math.max(0, Math.round((expiresAt - Date.now()) / 1000)),
+        expiresAt
       };
       this.authenticated = true;
 
@@ -269,19 +393,60 @@ export class TeslaService implements EVService {
   /**
    * Perform interactive OAuth authentication.
    */
-  async authenticate(onAuthUrl: (url: string) => void): Promise<void> {
-    const state = Math.random().toString(36).substring(2);
-    
-    const code = await this.waitForOAuthCallback(state, onAuthUrl);
-    this.tokens = await this.exchangeCode(code);
+  async authenticate(
+    onAuthUrl: (url: string) => void,
+    options: { showKeypairStep?: boolean } = {}
+  ): Promise<void> {
+    const state = createOAuthState();
+    this.pendingNonce = createNonce();
+    this.pendingPkce = this.pkceEnabled ? createPkcePair() : undefined;
+
+    // `state` is a fresh 32-byte value rather than Math.random(): it is the only
+    // thing binding the browser callback to this process, and Math.random is
+    // neither cryptographically secure nor unguessable.
+    let code: string;
+    try {
+      code = await this.waitForOAuthCallback(state, onAuthUrl, options);
+    } finally {
+      // Single-use values; do not leave them reachable after the exchange.
+      this.pendingNonce = undefined;
+      this.pendingPkce = undefined;
+    }
+    try {
+      this.tokens = await this.exchangeCode(code);
+    } catch (error) {
+      // Re-thrown as one readable line: the CLI's catch-all otherwise prints a
+      // whole AxiosError for what Tesla reports as a plain client_not_found.
+      throw new Error(`Token exchange failed: ${describeAxiosError(error)}`, { cause: error });
+    }
     this.authenticated = true;
 
-    // Save tokens
-    await credentialStore.updateTeslaTokens(
-      this.tokens.accessToken,
-      this.tokens.refreshToken,
-      this.tokens.expiresAt
-    );
+    // setTeslaCredentials merges, so the stored client_id/client_secret survive.
+    await credentialStore.setTeslaCredentials({
+      accessToken: this.tokens.accessToken,
+      refreshToken: this.tokens.refreshToken,
+      expiresAt: this.tokens.expiresAt,
+      region: this.regionInfo.region
+    });
+
+    // Resolve and persist a VIN; commands previously used an unset value.
+    await this.resolveVin();
+  }
+
+  /**
+   * Pick the vehicle to operate on and persist its VIN, so the charge commands
+   * work without a hand-edited config.
+   */
+  private async resolveVin(): Promise<string | undefined> {
+    if (this.vin) return this.vin;
+    const vehicles = await this.listVehicles();
+    const vin = vehicles[0]?.vin;
+    if (!vin) {
+      throw new Error('No vehicles are associated with this Tesla account');
+    }
+    this.vin = vin;
+    await credentialStore.setTeslaVin(vin);
+    return vin;
   }
 
   async listVehicles(): Promise<Array<{ vin: string; displayName: string }>> {
@@ -408,4 +573,55 @@ export class TeslaService implements EVService {
     this.authenticated = false;
     this.tokens = null;
   }
+}
+
+/**
+ * The loopback listener's failure page. The message is escaped rather than
+ * interpolated because part of it can come straight from the browser's redirect
+ * query, and this HTML is rendered in the user's own browser session.
+ */
+function errorPage(message: string): string {
+  const safe = message
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+  return `<html><body style="font-family: system-ui; text-align: center; padding: 50px;">
+    <h1>Authorization Failed</h1><p>${safe}</p></body></html>`;
+}
+
+/**
+ * Reduce an axios failure to the single line worth showing a user. Tesla reports
+ * OAuth failures as `{ error, error_description }` and Fleet API failures as
+ * `{ error, response }`, both in the response body, and describeTeslaError turns
+ * the documented codes into advice instead of leaving a bare status code.
+ */
+function describeAxiosError(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data as
+      | { error?: unknown; error_description?: unknown; description?: unknown }
+      | undefined;
+    const raw = [data?.error, data?.error_description ?? data?.description]
+      .filter((part): part is string => typeof part === 'string' && part.length > 0)
+      .join(': ');
+    return describeTeslaError(error.response?.status, raw || error.message);
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Convert a parsed token response into the shape this service stores, deriving
+ * `expiresIn` from the absolute expiry so existing call sites keep working.
+ */
+function toTeslaTokens(tokenSet: {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}): TeslaTokens {
+  return {
+    accessToken: tokenSet.accessToken,
+    refreshToken: tokenSet.refreshToken,
+    expiresIn: Math.max(0, Math.round((tokenSet.expiresAt - Date.now()) / 1000)),
+    expiresAt: tokenSet.expiresAt
+  };
 }
