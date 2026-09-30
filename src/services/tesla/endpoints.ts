@@ -86,6 +86,23 @@ export const TESLA_SCOPES = [
 
 export const TESLA_SCOPE_STRING = TESLA_SCOPES.join(' ');
 
+/**
+ * Scopes requested on the partner-token (client_credentials) exchange.
+ *
+ * Tesla's Partner Tokens page sends exactly these on that grant. offline_access
+ * is deliberately absent: a partner token is an application-level token that is
+ * re-minted with client credentials and is never stored or refreshed, so asking
+ * for a refresh token would be meaningless.
+ */
+export const TESLA_PARTNER_SCOPES = [
+  'openid',
+  'vehicle_device_data',
+  'vehicle_cmds',
+  'vehicle_charging_cmds',
+] as const;
+
+export const TESLA_PARTNER_SCOPE_STRING = TESLA_PARTNER_SCOPES.join(' ');
+
 /** Revoke a third-party token by sending the user to Tesla's consent manager. */
 export function buildRevokeConsentUrl(clientId: string, region: TeslaRegion): string {
   const url = new URL(`${TESLA_REGIONS[region].apiBaseUrl}/oauth2/v3/consent`);

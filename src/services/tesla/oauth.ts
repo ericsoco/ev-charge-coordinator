@@ -121,12 +121,22 @@ export function buildClientCredentialsTokenForm(options: {
   clientId: string;
   clientSecret: string;
   audience: string;
+  /**
+   * Optional because not every caller needs one. Tesla's Partner Tokens page
+   * sends `scope` on this grant, and the partner-token flow is what registers
+   * the application domain, so VirtualKeyService passes its scope set; it stays
+   * optional here so a caller can request a bare application-level token.
+   */
+  scope?: string;
 }): URLSearchParams {
   const form = new URLSearchParams();
   form.set('grant_type', 'client_credentials');
   form.set('client_id', options.clientId);
   form.set('client_secret', options.clientSecret);
   form.set('audience', options.audience);
+  if (options.scope !== undefined) {
+    form.set('scope', options.scope);
+  }
   return form;
 }
 

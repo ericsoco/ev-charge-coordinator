@@ -40,7 +40,7 @@ import {
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getConfigDir } from '../../utils/credentials.js';
-import { TESLA_TOKEN_URL } from './endpoints.js';
+import { TESLA_PARTNER_SCOPE_STRING, TESLA_TOKEN_URL } from './endpoints.js';
 import {
   buildClientCredentialsTokenForm,
   parseTokenResponse,
@@ -334,6 +334,7 @@ export class VirtualKeyService {
       clientId,
       clientSecret,
       audience: this.apiBaseUrl,
+      scope: TESLA_PARTNER_SCOPE_STRING,
     });
     const response = await this.http.post(TESLA_TOKEN_URL, form, {
       headers: TOKEN_FORM_HEADERS,
@@ -410,6 +411,155 @@ export class VirtualKeyService {
   buildPairingUrl(domain: string, vin?: string): string {
     return buildPairingUrl(domain, vin);
   }
+
+  /**
+   * Fetch the key Tesla will actually read, and compare it with the local pair.
+   *
+   * This is a plain unauthenticated GET on purpose. The URL lives on the
+   * operator's own web host, and a Tesla bearer token must never be sent to a
+   * third party, so no Authorization header is attached here even though the
+   * rest of this class talks to Tesla with one.
+   *
+   * It exists to catch the failure that costs the most time: a URL that returns
+   * 200 with an HTML error page, a stale key from a previous machine, or a
+   * redirect. All of those look fine until the pairing tap in front of the car
+   * is already spent, and registration requires the key to be hosted.
+   */
+  async checkHostedPublicKey(domain: string): Promise<HostedKeyCheck> {
+    if (!this.http) {
+      throw new Error('VirtualKeyService requires an http client to check the hosted key');
+    }
+    const url = publicKeyHostingUrl(domain);
+    const local = await this.store.loadOrCreate();
+    let status: number | undefined;
+    let body: unknown;
+    try {
+      const response = await this.http.get(url);
+      status = readStatus(response);
+      body = response.data;
+    } catch (error) {
+      const reason = describeFetchFailure(error);
+      return {
+        url,
+        reachable: false,
+        status: readStatus(error),
+        matchesLocalKey: false,
+        bodyPreview: reason,
+        error: `Could not fetch ${url}: ${reason}`,
+      };
+    }
+
+    const served = extractPem(body);
+    if (served === null) {
+      return {
+        url,
+        reachable: status !== undefined && status >= 200 && status < 300,
+        status,
+        matchesLocalKey: false,
+        bodyPreview: preview(typeof body === 'string' ? body : JSON.stringify(body)),
+        error:
+          'That URL did not return a PEM public key. Serve the file itself, with no ' +
+          'redirect and no HTML error page in front of it.',
+      };
+    }
+    const matches = normalizePem(served) === normalizePem(local.publicKeyPem);
+    return {
+      url,
+      reachable: true,
+      status,
+      matchesLocalKey: matches,
+      bodyPreview: preview(served),
+      ...(matches
+        ? {}
+        : {
+            error:
+              'The published key does not match the private key on this machine. Upload ' +
+              'the public key at the path shown above; do not pair until they match.',
+          }),
+    };
+  }
+}
+
+export interface HostedKeyCheck {
+  url: string;
+  /** True when Tesla's fetch of this URL would get the key, not an error page. */
+  reachable: boolean;
+  status: number | undefined;
+  matchesLocalKey: boolean;
+  /**
+   * First bytes of whatever the server returned, control characters stripped.
+   * The body is remote content that ends up in the terminal, so it is sanitized
+   * the same way the OAuth error string is.
+   */
+  bodyPreview: string;
+  error?: string;
+}
+
+/**
+ * Describe a transport failure in words a user can act on.
+ *
+ * Falls back deliberately: Node reports a refused connection or a bad TLS
+ * handshake as an AggregateError whose `message` is the empty string and whose
+ * real cause is in `code` (and sometimes in `errors[].code`). Printing the bare
+ * message would render as "Could not fetch ...: " and say nothing, so the code
+ * is preferred, and a generic phrase is the last resort so the string is never
+ * empty.
+ */
+function describeFetchFailure(error: unknown): string {
+  const record = (error ?? {}) as { message?: unknown; code?: unknown; errors?: unknown };
+  const nested = Array.isArray(record.errors)
+    ? record.errors
+        .map((e) => (e as { code?: unknown })?.code)
+        .filter((c): c is string => typeof c === 'string')
+    : [];
+  const codes = [record.code, ...nested].filter(
+    (c): c is string => typeof c === 'string' && c.length > 0
+  );
+  const code = codes[0];
+
+  const known: Record<string, string> = {
+    ENOTFOUND: 'the domain does not resolve (DNS lookup failed)',
+    ECONNREFUSED: 'the connection was refused (nothing is listening on port 443)',
+    ECONNRESET: 'the connection was reset before the key was served',
+    EHOSTUNREACH: 'the host is unreachable',
+    ETIMEDOUT: 'the connection timed out',
+    EPROTO: 'TLS failed (the certificate is not valid for this domain, or the site is not HTTPS)',
+    CERT_HAS_EXPIRED: 'the TLS certificate has expired',
+    DEPTH_ZERO_SELF_SIGNED_CERT: 'the TLS certificate is self-signed; Tesla requires a publicly trusted certificate',
+    SELF_SIGNED_CERT_IN_CHAIN: 'the TLS certificate chain is self-signed',
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'the TLS certificate could not be verified',
+  };
+  if (code && known[code]) return `${code}: ${known[code]}`;
+
+  const message = preview(typeof record.message === 'string' ? record.message : undefined);
+  if (message) return code ? `${code}: ${message}` : message;
+  if (code) return code;
+  return 'the request failed for an unknown reason';
+}
+
+/** axios puts the status on the response; on a thrown error it is on error.response. */
+function readStatus(value: unknown): number | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as { status?: unknown; response?: { status?: unknown } };
+  if (typeof record.status === 'number') return record.status;
+  if (typeof record.response?.status === 'number') return record.response.status;
+  return undefined;
+}
+
+/**
+ * Reduce remote text to something safe to print: control characters out (so a
+ * hostile body cannot write ANSI escapes or rewrite lines in the terminal),
+ * whitespace collapsed, and length capped.
+ *
+ * Control characters become a space rather than being deleted: deleting them
+ * would weld the tokens either side of a newline into one apparent word.
+ */
+function preview(value: string | undefined, max = 120): string {
+  const text = (value ?? '')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
 /** Tesla wraps results in `{ response: ... }`; find a PEM wherever it is nested. */

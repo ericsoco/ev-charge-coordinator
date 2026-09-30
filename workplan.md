@@ -145,6 +145,11 @@ the real `~/.ev-charge-coordinator`).
 
 Nothing Tesla-facing is testable until this lands — every other Tesla task is blocked here.
 
+**Status: code complete on `feature/phase-1-tesla-auth` + `feature/phase-1-pair-tesla-key`;
+93 tests green. The authenticated happy path (real client credentials → browser consent →
+live vehicle) still needs a human with a developer app and a car.** Items 1, 2, 3, 4 and 5
+are implemented; notes below record where reality differed from the plan.
+
 1. **`src/services/TeslaService.ts` — fix the token exchange:**
    - Add `TESLA_AUTH_TOKEN_URL = 'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token'`;
      keep `auth.tesla.com` for `/authorize` **only** (delete its use at `:130,:157`).
@@ -156,8 +161,10 @@ Nothing Tesla-facing is testable until this lands — every other Tesla task is 
    - Persist the **rotated** refresh token on every refresh (single-use tokens).
 2. **Region / base-URL config** — `fleet-api.prd.na.…` is hardcoded (`TeslaService.ts:15`);
    make `baseUrl` configurable (`na` / `eu` / `apac`) and persist the choice.
-3. **Virtual key support** — new `src/services/tesla/VirtualKeyService.ts` + CLI
-   `register-key` / `pair-vehicle`:
+   - **Correction:** there is no `apac` deployment. Tesla maps Asia-Pacific (ex-China) to
+     the **same** `na` host, so the regions are `na` / `eu` / `cn` only, with `cn` on a
+     separate developer portal. Implemented as `resolveRegion` in `src/services/tesla/endpoints.ts`.
+3. **Virtual key support** — new `src/services/tesla/VirtualKeyService.ts` + CLI:
    - Generate or load the prime256v1 pair (`private-key.pem` is already gitignored);
      generate on first run if absent.
    - Instruct the user to host the public key at the `/.well-known/appspecific/...` path,
@@ -165,15 +172,36 @@ Nothing Tesla-facing is testable until this lands — every other Tesla task is 
      `GET /api/1/partner_accounts/public_key?domain=…`.
    - Print the pairing deep link `https://tesla.com/_ak/<domain>?vin=<vin>` and **wait for
      the user to confirm** pairing in the Tesla app before proceeding.
+   - **Shipped as one command, `pair-tesla-key`** (not `register-key` / `pair-vehicle`),
+     with `--check-only` and `--skip-registration` flags. The steps are sequential and
+     share a key pair, so splitting them meant re-deriving state in each. `config` gained
+     `--tesla-domain` and `--show-public-key` for the setup half.
+   - **Added a pre-flight check that the plan did not call for:** the command now fetches
+     the well-known URL and compares it to the local key *before* registering the domain.
+     A 200 serving an HTML error page, a stale key, or a redirect otherwise surfaces only
+     after the one-shot pairing tap in front of the car. Verified against a real local
+     TLS server in all three states.
+   - **Correction to the exit criteria:** "reports the key present on the VIN" is **not
+     achievable**. Tesla documents no endpoint that reports per-vehicle key pairing; the
+     only documented signal is `key_paired` in a fleet-telemetry response, which needs a
+     signed request and a configured telemetry server. Checked the Fleet API endpoint
+     index, the Partner/Vehicle endpoint pages, and Tesla's own `vehicle-command` repo.
+     The command therefore verifies what *is* checkable (key hosted, key matches, Tesla
+     holds it) and tells the user how to confirm the rest by running a command.
 4. **`config` command additions** — `--set-domain`, `--set-region`, `--show-public-key`,
    `--register-key`, `--pair`.
+   - Shipped as `--tesla-domain` / `--tesla-region` / `--show-public-key`, with registration
+     and pairing living in `pair-tesla-key` (see item 3).
 5. **`src/utils/credentials.ts`** — replace the 6-positional-arg `setTeslaCredentials`
    (`:193-211`) with an options object; add `domain`, `baseUrl`, key paths; stop
    `index.ts:183-190` from blanking real tokens.
+   - `baseUrl`/key paths were dropped: the region implies the base URL, and the key paths
+     are derived from the config dir rather than stored per-credential.
 
 **Exit criteria:** `get-ev-bsoc` returns a real SoC against a live vehicle; tokens survive a
-restart; refresh works with no user interaction; `pair-vehicle` reports the key present on
-the VIN.
+restart; refresh works with no user interaction; ~~`pair-vehicle` reports the key present on
+the VIN~~ — replaced by: `pair-tesla-key` verifies the published key matches the local pair
+and that Tesla holds the same key, and prints the deep link for the manual tap.
 
 
 
