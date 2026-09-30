@@ -57,20 +57,83 @@ npm run build
 
 ### Tesla Fleet API Setup
 
-1. Create a Tesla Developer account at https://developer.tesla.com
+1. Create a Tesla Developer account at https://developer.tesla.com (accounts in
+   China register on the separate https://developer.tesla.cn portal)
 2. Create a new application and note the Client ID and Client Secret
-3. Generate a public/private key pair for command signing:
+3. Register the redirect URI `http://localhost:8089/callback` (must match exactly,
+   or the token exchange fails with `invalid_redirect_url`) and enable these scopes:
+   `openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds`.
+   `offline_access` is what makes Tesla issue a refresh token at all.
+4. Generate a public/private key pair for command signing. `pair-tesla-key` does this
+   for you on first run; to do it by hand instead, the equivalent of what it produces
+   is:
    ```bash
    openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
    openssl ec -in private-key.pem -pubout -out public-key.pem
    ```
-4. Host the public key at `https://your-domain.com/.well-known/appspecific/com.tesla.3p.public-key.pem`
-5. Register your application with the Tesla Fleet API
+5. Host the public key at `https://your-domain.com/.well-known/appspecific/com.tesla.3p.public-key.pem`
+   (the domain is registered as the application's allowed origin; the file must be
+   reachable over HTTPS with no redirect)
+6. Run `node dist/index.js config --tesla-region <na|eu|cn>` if your account is not
+   served by the North America deployment. Asia-Pacific accounts use `na`.
+7. Run `node dist/index.js pair-tesla-key --domain your-domain.com` to generate the
+   key pair, verify the published key, register the domain, and print the pairing
+   link (see [Virtual key pairing](#virtual-key-pairing)).
 
 ### FranklinWH Setup
 
 1. You need your FranklinWH account credentials (email/password)
 2. Find your Gateway ID in the FranklinWH app under **More → Site Address** (shown as SN)
+
+### Virtual key pairing
+
+Vehicles that use the Vehicle Command Protocol verify a signature on every command,
+made with an application key pair that a trusted human must add to the car. Tesla's
+docs are explicit that this step cannot be automated away.
+
+`pair-tesla-key` does everything up to that tap, in three steps:
+
+```bash
+npm start pair-tesla-key --domain your-domain.com
+```
+
+1. **Host the public key.** The command generates (or reuses) a P-256 key pair in
+   your config directory and prints the exact URL to serve the public key from. The
+   private key is written `0600` and is reused on every run — replacing it
+   invalidates the pairing on every already-paired vehicle.
+2. **Verify the published key.** It fetches the well-known URL and compares what
+   comes back against the local key, so a 200 that serves an HTML error page, a
+   stale key from another machine, or a redirect is caught *before* the domain
+   registration is spent.
+3. **Register the domain with Tesla**, then re-read the key back to confirm Tesla
+   holds the same one. A mismatch is reported rather than waved through, because it
+   pairs successfully and then fails every command.
+
+Finally it prints the pairing deep link:
+
+```
+https://tesla.com/_ak/your-domain.com?vin=<your-vin>
+```
+
+Open it on a device signed in to the Tesla app that owns the car, and approve the
+key when the app prompts. Re-running the command is safe: it does not regenerate
+the key.
+
+Options:
+
+| Option | Effect |
+| --- | --- |
+| `--domain <domain>` | Domain to use (defaults to the stored one) |
+| `--vin <vin>` | Vehicle to pair (defaults to the stored VIN) |
+| `--check-only` | Report key/registration state; change nothing |
+| `--skip-registration` | Verify the hosted key and print the link, without calling Tesla |
+
+**Pairing cannot be verified from the command line.** Tesla documents no endpoint
+that reports whether a given VIN holds an application key — the only documented
+signal is `key_paired` in a fleet-telemetry response, which requires a signed
+request and a configured telemetry server. To confirm afterwards, run a command; a
+vehicle that rejects the key answers
+`your public key has not been paired with the vehicle`.
 
 ## Usage
 
@@ -136,6 +199,10 @@ npm start config --clear-all
 | `config --clear-franklin` | Clear FranklinWH credentials |
 | `config --clear-tesla` | Clear Tesla credentials |
 | `config --clear-all` | Clear all stored credentials |
+| `config --tesla-region <na\|eu\|cn>` | Choose the Tesla Fleet API deployment |
+| `config --tesla-domain <domain>` | Set the domain that hosts the virtual key public key |
+| `config --show-public-key` | Print the virtual key public key Tesla reads |
+| `pair-tesla-key` | Register the virtual key with Tesla and print the vehicle pairing link |
 
 ### Interactive Mode Commands
 
@@ -257,6 +324,28 @@ The architecture is designed to be extensible. To add support for a new EV or ba
 - Ensure your Tesla Developer application has the correct scopes enabled
 - Make sure your public key is properly hosted and accessible
 - Check that you've registered with the Fleet API in your region
+- The OAuth redirect URI registered on developer.tesla.com must equal
+  `http://localhost:8089/callback` character for character
+- What Tesla's answer actually means:
+
+  | Message | Fix |
+  |---------|-----|
+  | `client_not_found` | wrong Client ID; copy it from developer.tesla.com > your app |
+  | `invalid_redirect_url` | registered redirect URI differs from the one sent |
+  | `invalid_auth_code` | the code was already used or expired; authenticate again |
+  | `login_required` | password reset or the refresh token was already consumed; re-authenticate |
+  | HTTP 412 | application key not registered; complete the pairing step |
+  | HTTP 421 | right credentials, wrong region; set `--tesla-region` |
+  | `your public key has not been paired with the vehicle` | the key was never
+    approved on the phone, or Tesla holds a different key; re-run
+    `pair-tesla-key --check-only` |
+
+- Refresh tokens are single use: Tesla returns a new one on every refresh and the
+  old one stops working, so never copy the stored token to another machine
+- Escape hatches, if Tesla changes its wire format: `ECC_TESLA_TOKEN_URL` overrides
+  the token endpoint and `ECC_TESLA_PKCE=0` drops the PKCE parameters from the
+  authorize request (Tesla does not document PKCE, so this restores the strictly
+  documented request shape)
 
 ### FranklinWH Connection Issues
 

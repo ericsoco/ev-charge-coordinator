@@ -6,6 +6,8 @@ TypeScript/Node.js application that coordinates EV charging with home solar batt
 ## Architecture
 - **TypeScript CLI** (`src/index.ts`): Main entry point with Commander.js
 - **Services**: `FranklinWHService.ts` (battery), `TeslaService.ts` (EV)
+- **Tesla wire format** (`src/services/tesla/`): `oauth.ts` (request/response shapes),
+  `endpoints.ts` (region -> hostnames, scopes), `VirtualKeyService.ts` (app key pair)
 - **Python Proxy** (`python/franklin_proxy.py`): Flask server for FranklinWH API
 - **Credential Store** (`src/utils/credentials.ts`): Secure storage using keytar/encrypted files
 
@@ -33,8 +35,9 @@ pip install -r python/requirements.txt  # Python deps
 - Run `npm run test` to run tests with vitest
 - Run `npm run lint` to run linter
 
-## Executing work
+## git workflow
 Each user prompt to the agent should be written to a new local branch.
+Create local commits as needed to separate logical chunks of work to enable human review.
 Do not push the branch to remote; keep it local and let user check and land changes to main.
 
 ## Adding New Systems

@@ -19,6 +19,32 @@ const CONFIG_DIR = process.env.ECC_CONFIG_DIR
 const CREDENTIALS_FILE = path.join(CONFIG_DIR, 'credentials.enc');
 const KEY_FILE = path.join(CONFIG_DIR, '.key');
 
+/**
+ * Resolved directory for all file-backed secrets. Exported so other modules
+ * (e.g. the virtual key store) place their files beside the credential store
+ * and inherit the ECC_CONFIG_DIR redirection used by the test suite.
+ */
+export function getConfigDir(): string {
+  return CONFIG_DIR;
+}
+
+/** Stored shape of the Tesla credentials. */
+export interface TeslaCredentialInput {
+  clientId?: string;
+  clientSecret?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  /** Absolute unix time in milliseconds, matching the existing stored format. */
+  expiresAt?: number;
+  vin?: string;
+  /** Tesla deployment region. Determines the Fleet API base URL and audience. */
+  region?: 'na' | 'eu' | 'cn';
+  /** Externally reachable HTTPS domain hosting the registered app specifics. */
+  domain?: string;
+  /** Loopback port the OAuth redirect listener binds to. */
+  callbackPort?: number;
+}
+
 interface StoredCredentials {
   franklin?: {
     username: string;
@@ -26,12 +52,17 @@ interface StoredCredentials {
     gatewayId: string;
   };
   tesla?: {
-    clientId: string;
-    clientSecret: string;
+    // Optional because setTeslaCredentials merges partial updates, so a record
+    // can legitimately exist before the app credentials have been supplied.
+    clientId?: string;
+    clientSecret?: string;
     accessToken?: string;
     refreshToken?: string;
     expiresAt?: number;
     vin?: string;
+    region?: 'na' | 'eu' | 'cn';
+    domain?: string;
+    callbackPort?: number;
   };
   settings?: {
     batteryBuffer: number;
@@ -200,26 +231,34 @@ export class CredentialStore {
     return this.credentials.tesla;
   }
 
-  async setTeslaCredentials(
-    clientId: string,
-    clientSecret: string,
-    accessToken?: string,
-    refreshToken?: string,
-    expiresAt?: number,
-    vin?: string
-  ): Promise<void> {
+  /**
+   * Accepts clientId/clientSecret with or without a token. The previous
+   * positional signature rebuilt the whole record on every call, so saving the
+   * client credentials after authenticating silently blanked the freshly issued
+   * token. Fields are now merged, and omitted fields keep their stored value.
+   */
+  async setTeslaCredentials(input: TeslaCredentialInput): Promise<void> {
     await this.initialize();
+    const existing = this.credentials.tesla ?? {};
     this.credentials.tesla = {
-      clientId,
-      clientSecret,
-      accessToken,
-      refreshToken,
-      expiresAt,
-      vin
+      ...existing,
+      ...(input.clientId !== undefined ? { clientId: input.clientId } : {}),
+      ...(input.clientSecret !== undefined ? { clientSecret: input.clientSecret } : {}),
+      ...(input.accessToken !== undefined ? { accessToken: input.accessToken } : {}),
+      ...(input.refreshToken !== undefined ? { refreshToken: input.refreshToken } : {}),
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+      ...(input.vin !== undefined ? { vin: input.vin } : {}),
+      ...(input.region !== undefined ? { region: input.region } : {}),
+      ...(input.domain !== undefined ? { domain: input.domain } : {}),
+      ...(input.callbackPort !== undefined ? { callbackPort: input.callbackPort } : {}),
     };
     await this.save();
   }
 
+  /**
+   * Persist a rotated access/refresh token pair. Tesla rotates refresh tokens on
+   * every refresh, so this must be called after each successful refresh.
+   */
   async updateTeslaTokens(
     accessToken: string,
     refreshToken: string,
