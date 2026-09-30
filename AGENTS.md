@@ -37,7 +37,7 @@ pip install -r python/requirements.txt  # Python deps
 
 ## git workflow
 Each user prompt to the agent should be written to a new local branch.
-Create local commits as needed to separate logical chunks of work.
+Create local commits as needed to separate logical chunks of work to enable human review.
 Do not push the branch to remote; keep it local and let user check and land changes to main.
 
 ## Adding New Systems
