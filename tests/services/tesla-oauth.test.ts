@@ -26,6 +26,8 @@ import {
   isTeslaRegion,
   resolveRegion,
   TESLA_AUTHORIZE_URL,
+  TESLA_PARTNER_SCOPES,
+  TESLA_PARTNER_SCOPE_STRING,
   TESLA_SCOPES,
   TESLA_SCOPE_STRING,
   TESLA_TOKEN_URL,
@@ -202,6 +204,42 @@ describe('token exchange forms', () => {
       'grant_type',
     ]);
     expect(form.get('grant_type')).toBe('client_credentials');
+  });
+
+  it('includes scope on client_credentials when one is supplied, and omits it otherwise', () => {
+    // The Partner Tokens page sends `scope` on this grant; the form builder must
+    // support it, and must stay silent when a caller wants a bare app-level token.
+    const withScope = buildClientCredentialsTokenForm({
+      clientId: 'cid',
+      clientSecret: 'secret',
+      audience: 'aud',
+      scope: 'openid vehicle_device_data vehicle_cmds vehicle_charging_cmds',
+    });
+    expect(withScope.get('scope')).toBe(
+      'openid vehicle_device_data vehicle_cmds vehicle_charging_cmds'
+    );
+
+    const withoutScope = buildClientCredentialsTokenForm({
+      clientId: 'cid',
+      clientSecret: 'secret',
+      audience: 'aud',
+    });
+    expect(withoutScope.has('scope')).toBe(false);
+  });
+
+  it('never asks for offline_access on the partner-token grant', () => {
+    // A partner token is re-minted from client credentials and never refreshed,
+    // so requesting a refresh token would be meaningless.
+    expect(TESLA_PARTNER_SCOPE_STRING).not.toContain('offline_access');
+    expect(TESLA_PARTNER_SCOPES).toEqual([
+      'openid',
+      'vehicle_device_data',
+      'vehicle_cmds',
+      'vehicle_charging_cmds',
+    ]);
+    // The user-facing scope set is a superset, which is what makes this a real
+    // distinction rather than a duplicate constant.
+    expect(TESLA_SCOPES).toContain('offline_access');
   });
 });
 

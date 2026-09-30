@@ -7,8 +7,14 @@
  */
 
 import { Command } from 'commander';
+import axios from 'axios';
 import { createInterface } from 'node:readline';
 import { FranklinWHService, TeslaService } from './services/index.js';
+import {
+  normalizeDomain,
+  VirtualKeyService,
+  VirtualKeyStore,
+} from './services/tesla/VirtualKeyService.js';
 import { resolveRegion } from './services/tesla/endpoints.js';
 import { credentialStore } from './utils/credentials.js';
 
@@ -604,8 +610,27 @@ program
   .option('--clear-tesla', 'Clear Tesla credentials')
   .option('--clear-all', 'Clear all stored credentials')
   .option('--tesla-region <region>', 'Set the Tesla Fleet API deployment (na | eu | cn)')
+  .option('--tesla-domain <domain>', 'Set the domain that hosts the virtual key public key')
+  .option('--show-public-key', 'Print the virtual key public key that Tesla reads')
   .action(async (options) => {
-    if (options.teslaRegion) {
+    if (options.showPublicKey) {
+      const service = new VirtualKeyService({ apiBaseUrl: resolveRegion().apiBaseUrl });
+      console.log(await service.getPublicKeyPem());
+      return;
+    }
+    if (options.teslaDomain) {
+      // Validated the same way pair-tesla-key validates it, so a bad domain is
+      // rejected here rather than after the key has been published to it.
+      try {
+        const domain = normalizeDomain(options.teslaDomain);
+        await credentialStore.setTeslaCredentials({ domain });
+        console.log(`✓ Tesla key domain set to ${domain}`);
+        console.log('  Run pair-tesla-key to register it with Tesla.');
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exitCode = 1;
+      }
+    } else if (options.teslaRegion) {
       // Validated through resolveRegion so a typo fails here instead of surfacing
       // later as an HTTP 421 "incorrect region" from Tesla.
       try {
@@ -634,10 +659,221 @@ program
       
       console.log('\n--- Configuration ---');
       console.log(`FranklinWH: ${franklin ? `Configured (Gateway: ${franklin.gatewayId})` : 'Not configured'}`);
-      console.log(`Tesla: ${tesla ? `Configured${tesla.vin ? ` (VIN: ${tesla.vin})` : ''}${tesla.region ? ` Region: ${tesla.region}` : ''}` : 'Not configured'}`);
+      console.log(`Tesla: ${tesla ? `Configured${tesla.vin ? ` (VIN: ${tesla.vin})` : ''}${tesla.region ? ` Region: ${tesla.region}` : ''}${tesla.domain ? ` Key domain: ${tesla.domain}` : ''}` : 'Not configured'}`);
       console.log(`Battery Buffer: ${buffer}%`);
       console.log('');
     }
   });
+
+program
+  .command('pair-tesla-key')
+  .description("Register this application's virtual key with Tesla and print the vehicle pairing link")
+  .option('--domain <domain>', 'Domain that hosts the public key (defaults to the stored value)')
+  .option('--vin <vin>', 'Vehicle to pair (defaults to the stored VIN)')
+  .option('--check-only', 'Only report the current key/registration state; change nothing')
+  .option('--skip-registration', 'Do not call Tesla; only verify the hosted key and print the link')
+  .action(async (options) => {
+    const stored = await credentialStore.getTeslaCredentials();
+    const regionInfo = resolveRegion(stored?.region);
+
+    // A plain axios instance, separate from TeslaService's: the hosted-key probe
+    // deliberately fetches a third-party URL and must not carry a Tesla bearer
+    // token, and TeslaService's client attaches one to every request.
+    const virtualKeys = new VirtualKeyService({
+      apiBaseUrl: regionInfo.apiBaseUrl,
+      http: axios.create({ timeout: 30000 }),
+    });
+
+    const domainInput = options.domain ?? stored?.domain;
+    if (!domainInput) {
+      console.error(
+        'No domain configured. Pass --domain <domain> or save one with:\n' +
+          '  node dist/index.js config --tesla-domain <domain>'
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    let domain: string;
+    try {
+      // Validated up front so a typo fails before any key material is touched.
+      domain = normalizeDomain(domainInput);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+      return;
+    }
+
+    const vin = options.vin ?? stored?.vin;
+
+    if (options.checkOnly) {
+      await reportKeyState(virtualKeys, domain, { verifyWithTesla: true, credentials: stored });
+      return;
+    }
+
+    // Step 1: the key must exist locally before anything is published or sent.
+    const instructions = await virtualKeys.getHostingInstructions(domain);
+    console.log('\n--- Step 1 of 3: host the public key ---');
+    console.log(`\nKey pair: ${virtualKeys.privateKeyPath} (keep this file; it signs every command)`);
+    console.log(`Public key: ${virtualKeys.publicKeyPath}`);
+    console.log(`\nServe this file at exactly:\n  ${instructions.url}`);
+    console.log('\nIt must be the PEM itself, over HTTPS, with no redirect and no HTML page in front.');
+    if (process.stdin.isTTY) {
+      console.log(`\nPublic key contents:\n${instructions.publicKeyPem.trim()}`);
+    }
+
+    // Step 2: check what Tesla would actually fetch, before the domain is spent.
+    console.log('\n--- Step 2 of 3: verify the published key ---');
+    const hosted = await virtualKeys.checkHostedPublicKey(domain);
+    if (!hosted.matchesLocalKey) {
+      console.error(`\n✗ ${hosted.error ?? 'The published key could not be verified.'}`);
+      // The preview earns its own line only when the server actually answered
+      // with a body; on a transport failure it just repeats the reason above.
+      if (hosted.bodyPreview && hosted.reachable === false && hosted.status !== undefined) {
+        console.error(`  Got instead: ${hosted.bodyPreview}`);
+      }
+      if (hosted.status !== undefined) {
+        console.error(`  HTTP status: ${hosted.status}`);
+      }
+      console.error('\nFix the hosting above and re-run. Nothing has been sent to Tesla yet.');
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`✓ ${hosted.url} serves the matching public key`);
+
+    if (options.skipRegistration) {
+      console.log('\nSkipping Tesla registration (--skip-registration).');
+      printPairingLink(virtualKeys, domain, vin);
+      return;
+    }
+
+    await registerDomainWithTesla(virtualKeys, domain, stored);
+    printPairingLink(virtualKeys, domain, vin);
+  });
+
+/**
+ * Step 3: register the domain with Tesla and confirm it stored our key.
+ *
+ * Returns whether registration succeeded, so the caller can decide whether the
+ * pairing link is still worth printing.
+ */
+async function registerDomainWithTesla(
+  virtualKeys: VirtualKeyService,
+  domain: string,
+  stored: { clientId?: string; clientSecret?: string } | undefined
+): Promise<boolean> {
+  console.log('\n--- Step 3 of 3: register the domain with Tesla ---');
+  if (!stored?.clientId || !stored?.clientSecret) {
+    console.error(
+      'No stored Tesla client ID/secret. This step authenticates the application itself\n' +
+        '(a "partner" token), so run the interactive login first:\n' +
+        '  node dist/index.js get-ev-bsoc'
+    );
+    process.exitCode = 1;
+    return false;
+  }
+
+  try {
+    const partnerToken = await virtualKeys.fetchPartnerToken(stored.clientId, stored.clientSecret);
+    await virtualKeys.registerKey(partnerToken.accessToken, domain);
+    console.log(`✓ Registered ${domain}`);
+
+    const verification = await virtualKeys.verifyRegistration(partnerToken.accessToken, domain);
+    if (!verification.registered) {
+      console.error('✗ Tesla did not return a registered key for this domain.');
+      console.error('  It may take a moment to propagate; re-run --check-only in a minute.');
+      process.exitCode = 1;
+      return false;
+    }
+    if (!verification.matchesLocalKey) {
+      // The dangerous case: Tesla holds a key whose private half is not on this
+      // machine. Pairing here would appear to succeed and then fail every command.
+      console.error(
+        `✗ Tesla holds a different public key for ${domain} than the one on this machine.\n` +
+          '  Commands signed locally would be rejected. Check which domain you registered,\n' +
+          '  and re-publish the public key at the path shown above.'
+      );
+      process.exitCode = 1;
+      return false;
+    }
+    console.log('✓ Tesla holds the matching public key');
+
+    // Remember the domain so later runs do not need --domain.
+    const current = await credentialStore.getTeslaCredentials();
+    if (current?.domain !== domain) {
+      await credentialStore.setTeslaCredentials({ domain });
+      console.log('✓ Domain saved to configuration');
+    }
+    return true;
+  } catch (error) {
+    console.error('Registration failed:', error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+    return false;
+  }
+}
+
+function printPairingLink(virtualKeys: VirtualKeyService, domain: string, vin?: string): void {
+  console.log('\n--- Pair the vehicle ---');
+  console.log('\nOpen this link on a device signed in to the Tesla app that owns the car:');
+  console.log(`\n  ${virtualKeys.buildPairingUrl(domain, vin)}\n`);
+  console.log('Approve the key in the app when it prompts. Pairing is a manual,');
+  console.log('in-the-car step: Tesla documents no API that reports per-vehicle key');
+  console.log('pairing, so this cannot be verified from the command line.');
+  console.log(
+    'To confirm afterwards, run a command (for example `get-ev-bsoc`); a vehicle that\n' +
+      'rejects the key answers "your public key has not been paired with the vehicle".'
+  );
+}
+
+/** Report key/registration state without mutating anything (--check-only). */
+async function reportKeyState(
+  virtualKeys: VirtualKeyService,
+  domain: string,
+  options: { verifyWithTesla: boolean; credentials?: { clientId?: string; clientSecret?: string } }
+): Promise<void> {
+  console.log(`\n--- Virtual key state for ${domain} ---`);
+
+  // Read through the service rather than stat()ing the path directly, so the
+  // same code path that would create a key is the one being reported on.
+  const stored = await new VirtualKeyStore().load();
+  console.log(
+    stored
+      ? `Local key pair: ${virtualKeys.privateKeyPath}`
+      : 'Local key pair: not created yet (run pair-tesla-key to generate one)'
+  );
+
+  const hosted = await virtualKeys.checkHostedPublicKey(domain);
+  if (hosted.matchesLocalKey) {
+    console.log(`Hosted key: OK ${hosted.url} serves the matching public key`);
+  } else {
+    console.log(`Hosted key: PROBLEM ${hosted.error ?? 'could not be verified'}`);
+    if (hosted.status !== undefined) console.log(`  HTTP status: ${hosted.status}`);
+    if (hosted.bodyPreview && hosted.reachable === false && hosted.status !== undefined) {
+      console.log(`  Got instead: ${hosted.bodyPreview}`);
+    }
+  }
+
+  if (!options.verifyWithTesla) return;
+  if (!options.credentials?.clientId || !options.credentials?.clientSecret) {
+    console.log('Tesla registration: skipped (no stored client ID/secret)');
+    return;
+  }
+  try {
+    const token = await virtualKeys.fetchPartnerToken(
+      options.credentials.clientId,
+      options.credentials.clientSecret
+    );
+    const result = await virtualKeys.verifyRegistration(token.accessToken, domain);
+    if (!result.registered) {
+      console.log('Tesla registration: no key registered for this domain');
+    } else if (result.matchesLocalKey) {
+      console.log('Tesla registration: OK Tesla holds the matching public key');
+    } else {
+      console.log('Tesla registration: PROBLEM Tesla holds a DIFFERENT public key for this domain');
+    }
+  } catch (error) {
+    console.log(`Tesla registration: could not be checked (${error instanceof Error ? error.message : error})`);
+  }
+}
 
 program.parse();
