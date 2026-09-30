@@ -124,7 +124,14 @@ describe('CredentialStore - encrypted file fallback', () => {
 
   it('persists Tesla tokens and lets updateTeslaTokens rotate them', async () => {
     const store = new mod.CredentialStore();
-    await store.setTeslaCredentials('client-id', 'client-secret', 'access-1', 'refresh-1', 1000, 'VIN1');
+    await store.setTeslaCredentials({
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      expiresAt: 1000,
+      vin: 'VIN1',
+    });
     await store.updateTeslaTokens('access-2', 'refresh-2', 2000);
 
     await expect(new mod.CredentialStore().getTeslaCredentials()).resolves.toMatchObject({
@@ -146,7 +153,7 @@ describe('CredentialStore - encrypted file fallback', () => {
   it('clears FranklinWH credentials without touching Tesla credentials', async () => {
     const store = new mod.CredentialStore();
     await store.setFranklinCredentials('u', 'p', 'GW');
-    await store.setTeslaCredentials('client-id', 'client-secret');
+    await store.setTeslaCredentials({ clientId: 'client-id', clientSecret: 'client-secret' });
     await store.clearFranklinCredentials();
 
     const reloaded = new mod.CredentialStore();

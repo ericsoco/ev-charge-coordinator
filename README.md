@@ -57,15 +57,24 @@ npm run build
 
 ### Tesla Fleet API Setup
 
-1. Create a Tesla Developer account at https://developer.tesla.com
+1. Create a Tesla Developer account at https://developer.tesla.com (accounts in
+   China register on the separate https://developer.tesla.cn portal)
 2. Create a new application and note the Client ID and Client Secret
-3. Generate a public/private key pair for command signing:
+3. Register the redirect URI `http://localhost:8089/callback` (must match exactly,
+   or the token exchange fails with `invalid_redirect_url`) and enable these scopes:
+   `openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds`.
+   `offline_access` is what makes Tesla issue a refresh token at all.
+4. Generate a public/private key pair for command signing (`src/services/tesla/
+   VirtualKeyService.ts` generates and validates the same pair programmatically):
    ```bash
    openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
    openssl ec -in private-key.pem -pubout -out public-key.pem
    ```
-4. Host the public key at `https://your-domain.com/.well-known/appspecific/com.tesla.3p.public-key.pem`
-5. Register your application with the Tesla Fleet API
+5. Host the public key at `https://your-domain.com/.well-known/appspecific/com.tesla.3p.public-key.pem`
+   (the domain is registered as the application's allowed origin; the file must be
+   reachable over HTTPS with no redirect)
+6. Run `node dist/index.js config --tesla-region <na|eu|cn>` if your account is not
+   served by the North America deployment. Asia-Pacific accounts use `na`.
 
 ### FranklinWH Setup
 
@@ -136,6 +145,7 @@ npm start config --clear-all
 | `config --clear-franklin` | Clear FranklinWH credentials |
 | `config --clear-tesla` | Clear Tesla credentials |
 | `config --clear-all` | Clear all stored credentials |
+| `config --tesla-region <na\|eu\|cn>` | Choose the Tesla Fleet API deployment |
 
 ### Interactive Mode Commands
 
@@ -257,6 +267,25 @@ The architecture is designed to be extensible. To add support for a new EV or ba
 - Ensure your Tesla Developer application has the correct scopes enabled
 - Make sure your public key is properly hosted and accessible
 - Check that you've registered with the Fleet API in your region
+- The OAuth redirect URI registered on developer.tesla.com must equal
+  `http://localhost:8089/callback` character for character
+- What Tesla's answer actually means:
+
+  | Message | Fix |
+  |---------|-----|
+  | `client_not_found` | wrong Client ID; copy it from developer.tesla.com > your app |
+  | `invalid_redirect_url` | registered redirect URI differs from the one sent |
+  | `invalid_auth_code` | the code was already used or expired; authenticate again |
+  | `login_required` | password reset or the refresh token was already consumed; re-authenticate |
+  | HTTP 412 | application key not registered; complete the pairing step |
+  | HTTP 421 | right credentials, wrong region; set `--tesla-region` |
+
+- Refresh tokens are single use: Tesla returns a new one on every refresh and the
+  old one stops working, so never copy the stored token to another machine
+- Escape hatches, if Tesla changes its wire format: `ECC_TESLA_TOKEN_URL` overrides
+  the token endpoint and `ECC_TESLA_PKCE=0` drops the PKCE parameters from the
+  authorize request (Tesla does not document PKCE, so this restores the strictly
+  documented request shape)
 
 ### FranklinWH Connection Issues
 
