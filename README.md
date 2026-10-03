@@ -334,7 +334,7 @@ The architecture is designed to be extensible. To add support for a new EV or ba
   | `invalid_redirect_url` | registered redirect URI differs from the one sent |
   | `invalid_auth_code` | the code was already used or expired; authenticate again |
   | `login_required` | password reset or the refresh token was already consumed; re-authenticate |
-  | HTTP 412 | application key not registered; complete the pairing step |
+  | HTTP 412 | app not registered with Tesla in this region; run `pair-tesla-key` |
   | HTTP 421 | right credentials, wrong region; set `--tesla-region` |
   | `your public key has not been paired with the vehicle` | the key was never
     approved on the phone, or Tesla holds a different key; re-run

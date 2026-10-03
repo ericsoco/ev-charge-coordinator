@@ -286,9 +286,26 @@ describe('describeTeslaError', () => {
   });
 
   it('maps the region and registration status codes Tesla only documents in passing', () => {
-    expect(describeTeslaError(412, 'Precondition Failed')).toContain('register-key');
+    expect(describeTeslaError(412, 'Precondition Failed')).toContain('pair-tesla-key');
     expect(describeTeslaError(421, 'Misdirected Request')).toContain('region');
     expect(describeTeslaError(401, 'nope')).toContain('token expired or revoked');
+  });
+
+  it('explains the not-registered error Tesla actually returns', () => {
+    // Observed live from GET /api/1/vehicles. The registration step is separate
+    // from OAuth consent, so the advice has to say so: a user who has already
+    // authorized the app would otherwise assume they were misconfigured.
+    const mapped = describeTeslaError(
+      412,
+      'Account 2fc1d3f9-753b-4b9f-8648-ec112c146567 must be registered in the current region ' +
+        'https://fleet-api.prd.na.vn.cloud.tesla.com'
+    );
+
+    expect(mapped).toContain('pair-tesla-key');
+    // Must not tell the user to fix a region, since the region in the message is
+    // simply where the token was minted.
+    expect(mapped).not.toContain('wrong region');
+    expect(mapped).toContain('Allowed Origin');
   });
 
   it('maps the strings observed from the live token endpoint', () => {
