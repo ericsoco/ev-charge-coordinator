@@ -60,8 +60,8 @@ npm run build
 1. Create a Tesla Developer account at https://developer.tesla.com (accounts in
    China register on the separate https://developer.tesla.cn portal)
 2. Create a new application and note the Client ID and Client Secret
-3. Register the redirect URI `http://localhost:8089/callback` (must match exactly,
-   or the token exchange fails with `invalid_redirect_url`) and enable these scopes:
+3. Register the origin URL `http://localhost:8089/`, and redirect URI `http://localhost:8089/callback`
+   (must match exactly, or the token exchange fails with `invalid_redirect_url`) and enable these scopes:
    `openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds`.
    `offline_access` is what makes Tesla issue a refresh token at all.
 4. Generate a public/private key pair for command signing. `pair-tesla-key` does this
@@ -80,11 +80,6 @@ npm run build
    key pair, verify the published key, register the domain, and print the pairing
    link (see [Virtual key pairing](#virtual-key-pairing)).
 
-### FranklinWH Setup
-
-1. You need your FranklinWH account credentials (email/password)
-2. Find your Gateway ID in the FranklinWH app under **More → Site Address** (shown as SN)
-
 ### Virtual key pairing
 
 Vehicles that use the Vehicle Command Protocol verify a signature on every command,
@@ -94,7 +89,7 @@ docs are explicit that this step cannot be automated away.
 `pair-tesla-key` does everything up to that tap, in three steps:
 
 ```bash
-npm start pair-tesla-key --domain your-domain.com
+npm start -- pair-tesla-key --domain your-domain.com
 ```
 
 1. **Host the public key.** The command generates (or reuses) a P-256 key pair in
@@ -134,6 +129,11 @@ signal is `key_paired` in a fleet-telemetry response, which requires a signed
 request and a configured telemetry server. To confirm afterwards, run a command; a
 vehicle that rejects the key answers
 `your public key has not been paired with the vehicle`.
+
+### FranklinWH Setup
+
+1. You need your FranklinWH account credentials (email/password)
+2. Find your Gateway ID in the FranklinWH app under **More → Site Address** (shown as SN)
 
 ## Usage
 
@@ -225,26 +225,26 @@ When running in interactive mode (`start`), the following commands are available
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    EV Charge Coordinator                     │
-│                      (TypeScript/Node.js)                    │
+│                    EV Charge Coordinator                    │
+│                      (TypeScript/Node.js)                   │
 ├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐         ┌─────────────────┐            │
-│  │   Tesla Service │         │ FranklinWH Svc  │            │
-│  │  (Fleet API)    │         │ (HTTP Proxy)    │            │
-│  └────────┬────────┘         └────────┬────────┘            │
-└───────────┼──────────────────────────┼─────────────────────┘
-            │                          │
-            ▼                          ▼
-     ┌──────────────┐         ┌──────────────────┐
-     │ Tesla Fleet  │         │  Python Proxy    │
-     │     API      │         │  (Flask Server)  │
-     └──────────────┘         └────────┬─────────┘
-                                       │
-                                       ▼
-                              ┌──────────────────┐
-                              │  FranklinWH API  │
-                              │   (franklinwh)   │
-                              └──────────────────┘
+│  ┌─────────────────┐         ┌──────────────────┐           │
+│  │   Tesla Service │         │ FranklinWH Svc   │           │
+│  │  (Fleet API)    │         │ (HTTP Proxy)     │           │
+│  └────────┬────────┘         └────────┬─────────┘           │
+└───────────┼───────────────────────────┼─────────────────────┘
+            │                           │
+            ▼                           ▼
+     ┌──────────────┐          ┌──────────────────┐
+     │ Tesla Fleet  │          │  Python Proxy    │
+     │     API      │          │  (Flask Server)  │
+     └──────────────┘          └────────┬─────────┘
+                                        │
+                                        ▼
+                               ┌──────────────────┐
+                               │  FranklinWH API  │
+                               │   (franklinwh)   │
+                               └──────────────────┘
 ```
 
 ### Smart Charging Flow
