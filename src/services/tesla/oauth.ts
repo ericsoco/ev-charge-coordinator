@@ -250,7 +250,19 @@ export function describeTeslaError(status: number | undefined, raw: string): str
   for (const [code, advice] of Object.entries(known)) {
     if (safeRaw.includes(code)) return `${statusText}${safeRaw} - ${advice}`;
   }
-  if (status === 412) return `${statusText}${safeRaw} - account not registered; run register-key first`;
+  if (status === 412) {
+    // Observed live: "Account <uuid> must be registered in the current region
+    // <base url>". This is the POST /api/1/partner_accounts step, which is
+    // separate from granting consent: authorizing the app in the browser does
+    // not perform it, and setting an Allowed Origin in the developer console
+    // does not either. The region in the message is the one the token was
+    // minted for, so it is not necessarily a misconfiguration.
+    return (
+      `${statusText}${safeRaw} - this app is not registered with Tesla in this region. ` +
+      'Run `pair-tesla-key --domain <domain>` to register it. The domain must match an ' +
+      'Allowed Origin on developer.tesla.com, and its public key must be hosted first.'
+    );
+  }
   if (status === 421) return `${statusText}${safeRaw} - wrong region for this account; check the region setting`;
   if (status === 401) return `${statusText}${safeRaw} - token expired or revoked`;
   return `${statusText}${safeRaw}`;

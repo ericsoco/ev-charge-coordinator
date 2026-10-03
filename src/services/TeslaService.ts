@@ -141,7 +141,16 @@ export class TeslaService implements EVService {
             console.error('Token refresh failed:', describeAxiosError(refreshError));
           }
         }
-        throw error;
+        // Every vehicle/command call fails through here, so this is where a Fleet
+        // API failure (412 not-registered, 421 wrong-region) becomes one readable
+        // line instead of a raw AxiosError. Without it the mapper was only reached
+        // from the refresh and token-exchange paths, so a 412 raised by an ordinary
+        // vehicle_data read reached the user as Tesla's bare sentence with no
+        // advice attached. The original is kept as `cause`, so the response body
+        // and stack stay available for debugging.
+        throw axios.isAxiosError(error)
+          ? new Error(describeAxiosError(error), { cause: error })
+          : error;
       }
     );
   }
