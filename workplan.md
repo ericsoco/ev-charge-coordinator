@@ -145,10 +145,11 @@ the real `~/.ev-charge-coordinator`).
 
 Nothing Tesla-facing is testable until this lands — every other Tesla task is blocked here.
 
-**Status: code complete on `feature/phase-1-tesla-auth` + `feature/phase-1-pair-tesla-key`;
-93 tests green. The authenticated happy path (real client credentials → browser consent →
-live vehicle) still needs a human with a developer app and a car.** Items 1, 2, 3, 4 and 5
-are implemented; notes below record where reality differed from the plan.
+**Status: COMPLETE, landed on `main` (`953cd75` and the commits before it). 122 tests green,
+`npm run check` passing. All four exit criteria below were verified against a live vehicle
+and a live developer app during development.** The notes in this section record where
+reality differed from the plan; the "late findings" list after item 5 records five defects
+that only surfaced in live use, all now fixed.
 
 1. **`src/services/TeslaService.ts` — fix the token exchange:**
    - Add `TESLA_AUTH_TOKEN_URL = 'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token'`;
@@ -202,6 +203,48 @@ are implemented; notes below record where reality differed from the plan.
 restart; refresh works with no user interaction; ~~`pair-vehicle` reports the key present on
 the VIN~~ — replaced by: `pair-tesla-key` verifies the published key matches the local pair
 and that Tesla holds the same key, and prints the deep link for the manual tap.
+
+### Late findings (live-use defects, all fixed)
+
+Each of these passed the test suite and failed against the real API. They are recorded
+because the pattern matters more than the individual bugs: **every one was a case where the
+code encoded an assumption that the unit tests then pinned**, so a green suite actively
+protected the defect.
+
+1. **Registration deadlock.** `initializeTesla` saved the client ID/secret only *after*
+   `authenticate()`, and `authenticate()` ends by resolving a VIN, which 412s until the app
+   is registered — and registration needs those credentials. A user who had not registered
+   could therefore never register. Fixed by saving credentials before the OAuth round trip
+   and treating a 412 from `resolveVin()` as a partial success rather than a failed login.
+2. **Partner tokens rejected.** `parseTokenResponse` hard-required a `refresh_token`, because
+   it was written for the third-party grant. The `client_credentials` grant issues none, and
+   Tesla documents no `offline_access` for it, so registration always failed. Now
+   `requireRefreshToken` is opt-out, and only `client_credentials` passes false.
+   **`fetchPartnerToken` had no test at all** — the only reason this shipped.
+3. **Consent gate invisible.** Pairing via `tesla.com/_ak/` requires the user to have
+   already authorized the app; until then Tesla answers *"you have not granted `<domain>`
+   access to your account"*. `pair-tesla-key` printed the link unconditionally, so the only
+   way to find out was to tap into an error in the Tesla app. Now checked before the link
+   is printed, and reported by `--check-only`.
+4. **Split-brain credential storage.** `initialize()` and `save()` each independently chose
+   between the keychain and the encrypted file, silently falling back. A load could come
+   from one while a write went to the other; since the keychain wins on read, correctly
+   saved credentials became invisible and every run looked "not signed in". The backend is
+   now resolved once and pinned for the life of the store.
+5. **Test pollution of the real keychain.** `tests/services/tesla-error-reporting.test.ts`
+   called `authenticate()`, which saves credentials, without setting `ECC_DISABLE_KEYCHAIN`
+   or `ECC_CONFIG_DIR`. It wrote test values into the developer's real keychain *and*
+   encrypted file. `ECC_DISABLE_KEYCHAIN`/`ECC_CONFIG_DIR` now live in `vitest.config.ts`,
+   where a suite cannot forget them.
+
+### One lesson worth carrying forward
+
+Three separate advice strings told users to run a command that did not exist, and when that
+was fixed the replacement ("run `get-ev-bsoc`") was *also* wrong — it is a data command, not
+a login. The real fix was to write the missing `authenticate` command. **Advice text is a
+user-facing surface and needs the same rigour as code**; there is now a test that reads the
+registered command names out of `index.ts` and asserts every command mentioned in any error
+message actually exists.
 
 
 
