@@ -252,23 +252,55 @@ message actually exists.
 
 ## Phase 1.5 — Extract shared command handlers (~0.5 d)
 
+**Status: COMPLETE on `feature/phase-1-5-command-handlers`. 144 tests green, `npm run check`
+clean (the `isRunning` warning is gone along with the flag). `--help` output is byte-identical
+to the pre-refactor baseline.**
+
 **Promoted above Phase 2/4 on purpose:** the same command logic exists twice today
 (Commander actions + the REPL `switch`), so any Phase 4 math change would be made twice and
 the two paths would drift. Do this first.
 
-1. New `src/commands/` dir: one module per command, exporting a
-   `run(ctx: CommandContext, args): Promise<Result>` function. `CommandContext` carries the
-   Franklin/EV services + credential store (inject, don't import singletons, so Phase 0
-   tests can stub them).
-2. Commander actions in `src/index.ts` become thin argument-parsing wrappers over these.
-3. The `start` REPL (`index.ts:240-405`) dispatches to the **same** handlers; delete its
-   private copy of all 9 commands.
-4. Shared error rendering + exit codes in one place (today some paths `process.exit(1)`,
-   others just `console.log` and continue).
-5. Kill the effectively-unused `isRunning` flag (`index.ts:17`).
+1. ✅ New `src/commands/` dir: `context.ts` holds `CommandContext` (Franklin/EV services +
+   credential store + an injected `ask`), `vehicle.ts` holds the handlers. Each exports a
+   function returning `Promise<CommandResult>`. Services are injected, not imported, so the
+   handlers are unit-testable without a keychain, a proxy, or the network.
+2. ✅ Commander actions in `src/index.ts` are thin wrappers. Failures funnel through one
+   `runCommand()` that sets `process.exitCode = 1`; the REPL calls handlers directly so a
+   failed command there does not kill the session.
+3. ✅ The `start` REPL dispatches to the same handlers; its private copies are deleted.
+   `index.ts` went 1180 → 1054 lines.
+4. ✅ Shared error rendering (`describeError`) and the `MIN_EV_CHARGE_LIMIT` /
+   `MAX_EV_CHARGE_LIMIT` constants are defined once.
+5. ✅ `isRunning` deleted and the `src/index.ts` ESLint `no-unused-vars` override retired —
+   the file now lints under the normal rule.
 
-**Exit criteria:** every command's behavior is defined in exactly one place; `--help` output
-unchanged; characterization tests from Phase 0 still pass.
+### The drift was already real, not hypothetical
+
+The premise was worth checking rather than assuming. The two copies had already diverged
+before this phase:
+
+| | REPL | Commander |
+|---|---|---|
+| printed `Setting EV limit to: N%` | yes | **no** |
+| prompted "Start charging now?" | yes | **no** |
+| not-enough-charge handling | `break` | `process.exit(0)` |
+
+So the same command already printed different output depending on how you invoked it. That
+difference is now an explicit `offerToStart` argument rather than an accident of which copy
+you happen to read.
+
+### Guardrails added
+
+- `tests/commands/vehicle.test.ts` (21 tests) covers the handlers directly, including that
+  `offerToStart: false` never prompts and never starts charging.
+- `legacy-charge-limit.test.ts`'s source guard now points at `src/commands/vehicle.ts` and
+  expects **1** occurrence instead of 2, plus a new assertion that `index.ts` contains **0**.
+  Verified by injecting a duplicate back into `index.ts`, which makes the test fail. So
+  "defined in exactly one place" is enforced rather than merely intended.
+
+**Exit criteria:** ✅ every command's behavior is defined in exactly one place; ✅ `--help`
+unchanged; ✅ Phase 0 characterization tests still pass (repointed, not deleted — Phase 4b
+still deletes them).
 
 ---
 
