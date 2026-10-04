@@ -90,6 +90,10 @@ export class TeslaService implements EVService {
   /** Single-use values held only for the duration of one authorize round trip. */
   private pendingNonce?: string;
   private pendingPkce?: PkcePair;
+  /** Set when authenticate() could not list vehicles because registration is pending. */
+  private registrationRequired = false;
+  /** Set when the last authenticate() resolved and persisted a VIN. */
+  private vinResolved = false;
 
   constructor(config: TeslaServiceConfig = {}) {
     this.regionInfo = resolveRegion(config.region);
@@ -401,11 +405,16 @@ export class TeslaService implements EVService {
 
   /**
    * Perform interactive OAuth authentication.
+   *
+   * Resolves true when a VIN was also resolved, false when authentication
+   * succeeded but listing vehicles did not (the app is not registered with
+   * Tesla yet -- see needsRegistration). The tokens are stored and valid in both
+   * cases; only the VIN is missing.
    */
   async authenticate(
     onAuthUrl: (url: string) => void,
     options: { showKeypairStep?: boolean } = {}
-  ): Promise<void> {
+  ): Promise<boolean> {
     const state = createOAuthState();
     this.pendingNonce = createNonce();
     this.pendingPkce = this.pkceEnabled ? createPkcePair() : undefined;
@@ -439,7 +448,46 @@ export class TeslaService implements EVService {
     });
 
     // Resolve and persist a VIN; commands previously used an unset value.
-    await this.resolveVin();
+    //
+    // A VIN is a convenience here, not part of authentication, so a failure to
+    // list vehicles must not discard tokens that were just issued and stored.
+    // The common case is HTTP 412: this app is not yet registered with Tesla,
+    // which pair-tesla-key fixes and which no retry can resolve. Propagating it
+    // is what previously turned a successful login into a failure, leaving the
+    // user with credentials that had never been stored.
+    //
+    // Returns whether a VIN was resolved, so the caller can report a partial
+    // success honestly instead of claiming a full login.
+    this.vinResolved = false;
+    try {
+      await this.resolveVin();
+      this.vinResolved = true;
+      return true;
+    } catch (error) {
+      const status = (error as { cause?: { response?: { status?: number } } })?.cause?.response
+        ?.status;
+      if (status === 412) {
+        // Tokens are stored above and stay valid; only the vehicle lookup was
+        // blocked. Flag it and return so the caller can direct the user to
+        // registration rather than reporting a failed login.
+        this.registrationRequired = true;
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * True when the last authenticate() could not list vehicles because this app
+   * is not registered with Tesla yet. The tokens are valid either way.
+   */
+  get needsRegistration(): boolean {
+    return this.registrationRequired;
+  }
+
+  /** True when the last authenticate() resolved and stored a VIN. */
+  get hasVin(): boolean {
+    return this.vinResolved;
   }
 
   /**

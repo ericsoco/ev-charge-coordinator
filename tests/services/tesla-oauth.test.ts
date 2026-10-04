@@ -7,6 +7,7 @@
  * confusing error, which is precisely what this module exists to prevent.
  */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buildAuthorizationCodeTokenForm,
@@ -278,7 +279,9 @@ describe('parseTokenResponse', () => {
 
 describe('describeTeslaError', () => {
   it('turns documented error strings into actionable advice', () => {
-    expect(describeTeslaError(400, 'invalid_auth_code')).toContain('run authenticate again');
+    // Must name a command that exists. There is no `authenticate` command;
+    // get-ev-bsoc is the cheapest one that triggers the OAuth flow.
+    expect(describeTeslaError(400, 'invalid_auth_code')).toContain('get-ev-bsoc');
     expect(describeTeslaError(400, 'invalid_redirect_url')).toContain('must equal');
     expect(describeTeslaError(401, 'unauthorized_client')).toContain('client_secret');
     expect(describeTeslaError(401, 'login_required')).toContain('already consumed');
@@ -314,6 +317,44 @@ describe('describeTeslaError', () => {
     expect(describeTeslaError(400, 'client_not_found')).toContain('developer.tesla.com');
     expect(describeTeslaError(400, 'invalid_client')).toContain('client_id/secret');
     expect(describeTeslaError(undefined, 'access_denied')).toContain('declined');
+  });
+
+  it('never tells the user to run a command that does not exist', () => {
+    // Regression guard. Three advice strings named an `authenticate` command that
+    // was never registered, and one named `register-key` after it was renamed --
+    // each time the test asserted the stale text, so the suite protected the bug.
+    // This walks the real command names out of src/index.ts and checks every
+    // message that mentions one, so renaming a command can no longer silently
+    // orphan its advice.
+    const source = readFileSync(
+      new URL('../../src/index.ts', import.meta.url),
+      'utf8'
+    );
+    const commands = new Set(
+      [...source.matchAll(/\.command\('([^']+)'\)/g)].map((m) => m[1])
+    );
+    expect(commands.size).toBeGreaterThan(5);
+
+    // Every error message, probed against every known status and code.
+    const probes = [
+      ...['invalid_auth_code', 'invalid_redirect_url', 'access_denied', 'login_required',
+          'client_not_found', 'invalid_client', 'unauthorized_client', 'unsupported_grant_type',
+          'mobile_access_disabled'],
+      ...['Precondition Failed', 'Misdirected Request', 'boom'],
+    ];
+    for (const status of [undefined, 400, 401, 412, 421, 500]) {
+      for (const raw of probes) {
+        const message = describeTeslaError(status, raw);
+        // A backticked word in the advice is meant to be a command the user can
+        // run, so each one must resolve to a registered command.
+        for (const [, name] of message.matchAll(/`([a-z][a-z0-9-]*)`/g)) {
+          expect(
+            commands.has(name),
+            `"${name}" in advice for ${String(status)}/${raw} is not a command`
+          ).toBe(true);
+        }
+      }
+    }
   });
 
   it('strips control characters so a redirect cannot write to the terminal', () => {

@@ -57,6 +57,12 @@ npm run build
 
 ### Tesla Fleet API Setup
 
+> **Registration is a separate step from signing in.** Authorizing the app in the
+> browser, and setting an Allowed Origin, neither of them registers your application
+> with Tesla. Until `POST /api/1/partner_accounts` has been called, Tesla answers
+> *every* `/api/1` call with `HTTP 412`, so sign-in appears to succeed and then
+> nothing works. `pair-tesla-key` (step 7) performs it.
+
 1. Create a Tesla Developer account at https://developer.tesla.com (accounts in
    China register on the separate https://developer.tesla.cn portal)
 2. Create a new application and note the Client ID and Client Secret
@@ -97,9 +103,10 @@ npm start -- pair-tesla-key --domain your-domain.com
    private key is written `0600` and is reused on every run — replacing it
    invalidates the pairing on every already-paired vehicle.
 2. **Verify the published key.** It fetches the well-known URL and compares what
-   comes back against the local key, so a 200 that serves an HTML error page, a
-   stale key from another machine, or a redirect is caught *before* the domain
-   registration is spent.
+   comes back against the local key, so a 200 that serves an HTML error page or a
+   stale key from another machine is caught before you tap Approve in the Tesla
+   app. Registering can be repeated, but a mismatched key makes pairing appear to
+   succeed and every later command fail.
 3. **Register the domain with Tesla**, then re-read the key back to confirm Tesla
    holds the same one. A mismatch is reported rather than waved through, because it
    pairs successfully and then fails every command.
@@ -332,7 +339,7 @@ The architecture is designed to be extensible. To add support for a new EV or ba
   |---------|-----|
   | `client_not_found` | wrong Client ID; copy it from developer.tesla.com > your app |
   | `invalid_redirect_url` | registered redirect URI differs from the one sent |
-  | `invalid_auth_code` | the code was already used or expired; authenticate again |
+  | `invalid_auth_code` | the code was already used or expired; sign in again (`get-ev-bsoc`) |
   | `login_required` | password reset or the refresh token was already consumed; re-authenticate |
   | HTTP 412 | app not registered with Tesla in this region; run `pair-tesla-key` |
   | HTTP 421 | right credentials, wrong region; set `--tesla-region` |

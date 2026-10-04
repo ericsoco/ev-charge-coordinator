@@ -147,7 +147,26 @@ async function initializeTesla(): Promise<boolean> {
   
   const clientId = await prompt('Client ID: ');
   const clientSecret = await promptPassword('Client Secret: ');
-  
+
+  // Persist the app credentials BEFORE the OAuth round trip, not after it.
+  //
+  // They are static values from developer.tesla.com: nothing about exchanging a
+  // code for tokens can invalidate them, and nothing downstream should be able
+  // to lose them. Saving them after authenticate() created a deadlock, because
+  // authenticate() ends by resolving a VIN (TeslaService.resolveVin ->
+  // listVehicles), which fails with HTTP 412 until this app is registered with
+  // Tesla -- and registration needs these very credentials. A user who had not
+  // registered yet could therefore never reach the save.
+  const save = await prompt('Store these credentials in the keychain? (y/n): ');
+  if (save.trim().toLowerCase() === 'y') {
+    await credentialStore.setTeslaCredentials({ clientId, clientSecret });
+    console.log('✓ Client ID/secret saved');
+  } else {
+    // Not stored, but still remembered for this process: pair-tesla-key may be
+    // run separately later and would otherwise have nothing to register with.
+    console.log('  Not saved. Re-run this command later to store them.');
+  }
+
   teslaService = new TeslaService();
   await teslaService.initialize({ clientId, clientSecret });
   
@@ -160,7 +179,23 @@ async function initializeTesla(): Promise<boolean> {
       console.log(authUrl);
       console.log('\nWaiting for authorization...');
     });
-    
+
+    // Registration (POST /api/1/partner_accounts) is a step separate from OAuth
+    // consent. Without it Tesla answers every /api/1 call with HTTP 412, so the
+    // token exchange succeeds and the vehicle list does not. Report that as the
+    // partial success it is -- tokens are stored and usable -- rather than as a
+    // failed login.
+    if (teslaService.needsRegistration) {
+      console.log('\n✓ Authorized, and the tokens were saved.');
+      console.log(
+        '  Tesla has not yet registered this application, so vehicles cannot be\n' +
+          '  listed and no command will work until it is. That is a separate step\n' +
+          '  from signing in -- setting an Allowed Origin does not do it either.\n'
+      );
+      console.log('  Next: node dist/index.js pair-tesla-key --domain <your-domain>');
+      return true;
+    }
+
     // List vehicles and let user select
     const vehicles = await teslaService.listVehicles();
     if (vehicles.length === 0) {
@@ -189,23 +224,12 @@ async function initializeTesla(): Promise<boolean> {
     
     teslaService.setVin(selectedVin);
 
-    // Persist the selection now rather than gating it behind the secret prompt
-    // below: authenticate() already defaulted the stored VIN to the first vehicle,
-    // and a stale default would later operate on the wrong car. A VIN is not a
-    // secret, so storing it needs no consent.
+    // Persist the selection now rather than gating it behind a prompt: a stale
+    // default VIN would later operate on the wrong car. A VIN is not a secret,
+    // so storing it needs no consent. The client ID/secret were already saved
+    // above, before the OAuth round trip.
     await credentialStore.setTeslaVin(selectedVin);
 
-    const save = await prompt('Store the client ID/secret in the keychain? (y/n): ');
-    if (save.toLowerCase() === 'y') {
-      // Merged write: the access/refresh tokens issued by authenticate() are left
-      // untouched here and only the app credentials are added.
-      await credentialStore.setTeslaCredentials({
-        clientId,
-        clientSecret
-      });
-      console.log('✓ Credentials saved securely');
-    }
-    
     console.log('✓ Connected to Tesla');
     return true;
   } catch (error) {
@@ -722,7 +746,11 @@ program
       console.log(`\nPublic key contents:\n${instructions.publicKeyPem.trim()}`);
     }
 
-    // Step 2: check what Tesla would actually fetch, before the domain is spent.
+    // Step 2: check what Tesla would actually fetch. Registering is not a consumable
+    // -- POST /api/1/partner_accounts can be called repeatedly -- but if Tesla
+    // ends up holding a key whose private half is not on this machine, the
+    // pairing appears to succeed and every later command is rejected, so it is
+    // much cheaper to notice a bad URL here.
     console.log('\n--- Step 2 of 3: verify the published key ---');
     const hosted = await virtualKeys.checkHostedPublicKey(domain);
     if (!hosted.matchesLocalKey) {
@@ -763,18 +791,45 @@ async function registerDomainWithTesla(
   stored: { clientId?: string; clientSecret?: string } | undefined
 ): Promise<boolean> {
   console.log('\n--- Step 3 of 3: register the domain with Tesla ---');
-  if (!stored?.clientId || !stored?.clientSecret) {
-    console.error(
-      'No stored Tesla client ID/secret. This step authenticates the application itself\n' +
-        '(a "partner" token), so run the interactive login first:\n' +
-        '  node dist/index.js get-ev-bsoc'
+
+  // Registration needs a *partner* token, minted from the application's own
+  // client_id/secret (the client_credentials grant), not the user's third-party
+  // token. These are static values from developer.tesla.com.
+  //
+  // Prompting for them here rather than demanding a prior login is what breaks
+  // the deadlock: registration cannot happen until the app is registered, so a
+  // user who has never registered cannot have been able to store these yet.
+  let clientId = stored?.clientId;
+  let clientSecret = stored?.clientSecret;
+  if (!clientId || !clientSecret) {
+    console.log(
+      'This step authenticates the application itself (a "partner" token), which\n' +
+        'needs the Client ID and Secret from developer.tesla.com > your app.'
     );
-    process.exitCode = 1;
-    return false;
+    if (!process.stdin.isTTY) {
+      console.error(
+        '\nCannot prompt for credentials when stdin is not a terminal. Either run this\n' +
+          'command interactively, or store the credentials first with a Tesla command.'
+      );
+      process.exitCode = 1;
+      return false;
+    }
+    clientId = (await prompt('Client ID: ')).trim();
+    clientSecret = await promptPassword('Client Secret: ');
+    if (!clientId || !clientSecret) {
+      console.error('Client ID and Secret are both required to register.');
+      process.exitCode = 1;
+      return false;
+    }
+    const save = await prompt('Store them for next time? (y/n): ');
+    if (save.trim().toLowerCase() === 'y') {
+      await credentialStore.setTeslaCredentials({ clientId, clientSecret });
+      console.log('✓ Client ID/secret saved');
+    }
   }
 
   try {
-    const partnerToken = await virtualKeys.fetchPartnerToken(stored.clientId, stored.clientSecret);
+    const partnerToken = await virtualKeys.fetchPartnerToken(clientId, clientSecret);
     await virtualKeys.registerKey(partnerToken.accessToken, domain);
     console.log(`✓ Registered ${domain}`);
 
