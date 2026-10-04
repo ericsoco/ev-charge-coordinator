@@ -231,7 +231,11 @@ export function describeTeslaError(status: number | undefined, raw: string): str
   // the callback page: ANSI escapes and CR/LF must not survive into either.
   const safeRaw = raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
   const known: Record<string, string> = {
-    invalid_auth_code: 'authorization code already used or expired; run authenticate again',
+    // There is no `authenticate` command; any Tesla command triggers the OAuth
+    // flow, so naming one here would send the user after a command that does
+    // not exist. get-ev-bsoc is the cheapest one that does.
+    invalid_auth_code:
+      'authorization code already used or expired; run get-ev-bsoc to authorize again',
     invalid_redirect_url:
       'redirect URI mismatch; the URI registered with Tesla must equal the one sent here',
     unsupported_grant_type:
@@ -241,10 +245,10 @@ export function describeTeslaError(status: number | undefined, raw: string): str
     // unauthorized_client, so it needs its own advice.
     client_not_found: 'client_id not found; copy it from developer.tesla.com > your app > Details',
     invalid_client: 'client credentials rejected; check the client_id/secret pair',
-    access_denied: 'consent was declined in the browser; run authenticate again and approve',
+    access_denied: 'consent was declined in the browser; run get-ev-bsoc and approve',
     mobile_access_disabled: 'remote access is switched off in the vehicle',
     login_required:
-      'Tesla account password reset, this refresh token already consumed, or access revoked; run authenticate again',
+      'Tesla account password reset, this refresh token already consumed, or access revoked; run get-ev-bsoc to sign in again',
   };
   const statusText = status === undefined ? '' : `HTTP ${status}: `;
   for (const [code, advice] of Object.entries(known)) {

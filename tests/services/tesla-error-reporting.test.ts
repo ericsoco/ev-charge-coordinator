@@ -30,6 +30,65 @@ function serviceFailingWith(status: number, body: unknown): TeslaService {
   return service;
 }
 
+describe('TeslaService.authenticate with an unregistered app', () => {
+  // The deadlock: authenticate() ends by resolving a VIN, which calls
+  // listVehicles(), which 412s until the app is registered -- and registration
+  // needs the client ID/secret that the CLI used to save only AFTER authenticate()
+  // returned. A user who had not registered could therefore never store them.
+  // authenticate() now treats that 412 as a partial success.
+
+  /**
+   * Stub out the two things authenticate() does that are not under test: the
+   * token exchange, and the real HTTP callback server (which would otherwise
+   * bind port 8089 and make these tests depend on machine state).
+   */
+  function withStubbedExchange(service: TeslaService): TeslaService {
+    const internals = service as unknown as {
+      exchangeCode: () => Promise<unknown>;
+      waitForOAuthCallback: () => Promise<string>;
+    };
+    internals.exchangeCode = async () => ({
+      accessToken: 'at',
+      refreshToken: 'rt',
+      expiresAt: Date.now() + 3_600_000,
+    });
+    internals.waitForOAuthCallback = async () => 'auth-code';
+    return service;
+  }
+
+  it('does not throw when listing vehicles is refused with 412', async () => {
+    const service = withStubbedExchange(
+      serviceFailingWith(412, {
+        error: 'Account 2fc1d3f9 must be registered in the current region',
+      })
+    );
+
+    await expect(service.authenticate(() => {})).resolves.toBe(false);
+  });
+
+  it('flags needsRegistration so the caller can direct the user to register', async () => {
+    const service = withStubbedExchange(
+      serviceFailingWith(412, {
+        error: 'Account 2fc1d3f9 must be registered in the current region',
+      })
+    );
+    expect(service.needsRegistration).toBe(false);
+
+    await service.authenticate(() => {});
+
+    expect(service.needsRegistration).toBe(true);
+    expect(service.hasVin).toBe(false);
+  });
+
+  it('still reports a real failure that registration would not fix', async () => {
+    // A 500 is not the registration precondition; it must still propagate.
+    const service = withStubbedExchange(serviceFailingWith(500, { error: 'boom' }));
+
+    await expect(service.authenticate(() => {})).rejects.toThrow(/HTTP 500/);
+    expect(service.needsRegistration).toBe(false);
+  });
+});
+
 describe('TeslaService error reporting', () => {
   it('explains HTTP 412 on a vehicle read and points at the registration step', async () => {
     // The reported bug: after consenting in the browser, get-ev-bsoc failed with

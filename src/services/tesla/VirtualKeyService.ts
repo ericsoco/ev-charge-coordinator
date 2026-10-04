@@ -95,7 +95,8 @@ export function createVirtualKeyPair(): VirtualKeyPair {
  * Validate a pair before it is ever sent to Tesla: both halves must parse, the
  * curve must be prime256v1, and the public key must belong to the private key.
  * A mismatch registered with Tesla fails much later as an unexplained pairing
- * error, with the domain already burned.
+ * error: the pairing tap succeeds and then every command is rejected, because the
+ * signature is made with a private key Tesla does not hold.
  */
 export function assertVirtualKeyPair(pair: VirtualKeyPair): void {
   if (!pair?.privateKeyPem || !pair?.publicKeyPem) {
@@ -422,8 +423,8 @@ export class VirtualKeyService {
    *
    * It exists to catch the failure that costs the most time: a URL that returns
    * 200 with an HTML error page, a stale key from a previous machine, or a
-   * redirect. All of those look fine until the pairing tap in front of the car
-   * is already spent, and registration requires the key to be hosted.
+   * redirect. All of those look fine until the pairing tap in front of the car,
+   * which cannot be undone from the command line.
    */
   async checkHostedPublicKey(domain: string): Promise<HostedKeyCheck> {
     if (!this.http) {
