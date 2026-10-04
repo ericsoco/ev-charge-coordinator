@@ -63,6 +63,35 @@ interface TeslaVehicleData {
   charge_state: TeslaChargeState;
 }
 
+/** Why consent is or is not present. See TeslaService.checkConsent. */
+export type ConsentReason = 'ok' | 'not-signed-in' | 'not-authorized' | 'not-registered' | 'unknown';
+
+export interface ConsentState {
+  granted: boolean;
+  reason: ConsentReason;
+  /** One line explaining the result, suitable for printing verbatim. */
+  detail: string;
+}
+
+/**
+ * Read an HTTP status out of an error thrown anywhere in this service.
+ *
+ * The response interceptor wraps axios failures in a plain Error, so the status
+ * is either on that error's `cause` (the axios error) or, when the caller
+ * called checkConsent directly, on the axios error itself.
+ */
+function readStatusFrom(error: unknown): number | undefined {
+  const record = error as { status?: unknown; response?: { status?: unknown }; cause?: unknown };
+  if (typeof record?.status === 'number') return record.status;
+  if (typeof record?.response?.status === 'number') return record.response.status;
+  const cause = record?.cause as
+    | { status?: unknown; response?: { status?: unknown } }
+    | undefined;
+  if (typeof cause?.status === 'number') return cause.status;
+  if (typeof cause?.response?.status === 'number') return cause.response.status;
+  return undefined;
+}
+
 export interface TeslaServiceConfig {
   /** Tesla deployment region; selects the API base URL and token audience. */
   region?: string;
@@ -521,6 +550,70 @@ export class TeslaService implements EVService {
 
   setVin(vin: string): void {
     this.vin = vin;
+  }
+
+  /**
+   * Whether the user has granted this application access to their Tesla account.
+   *
+   * This is a separate gate from registering the application with Tesla
+   * (POST /api/1/partner_accounts) and from the virtual key itself. Pairing via
+   * the tesla.com/_ak/ deep link requires that the user has already authorized
+   * the application and granted the vehicle_device_data, vehicle_cmds or
+   * vehicle_location scopes -- Tesla's Virtual Key developer guide states this
+   * explicitly -- and Tesla's own error when it is missing is "Adding a virtual
+   * key for <domain> is forbidden because you have not granted <domain> access to
+   * your account".
+   *
+   * A cheap GET /api/1/vehicles distinguishes the cases by status code:
+   *   200 -> consent present (and registered, since 412 would otherwise apply)
+   *   401 -> tokens rejected: no consent, revoked, or a stale refresh token
+   *   412 -> consent may be fine, but the app is not registered in this region
+   *
+   * Anything else (DNS failure, TLS error) is reported as unknown rather than
+   * being folded into "no consent", so a network problem is never mistaken for
+   * a permissions problem.
+   */
+  async checkConsent(): Promise<ConsentState> {
+    if (!this.authenticated || !this.tokens?.accessToken) {
+      return {
+        granted: false,
+        reason: 'not-signed-in',
+        detail: 'No stored Tesla tokens; the user has never authorized this app.',
+      };
+    }
+    try {
+      await this.client.get('/api/1/vehicles');
+      return {
+        granted: true,
+        reason: 'ok',
+        detail: 'The user has granted this app access to their account.',
+      };
+    } catch (error) {
+      const status = readStatusFrom(error);
+      if (status === 401) {
+        return {
+          granted: false,
+          reason: 'not-authorized',
+          detail:
+            'The stored token was rejected (401). Consent is missing, revoked, or the ' +
+            'refresh token is stale; re-run a Tesla command and approve in the browser.',
+        };
+      }
+      if (status === 412) {
+        return {
+          granted: false,
+          reason: 'not-registered',
+          detail:
+            'The app is not registered in this region yet, so consent cannot be ' +
+            'confirmed. Complete registration first.',
+        };
+      }
+      return {
+        granted: false,
+        reason: 'unknown',
+        detail: `Could not determine consent: ${(error as Error)?.message ?? error}`,
+      };
+    }
   }
 
   async wakeUp(): Promise<void> {
