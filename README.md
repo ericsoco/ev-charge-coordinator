@@ -68,6 +68,9 @@ npm run build
 2. Create a new application and note the Client ID and Client Secret
 3. Register the origin URL `http://localhost:8089/`, and redirect URI `http://localhost:8089/callback`
    (must match exactly, or the token exchange fails with `invalid_redirect_url`).
+   **Also add your key's domain** (e.g. `https://your-domain.com`) as an origin —
+   Tesla requires the registered domain to match the root domain of your app's
+   `allowed_origins`, and pairing fails without it.
 4. Select the vehicle scopes on developer.tesla.com:
      * Vehicle Information (`vehicle_device_data`)
      * Vehicle Commands (`vehicle_cmds`)
@@ -87,6 +90,16 @@ npm run build
 8. Run `node dist/index.js pair-tesla-key --domain your-domain.com` to generate the
    key pair, verify the published key, register the domain, and print the pairing
    link (see [Virtual key pairing](#virtual-key-pairing)).
+9. Sign in once so the app is granted access to your account:
+   ```bash
+   node dist/index.js get-ev-bsoc
+   ```
+   This is a **separate requirement** from step 8 — Tesla's pairing flow only adds a
+   key if you have already authorized the app. `pair-tesla-key` checks for it and
+   tells you if it is missing, rather than letting you discover it as an error in
+   the Tesla app.
+10. Re-run `node dist/index.js pair-tesla-key --domain your-domain.com` and open the
+    pairing link on your phone.
 
 ### Virtual key pairing
 
@@ -127,6 +140,27 @@ https://tesla.com/_ak/your-domain.com?vin=<your-vin>
 Open it on a device signed in to the Tesla app that owns the car, and approve the
 key when the app prompts. Re-running the command is safe: it does not regenerate
 the key.
+
+**Three separate gates, in this order.** Each is checked by Tesla independently, and
+the second and third are easy to mistake for the first:
+
+1. **Registration** — `POST /api/1/partner_accounts` enrolls your *key*. This command.
+2. **Consent** — you must have authorized the app for your *account*. Tesla's developer
+   guide states the pairing flow requires the user to have already granted
+   `vehicle_device_data`, `vehicle_cmds` or `vehicle_location`. Signing in (`get-ev-bsoc`)
+   does this; registering does not.
+3. **Pairing** — the `_ak/` tap in the app, which only works once 1 and 2 are done.
+
+If you tap the link before consenting, the Tesla app displays an error dialog:
+
+```
+Unable to Grant Third-Party Access
+Adding a virtual key for "<domain>" is forbidden because you have not granted
+"<domain>" access to your account
+```
+
+`pair-tesla-key` checks gate 2 before printing the link, and `--check-only` reports the
+state of all three at once.
 
 Options:
 

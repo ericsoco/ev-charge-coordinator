@@ -10,6 +10,7 @@ import { Command } from 'commander';
 import axios from 'axios';
 import { createInterface } from 'node:readline';
 import { FranklinWHService, TeslaService } from './services/index.js';
+import type { ConsentState } from './services/TeslaService.js';
 import {
   normalizeDomain,
   VirtualKeyService,
@@ -771,12 +772,12 @@ program
 
     if (options.skipRegistration) {
       console.log('\nSkipping Tesla registration (--skip-registration).');
-      printPairingLink(virtualKeys, domain, vin);
+      await printPairingLinkIfReady(virtualKeys, domain, vin);
       return;
     }
 
     await registerDomainWithTesla(virtualKeys, domain, stored);
-    printPairingLink(virtualKeys, domain, vin);
+    await printPairingLinkIfReady(virtualKeys, domain, vin);
   });
 
 /**
@@ -867,8 +868,76 @@ async function registerDomainWithTesla(
   }
 }
 
-function printPairingLink(virtualKeys: VirtualKeyService, domain: string, vin?: string): void {
+/**
+ * Whether the user has authorized this app for their Tesla account.
+ *
+ * Pairing via tesla.com/_ak/ fails with "you have not granted <domain> access to
+ * your account" unless consent is already in place, and that is only discoverable
+ * by tapping through to the error in the Tesla app. Checked here so the failure is
+ * reported before the link is printed.
+ *
+ * Returns null when consent cannot be determined (e.g. offline), so a network
+ * problem never blocks a pairing the user could otherwise complete.
+ */
+async function checkUserConsent(): Promise<ConsentState | null> {
+  const stored = await credentialStore.getTeslaCredentials();
+  if (!stored?.accessToken || !stored?.refreshToken) {
+    return {
+      granted: false,
+      reason: 'not-signed-in',
+      detail: 'No stored Tesla tokens; the user has never authorized this app.',
+    };
+  }
+  const service = new TeslaService({ region: stored.region });
+  await service.initialize({
+    clientId: stored.clientId ?? '',
+    clientSecret: stored.clientSecret ?? '',
+    accessToken: stored.accessToken,
+    refreshToken: stored.refreshToken,
+    expiresAt: stored.expiresAt,
+    vin: stored.vin,
+  });
+  const state = await service.checkConsent();
+  // Not-signed-in and not-authorized are actionable; anything else (offline,
+  // 412 before registration) is not a reason to withhold the pairing link.
+  return state.reason === 'unknown' ? null : state;
+}
+
+/**
+ * Print the pairing link, but only after consent is confirmed.
+ *
+ * Tesla's Virtual Key developer guide requires the user to have authorized the
+ * application before the _ak/ flow will add a key, and the failure appears
+ * several taps deep in the mobile app.
+ */
+async function printPairingLinkIfReady(
+  virtualKeys: VirtualKeyService,
+  domain: string,
+  vin?: string
+): Promise<void> {
   console.log('\n--- Pair the vehicle ---');
+
+  const consent = await checkUserConsent();
+  if (consent && !consent.granted) {
+    console.error(`\n✗ ${consent.detail}`);
+    if (consent.reason === 'not-signed-in' || consent.reason === 'not-authorized') {
+      console.error(
+        '\nThe pairing link only works after you authorize this app. Sign in first:\n' +
+          '  node dist/index.js get-ev-bsoc\n' +
+          '  (approve in the browser, then re-run pair-tesla-key)'
+      );
+    } else {
+      console.error(
+        '  Finish the previous step, then re-run this command.'
+      );
+    }
+    process.exitCode = 1;
+    return;
+  }
+  if (consent) {
+    console.log('✓ This app has been granted access to your Tesla account.');
+  }
+
   console.log('\nOpen this link on a device signed in to the Tesla app that owns the car:');
   console.log(`\n  ${virtualKeys.buildPairingUrl(domain, vin)}\n`);
   console.log('Approve the key in the app when it prompts. Pairing is a manual,');
@@ -911,24 +980,43 @@ async function reportKeyState(
   if (!options.verifyWithTesla) return;
   if (!options.credentials?.clientId || !options.credentials?.clientSecret) {
     console.log('Tesla registration: skipped (no stored client ID/secret)');
-    return;
-  }
-  try {
-    const token = await virtualKeys.fetchPartnerToken(
-      options.credentials.clientId,
-      options.credentials.clientSecret
-    );
-    const result = await virtualKeys.verifyRegistration(token.accessToken, domain);
-    if (!result.registered) {
-      console.log('Tesla registration: no key registered for this domain');
-    } else if (result.matchesLocalKey) {
-      console.log('Tesla registration: OK Tesla holds the matching public key');
-    } else {
-      console.log('Tesla registration: PROBLEM Tesla holds a DIFFERENT public key for this domain');
+  } else {
+    try {
+      const token = await virtualKeys.fetchPartnerToken(
+        options.credentials.clientId,
+        options.credentials.clientSecret
+      );
+      const result = await virtualKeys.verifyRegistration(token.accessToken, domain);
+      if (!result.registered) {
+        console.log('Tesla registration: no key registered for this domain');
+      } else if (result.matchesLocalKey) {
+        console.log('Tesla registration: OK Tesla holds the matching public key');
+      } else {
+        console.log('Tesla registration: PROBLEM Tesla holds a DIFFERENT public key for this domain');
+      }
+    } catch (error) {
+      console.log(
+        `Tesla registration: could not be checked (${error instanceof Error ? error.message : error})`
+      );
     }
-  } catch (error) {
-    console.log(`Tesla registration: could not be checked (${error instanceof Error ? error.message : error})`);
   }
+
+  // Consent is the third and last gate before pairing, and the only one the
+  // user cannot check by looking at a file. Report it here so one command
+  // answers "what is still outstanding" rather than requiring three.
+  const consent = await checkUserConsent();
+  if (consent === null) {
+    console.log('Account access: unknown (could not reach Tesla)');
+  } else if (consent.granted) {
+    console.log('Account access: OK the user has granted this app access to their account');
+  } else if (consent.reason === 'not-signed-in') {
+    console.log('Account access: MISSING never authorized (run get-ev-bsoc and approve)');
+  } else if (consent.reason === 'not-authorized') {
+    console.log('Account access: MISSING token rejected; re-authorize (run get-ev-bsoc)');
+  } else {
+    console.log(`Account access: not confirmed (${consent.reason}) - ${consent.detail}`);
+  }
+
 }
 
 program.parse();

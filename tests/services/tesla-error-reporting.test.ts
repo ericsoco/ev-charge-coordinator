@@ -12,21 +12,65 @@ import axios, { AxiosError, type AxiosInstance } from 'axios';
 import { describe, expect, it } from 'vitest';
 import { TeslaService } from '../../src/services/TeslaService.js';
 
-/** Build a service whose HTTP calls fail with the given status and body. */
+/**
+ * A 401 makes the response interceptor attempt a real refresh-token exchange,
+ * which uses the module-level axios instance rather than the stubbed adapter and
+ * would otherwise reach Tesla's live endpoint from the test suite (and take
+ * seconds to fail).
+ *
+ * The private method is stubbed instead of redirecting the token endpoint, since
+ * TESLA_TOKEN_URL is read once at module load and cannot be redirected from
+ * inside a test without reordering every import.
+ */
+async function withoutRefresh(service: TeslaService): Promise<TeslaService> {
+  (service as unknown as { refreshTokens: () => Promise<void> }).refreshTokens = async () => {
+    throw new Error('refresh stubbed for tests');
+  };
+  return service;
+}
+
+/** Silence the interceptor's stderr report when a test expects a refresh failure. */
+function silenceConsoleError(): () => void {
+  const original = console.error;
+  console.error = () => undefined;
+  return () => {
+    console.error = original;
+  };
+}
+
+/**
+ * Build a service whose HTTP calls answer with the given status and body.
+ * A status below 400 resolves; anything higher throws an AxiosError carrying that
+ * response, so the real interceptor chain sees exactly what Tesla would send.
+ */
 function serviceFailingWith(status: number, body: unknown): TeslaService {
   const service = new TeslaService({ region: 'na' });
   // The axios client is private, and the adapter is the only seam that can drive
   // the real interceptor chain without a socket.
   const client = (service as unknown as { client: AxiosInstance }).client;
   client.defaults.adapter = async (config) => {
+    const response = { status, data: body, statusText: '', headers: {}, config };
+    if (status < 400) return response;
     throw new AxiosError(
       `Request failed with status code ${status}`,
       String(status),
       config,
       undefined,
-      { status, data: body, statusText: '', headers: {}, config }
+      response
     );
   };
+  return service;
+}
+
+/** Initialize a service with stored-style tokens, as a returning user would. */
+async function withTokens(service: TeslaService): Promise<TeslaService> {
+  await service.initialize({
+    clientId: 'cid',
+    clientSecret: 'secret',
+    accessToken: 'at',
+    refreshToken: 'rt',
+    expiresAt: Date.now() + 3_600_000,
+  });
   return service;
 }
 
@@ -86,6 +130,75 @@ describe('TeslaService.authenticate with an unregistered app', () => {
 
     await expect(service.authenticate(() => {})).rejects.toThrow(/HTTP 500/);
     expect(service.needsRegistration).toBe(false);
+  });
+});
+
+describe('TeslaService.checkConsent', () => {
+  // Pairing via tesla.com/_ak/ fails with "you have not granted <domain> access
+  // to your account" when consent is missing, and that is only discoverable by
+  // tapping through to the error in the Tesla app. These pin the branches that
+  // let the CLI report it beforehand.
+
+  it('reports granted when the vehicles list succeeds', async () => {
+    const service = serviceFailingWith(200, { response: [] });
+    await withTokens(service);
+
+    const consent = await service.checkConsent();
+    expect(consent.granted).toBe(true);
+    expect(consent.reason).toBe('ok');
+  });
+
+  it('reports not-signed-in when there are no stored tokens', async () => {
+    // A fresh install has never authorized anything.
+    const service = new TeslaService({ region: 'na' });
+    const consent = await service.checkConsent();
+
+    expect(consent.granted).toBe(false);
+    expect(consent.reason).toBe('not-signed-in');
+  });
+
+  it('reports not-authorized on a 401, which is the real pairing blocker', async () => {
+    const restore = silenceConsoleError();
+    try {
+      const service = await withoutRefresh(serviceFailingWith(401, { error: 'login_required' }));
+      await withTokens(service);
+
+      const consent = await service.checkConsent();
+      expect(consent.granted).toBe(false);
+      expect(consent.reason).toBe('not-authorized');
+      expect(consent.detail).toMatch(/re-authorize|Re-run|Tesla command/i);
+    } finally {
+      restore();
+    }
+  });
+
+  it('distinguishes 412 not-registered from a permissions problem', async () => {
+    // Both are "granted: false", but they are different problems: 412 means the
+    // app is not enrolled, so consent may well be fine.
+    const service = serviceFailingWith(412, { error: 'must be registered' });
+    await withTokens(service);
+
+    const consent = await service.checkConsent();
+    expect(consent.granted).toBe(false);
+    expect(consent.reason).toBe('not-registered');
+  });
+
+  it('does not claim "no consent" when the failure is just the network', async () => {
+    // A transport failure must not be mistaken for a permissions problem, since
+    // the CLI blocks printing the pairing link on a definitive "not granted".
+    const service = serviceFailingWith(503, { error: 'unavailable' });
+    await withTokens(service);
+
+    const consent = await service.checkConsent();
+    expect(consent.reason).toBe('unknown');
+  });
+
+  it('never throws, whatever Tesla answers', async () => {
+    for (const status of [400, 403, 404, 429, 500, 502]) {
+      const service = serviceFailingWith(status, { error: 'x' });
+      await withTokens(service);
+      await expect(service.checkConsent()).resolves.toHaveProperty('reason');
+    }
   });
 });
 
