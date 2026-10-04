@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 /**
  * EV Charge Coordinator CLI
- * 
+ *
  * Coordinate EV charging with home solar battery storage.
  * Supports Tesla vehicles and FranklinWH battery systems.
+ *
+ * This file is wiring only: argument parsing, the Commander definitions, and the
+ * REPL dispatch. Each command's behaviour lives once in src/commands/, because
+ * the logic used to exist twice -- here and in the REPL switch -- and the two
+ * copies had already drifted.
  */
 
 import { Command } from 'commander';
@@ -19,10 +24,26 @@ import {
 import { resolveRegion } from './services/tesla/endpoints.js';
 import { credentialStore } from './utils/credentials.js';
 
+import {
+  MAX_EV_CHARGE_LIMIT,
+  MIN_EV_CHARGE_LIMIT,
+  type CommandContext,
+  type CommandResult,
+} from './commands/context.js';
+import {
+  chargeFromBattery,
+  getBatterySoc,
+  getEvBatterySoc,
+  setBatteryBuffer,
+  setEvChargeLimit,
+  showStatus,
+  startEvCharging,
+  stopEvCharging,
+} from './commands/vehicle.js';
+
 const program = new Command();
 let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
-let isRunning = false;
 
 function createReadline() {
   return createInterface({
@@ -281,7 +302,6 @@ program
       return;
     }
     
-    isRunning = true;
     console.log('\n✓ Services started successfully');
     console.log('Type "help" for available commands or "exit" to quit.\n');
     
@@ -308,150 +328,63 @@ Available commands:
 `);
           break;
           
-        case 'status':
-          console.log('\n--- System Status ---');
-          console.log(`FranklinWH: ${franklinService?.isAuthenticated() ? '✓ Connected' : '✗ Not connected'}`);
-          console.log(`Tesla: ${teslaService?.isAuthenticated() ? '✓ Connected' : '✗ Not connected'}`);
-          const buffer = await credentialStore.getBatteryBuffer();
-          console.log(`Battery Buffer: ${buffer}%`);
-          console.log('');
-          break;
-          
         case 'authenticate':
-          // Routed through the same helper the standalone command uses, so the
-          // REPL and `ev-charge-coordinator authenticate` cannot drift apart.
+          // Same helper the standalone command uses, so the REPL and
+          // `ev-charge-coordinator authenticate` cannot drift apart.
           await runAuthenticate();
           break;
 
+        case 'status':
+          await showStatus(currentContext());
+          break;
+
+        // Everything below dispatches to the same handler the one-shot CLI path
+        // uses. These cases used to carry their own copies of the logic and had
+        // already drifted: the REPL printed 'Setting EV limit to' and offered to
+        // start charging, the one-shot path did neither.
         case 'get-ev-bsoc':
-          if (!teslaService?.isAuthenticated()) {
-            console.log('Tesla not connected');
-            break;
-          }
-          try {
-            console.log('Getting EV battery state of charge...');
-            const soc = await teslaService.getStateOfCharge();
-            console.log(`EV Battery SoC: ${soc}%`);
-          } catch (error) {
-            console.error('Error:', error instanceof Error ? error.message : error);
-          }
+          await getEvBatterySoc(currentContext());
           break;
-          
+
         case 'get-battery-soc':
-          if (!franklinService?.isAuthenticated()) {
-            console.log('FranklinWH not connected');
+          await getBatterySoc(currentContext());
+          break;
+
+        case 'set-ev-charge-limit': {
+          const limitStr = await prompt('Enter charge limit (50-100%): ');
+          const limit = parseInt(limitStr);
+          if (isNaN(limit)) {
+            console.log('Invalid charge limit. Must be a number between 50 and 100.');
             break;
           }
-          try {
-            console.log('Getting solar battery state of charge...');
-            const soc = await franklinService.getStateOfCharge();
-            console.log(`Solar Battery SoC: ${soc}%`);
-          } catch (error) {
-            console.error('Error:', error instanceof Error ? error.message : error);
-          }
+          await setEvChargeLimit(currentContext(), limit);
           break;
-          
-        case 'set-ev-charge-limit':
-          if (!teslaService?.isAuthenticated()) {
-            console.log('Tesla not connected');
-            break;
-          }
-          try {
-            const limitStr = await prompt('Enter charge limit (50-100%): ');
-            const limit = parseInt(limitStr);
-            if (isNaN(limit) || limit < 50 || limit > 100) {
-              console.log('Invalid charge limit. Must be between 50 and 100.');
-              break;
-            }
-            console.log('Setting EV charge limit...');
-            await teslaService.setChargeLimit(limit);
-            console.log(`✓ EV charge limit set to ${limit}%`);
-          } catch (error) {
-            console.error('Error:', error instanceof Error ? error.message : error);
-          }
-          break;
-          
+        }
+
         case 'start-ev-charging':
-          if (!teslaService?.isAuthenticated()) {
-            console.log('Tesla not connected');
-            break;
-          }
-          try {
-            console.log('Starting EV charging...');
-            await teslaService.startCharging();
-            console.log('✓ EV charging started');
-          } catch (error) {
-            console.error('Error:', error instanceof Error ? error.message : error);
-          }
+          await startEvCharging(currentContext());
           break;
-          
+
         case 'stop-ev-charging':
-          if (!teslaService?.isAuthenticated()) {
-            console.log('Tesla not connected');
-            break;
-          }
-          try {
-            console.log('Stopping EV charging...');
-            await teslaService.stopCharging();
-            console.log('✓ EV charging stopped');
-          } catch (error) {
-            console.error('Error:', error instanceof Error ? error.message : error);
-          }
+          await stopEvCharging(currentContext());
           break;
-          
+
         case 'charge-from-battery':
-          if (!franklinService?.isAuthenticated() || !teslaService?.isAuthenticated()) {
-            console.log('Both FranklinWH and Tesla must be connected');
+          // offerToStart is true here: the interactive path asks whether to
+          // begin charging once the limit is set. The one-shot command does not.
+          await chargeFromBattery(currentContext(), { offerToStart: true });
+          break;
+
+        case 'set-battery-buffer': {
+          const bufferStr = await prompt('Enter battery buffer percentage (0-100): ');
+          const buffer = parseInt(bufferStr);
+          if (isNaN(buffer)) {
+            console.log('Invalid buffer. Must be a number between 0 and 100.');
             break;
           }
-          try {
-            console.log('Getting solar battery state...');
-            const batterySoc = await franklinService.getStateOfCharge();
-            const buffer = await credentialStore.getBatteryBuffer();
-            
-            // Calculate available charge
-            const availableCharge = Math.max(0, batterySoc - buffer);
-            
-            // EV charge limit must be at least 50%
-            const evLimit = Math.max(50, Math.min(100, availableCharge));
-            
-            console.log(`Solar Battery: ${batterySoc}%`);
-            console.log(`Buffer: ${buffer}%`);
-            console.log(`Available for EV: ${availableCharge}%`);
-            console.log(`Setting EV limit to: ${evLimit}%`);
-            
-            if (evLimit <= 50) {
-              console.log('Not enough charge available (minimum EV limit is 50%)');
-              break;
-            }
-            
-            await teslaService.setChargeLimit(evLimit);
-            console.log(`✓ EV charge limit set to ${evLimit}%`);
-            
-            const startCharging = await prompt('Start charging now? (y/n): ');
-            if (startCharging.toLowerCase() === 'y') {
-              await teslaService.startCharging();
-              console.log('✓ EV charging started');
-            }
-          } catch (error) {
-            console.error('Error:', error instanceof Error ? error.message : error);
-          }
+          await setBatteryBuffer(currentContext(), buffer);
           break;
-          
-        case 'set-battery-buffer':
-          try {
-            const bufferStr = await prompt('Enter battery buffer percentage (0-100): ');
-            const buffer = parseInt(bufferStr);
-            if (isNaN(buffer) || buffer < 0 || buffer > 100) {
-              console.log('Invalid buffer. Must be between 0 and 100.');
-              break;
-            }
-            await credentialStore.setBatteryBuffer(buffer);
-            console.log(`✓ Battery buffer set to ${buffer}%`);
-          } catch (error) {
-            console.error('Error:', error instanceof Error ? error.message : error);
-          }
-          break;
+        }
           
         case 'exit':
         case 'quit':
@@ -475,7 +408,6 @@ Available commands:
     
     rl.on('close', async () => {
       console.log('\nShutting down...');
-      isRunning = false;
       
       if (franklinService) {
         await franklinService.disconnect();
@@ -505,6 +437,32 @@ program
     console.log('✓ Services stopped');
   });
 
+/**
+ * Build a CommandContext from the module-level services.
+ *
+ * The services stay module-level because the REPL owns their lifecycle, but the
+ * handlers only ever see this object, so they are testable without them.
+ */
+function currentContext(): CommandContext {
+  return { franklin: franklinService, tesla: teslaService, store: credentialStore, ask: prompt };
+}
+
+/**
+ * Run a handler and set the process exit code on failure.
+ *
+ * Every one-shot command funnels through here so failures always exit non-zero.
+ * The REPL calls the handlers directly instead, because a failed command there
+ * must not kill an interactive session.
+ */
+async function runCommand(
+  run: (ctx: CommandContext) => Promise<CommandResult>
+): Promise<void> {
+  const result = await run(currentContext());
+  if (!result.ok) {
+    process.exitCode = 1;
+  }
+}
+
 program
   .command('get-ev-bsoc')
   .description('Get the current battery state of charge from the EV')
@@ -512,14 +470,7 @@ program
     if (!(await initializeTesla())) {
       process.exit(1);
     }
-    
-    try {
-      const soc = await teslaService!.getStateOfCharge();
-      console.log(`EV Battery SoC: ${soc}%`);
-    } catch (error) {
-      console.error('Error:', error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
+    await runCommand(getEvBatterySoc);
   });
 
 program
@@ -529,14 +480,11 @@ program
     if (!(await initializeFranklin())) {
       process.exit(1);
     }
-    
     try {
-      const soc = await franklinService!.getStateOfCharge();
-      console.log(`Solar Battery SoC: ${soc}%`);
-    } catch (error) {
-      console.error('Error:', error instanceof Error ? error.message : error);
-      process.exit(1);
+      await runCommand(getBatterySoc);
     } finally {
+      // Phase 2 fixes the teardown bug: this stops a proxy this command started,
+      // but today it also stops one an earlier `start` owns.
       await franklinService!.disconnect();
     }
   });
@@ -547,22 +495,15 @@ program
   .argument('<percent>', 'Charge limit percentage (50-100)')
   .action(async (percent: string) => {
     const limit = parseInt(percent);
-    if (isNaN(limit) || limit < 50 || limit > 100) {
-      console.error('Charge limit must be between 50 and 100');
+    if (isNaN(limit) || limit < MIN_EV_CHARGE_LIMIT || limit > MAX_EV_CHARGE_LIMIT) {
+      console.error(`Charge limit must be between ${MIN_EV_CHARGE_LIMIT} and ${MAX_EV_CHARGE_LIMIT}`);
       process.exit(1);
     }
-    
+
     if (!(await initializeTesla())) {
       process.exit(1);
     }
-    
-    try {
-      await teslaService!.setChargeLimit(limit);
-      console.log(`✓ EV charge limit set to ${limit}%`);
-    } catch (error) {
-      console.error('Error:', error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
+    await runCommand((ctx) => setEvChargeLimit(ctx, limit));
   });
 
 program
@@ -572,14 +513,7 @@ program
     if (!(await initializeTesla())) {
       process.exit(1);
     }
-    
-    try {
-      await teslaService!.startCharging();
-      console.log('✓ EV charging started');
-    } catch (error) {
-      console.error('Error:', error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
+    await runCommand(startEvCharging);
   });
 
 program
@@ -589,14 +523,7 @@ program
     if (!(await initializeTesla())) {
       process.exit(1);
     }
-    
-    try {
-      await teslaService!.stopCharging();
-      console.log('✓ EV charging stopped');
-    } catch (error) {
-      console.error('Error:', error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
+    await runCommand(stopEvCharging);
   });
 
 program
@@ -609,23 +536,10 @@ program
     }
     
     try {
-      const batterySoc = await franklinService!.getStateOfCharge();
-      const buffer = await credentialStore.getBatteryBuffer();
-      
-      const availableCharge = Math.max(0, batterySoc - buffer);
-      const evLimit = Math.max(50, Math.min(100, availableCharge));
-      
-      console.log(`Solar Battery: ${batterySoc}%`);
-      console.log(`Buffer: ${buffer}%`);
-      console.log(`Available for EV: ${availableCharge}%`);
-      
-      if (evLimit <= 50) {
-        console.log('Not enough charge available (minimum EV limit is 50%)');
-        process.exit(0);
-      }
-      
-      await teslaService!.setChargeLimit(evLimit);
-      console.log(`✓ EV charge limit set to ${evLimit}%`);
+      // offerToStart is false here, preserving the one-shot behaviour: it sets
+      // the limit and stops. The REPL passes true. That difference is now
+      // explicit rather than an accident of which copy you happen to read.
+      await runCommand((ctx) => chargeFromBattery(ctx, { offerToStart: false }));
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : error);
       process.exit(1);
@@ -644,9 +558,8 @@ program
       console.error('Buffer must be between 0 and 100');
       process.exit(1);
     }
-    
-    await credentialStore.setBatteryBuffer(buffer);
-    console.log(`✓ Battery buffer set to ${buffer}%`);
+
+    await runCommand((ctx) => setBatteryBuffer(ctx, buffer));
   });
 
 /**

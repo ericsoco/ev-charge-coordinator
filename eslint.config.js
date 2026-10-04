@@ -48,15 +48,4 @@ export default tseslint.config(
       'no-empty': ['error', { allowEmptyCatch: true }],
     },
   },
-  {
-    files: ['src/index.ts'],
-    rules: {
-      // PHASE-0 DEBT - do not silently fix. `isRunning` (index.ts:17) is assigned at
-      // :230 and :417 but never read: there is no run loop, which is the mechanical
-      // reason `exit` cannot stop the REPL. Phase 0 promised zero behavior change, so
-      // the dead variable stays. Phase 2 rewrites the start/exit lifecycle and must
-      // remove this override so the rule applies again.
-      '@typescript-eslint/no-unused-vars': 'warn',
-    },
-  },
 );
