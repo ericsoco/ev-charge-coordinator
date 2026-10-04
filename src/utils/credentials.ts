@@ -167,43 +167,73 @@ async function saveCredentialsFile(credentials: StoredCredentials): Promise<void
 export class CredentialStore {
   private credentials: StoredCredentials = {};
   private initialized = false;
+  /**
+   * Which backend this instance resolved to on first load.
+   *
+   * Pinning this is the fix for a real bug: save() and initialize() each used to
+   * try the keychain and silently fall back to the file, independently. If the
+   * keychain ever held a different payload from the file -- which it did, after
+   * a test wrote to it -- a load could come from the keychain while a save went
+   * to the file. The two then disagreed forever, and because the keychain wins on
+   * read, writes became invisible and the CLI re-prompted for credentials on
+   * every run. Resolving once, then using that backend for the life of the
+   * instance, makes the two halves agree by construction.
+   *
+   * null means "not resolved yet"; once initialize() runs it is decided.
+   */
+  private backend: 'keychain' | 'file' | null = null;
+
+  /** Backend in use, for diagnostics and for tests that assert on it. */
+  get storageBackend(): 'keychain' | 'file' | null {
+    return this.backend;
+  }
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    
+
     const kt = await getKeytar();
-    
+
     if (kt) {
-      // Try to load from system keychain
       try {
         const stored = await kt.getPassword(SERVICE_NAME, 'credentials');
         if (stored) {
           this.credentials = JSON.parse(stored);
+          this.backend = 'keychain';
           this.initialized = true;
           return;
         }
-      } catch {
-        // Fall through to file-based storage
+      } catch (error) {
+        // A corrupt keychain entry used to fall through to the file silently,
+        // which is precisely how the two backends drifted apart. Surfaced as a
+        // warning because the user would otherwise see credentials "forget"
+        // themselves with no explanation.
+        console.warn(
+          `Warning: could not read the ${SERVICE_NAME} keychain entry ` +
+            `(${error instanceof Error ? error.message : String(error)}); ` +
+            'falling back to the encrypted file.'
+        );
       }
     }
-    
-    // Fall back to encrypted file storage
+
     this.credentials = await loadCredentialsFile();
+    this.backend = 'file';
     this.initialized = true;
   }
 
   private async save(): Promise<void> {
-    const kt = await getKeytar();
-    
-    if (kt) {
-      try {
+    // Reuse the backend chosen at load time rather than re-deciding. A store
+    // that loaded from the file must save to the file, even if the keychain
+    // becomes reachable later in the same process.
+    if (this.backend === 'keychain') {
+      const kt = await getKeytar();
+      if (kt) {
         await kt.setPassword(SERVICE_NAME, 'credentials', JSON.stringify(this.credentials));
         return;
-      } catch {
-        // Fall through to file-based storage
       }
+      // The keychain went away after we resolved to it. Write the file rather
+      // than dropping the write on the floor, and switch for subsequent calls.
+      this.backend = 'file';
     }
-    
     await saveCredentialsFile(this.credentials);
   }
 

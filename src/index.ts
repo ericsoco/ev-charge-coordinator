@@ -114,7 +114,15 @@ async function initializeTesla(): Promise<boolean> {
 
   const stored = await credentialStore.getTeslaCredentials();
   
-  if (stored?.accessToken && stored?.refreshToken && stored.clientId && stored.clientSecret) {
+  // A stored refresh token can be used to refresh the session without any
+  // interaction, so the only genuinely missing piece may be the client ID/secret.
+  // Re-prompting for all four used to be what made a half-populated credential
+  // record look like "not signed in" on every single run.
+  const storedClientId = stored?.clientId;
+  const storedClientSecret = stored?.clientSecret;
+  const needsClientCredentials = !storedClientId || !storedClientSecret;
+
+  if (stored?.accessToken && stored?.refreshToken && storedClientId && storedClientSecret) {
     console.log('Using stored Tesla credentials...');
     teslaService = new TeslaService({
       region: stored.region,
@@ -122,8 +130,8 @@ async function initializeTesla(): Promise<boolean> {
     });
     try {
       await teslaService.initialize({
-        clientId: stored.clientId,
-        clientSecret: stored.clientSecret,
+        clientId: storedClientId,
+        clientSecret: storedClientSecret,
         accessToken: stored.accessToken,
         refreshToken: stored.refreshToken,
         expiresAt: stored.expiresAt,
@@ -144,10 +152,16 @@ async function initializeTesla(): Promise<boolean> {
 
   console.log('\nTesla Fleet API authentication required.');
   console.log('You need a Tesla Developer account with a registered application.');
-  console.log('Visit https://developer.tesla.com to create one.\n');
+  console.log('Visit https://developer.tesla.com to create one.');
+  if (needsClientCredentials) {
+    console.log('The stored session is missing its Client ID/secret; enter them to complete it.');
+  }
+  console.log('To sign in without any other side effects, run: node dist/index.js authenticate\n');
   
-  const clientId = await prompt('Client ID: ');
-  const clientSecret = await promptPassword('Client Secret: ');
+  // Reuse whatever is already stored, so a record that is only missing the
+  // secret (the common case after a key rotation) asks for one thing, not four.
+  const clientId = storedClientId ?? (await prompt('Client ID: '));
+  const clientSecret = storedClientSecret ?? (await promptPassword('Client Secret: '));
 
   // Persist the app credentials BEFORE the OAuth round trip, not after it.
   //
@@ -281,6 +295,7 @@ program
         case 'help':
           console.log(`
 Available commands:
+  authenticate         Sign in to Tesla and store the credentials
   get-ev-bsoc         Get the current battery state of charge from the EV
   get-battery-soc     Get the current battery state of charge from the solar battery
   set-ev-charge-limit Set the EV's charge limit
@@ -302,6 +317,12 @@ Available commands:
           console.log('');
           break;
           
+        case 'authenticate':
+          // Routed through the same helper the standalone command uses, so the
+          // REPL and `ev-charge-coordinator authenticate` cannot drift apart.
+          await runAuthenticate();
+          break;
+
         case 'get-ev-bsoc':
           if (!teslaService?.isAuthenticated()) {
             console.log('Tesla not connected');
@@ -628,6 +649,101 @@ program
     console.log(`✓ Battery buffer set to ${buffer}%`);
   });
 
+/**
+ * Sign in to Tesla and store the credentials.
+ *
+ * Deliberately does no other work: it makes no /api/1 call, resolves no VIN, and
+ * touches no battery state. That matters because the obvious way to sign in was
+ * to run a command like get-ev-bsoc, which (a) does not describe what it is
+ * doing and (b) fails with HTTP 412 before the app is registered with Tesla --
+ * so it could not be used to fix a not-yet-registered app. Login is a distinct
+ * step from every data command, and this is it.
+ */
+async function runAuthenticate(
+  options: { clientId?: string; clientSecret?: string; force?: boolean } = {}
+): Promise<boolean> {
+  const existing = await credentialStore.getTeslaCredentials();
+
+  // Without --force, an intact session is left alone rather than sending the user
+  // through consent again for no reason.
+  const hasSession =
+    Boolean(existing?.accessToken) &&
+    Boolean(existing?.refreshToken) &&
+    Boolean(existing?.clientId) &&
+    Boolean(existing?.clientSecret);
+  if (hasSession && !options.force) {
+    const expiresAt = existing?.expiresAt ?? 0;
+    console.log('Already signed in to Tesla.');
+    console.log(
+      expiresAt > Date.now()
+        ? `  Stored tokens valid until ${new Date(expiresAt).toISOString()}.`
+        : '  Stored tokens have expired; the CLI will refresh them on next use.'
+    );
+    console.log('  Re-authorize anyway with: node dist/index.js authenticate --force');
+    return true;
+  }
+
+  // Reuse stored app credentials unless overridden, so a re-auth does not force
+  // the user to re-paste the secret they already saved.
+  const clientId = options.clientId ?? existing?.clientId ?? (await prompt('Client ID: '));
+  const clientSecret =
+    options.clientSecret ?? existing?.clientSecret ?? (await promptPassword('Client Secret: '));
+
+  if (!clientId.trim() || !clientSecret.trim()) {
+    console.error('A Client ID and Client Secret are both required.');
+    return false;
+  }
+
+  console.log('\nStarting OAuth authentication...');
+  console.log('A browser window should open. If not, copy and paste the URL below.\n');
+
+  const service = new TeslaService({ region: existing?.region });
+  try {
+    await service.initialize({ clientId: clientId.trim(), clientSecret: clientSecret.trim() });
+    await service.authenticate((authUrl) => {
+      console.log('Please visit this URL to authorize:\n');
+      console.log(authUrl);
+      console.log('\nWaiting for authorization...');
+    });
+
+    // Store the app credentials only after a successful exchange. authenticate()
+    // already saved the tokens; this adds the client ID/secret alongside them.
+    await credentialStore.setTeslaCredentials({
+      clientId: clientId.trim(),
+      clientSecret: clientSecret.trim(),
+      region: service.region as 'na' | 'eu' | 'cn',
+    });
+    console.log('✓ Signed in, and the credentials were stored securely');
+
+    // authenticate() resolves a VIN, which is a /api/1 call. If the app is not
+    // registered that is expected, and it is not a reason to call login a
+    // failure -- registration is a separate step this command deliberately does
+    // not perform.
+    if (service.needsRegistration) {
+      console.log(
+        '  Tesla has not registered this application yet, so vehicles cannot be listed.\n' +
+          '  Register it with: node dist/index.js pair-tesla-key --domain <your-domain>'
+      );
+    }
+    return true;
+  } catch (error) {
+    console.error('Authentication failed:', error instanceof Error ? error.message : error);
+    return false;
+  }
+}
+
+program
+  .command('authenticate')
+  .description('Sign in to Tesla and store the credentials (no other side effects)')
+  .option('--client-id <id>', 'Client ID from developer.tesla.com (default: the stored one)')
+  .option('--client-secret <secret>', 'Client Secret (default: the stored one)')
+  .option('--force', 'Re-authorize even if credentials are already stored')
+  .action(async (options) => {
+    if (!(await runAuthenticate(options))) {
+      process.exitCode = 1;
+    }
+  });
+
 program
   .command('config')
   .description('Show or update configuration')
@@ -923,7 +1039,7 @@ async function printPairingLinkIfReady(
     if (consent.reason === 'not-signed-in' || consent.reason === 'not-authorized') {
       console.error(
         '\nThe pairing link only works after you authorize this app. Sign in first:\n' +
-          '  node dist/index.js get-ev-bsoc\n' +
+          '  node dist/index.js authenticate\n' +
           '  (approve in the browser, then re-run pair-tesla-key)'
       );
     } else {
@@ -1010,9 +1126,9 @@ async function reportKeyState(
   } else if (consent.granted) {
     console.log('Account access: OK the user has granted this app access to their account');
   } else if (consent.reason === 'not-signed-in') {
-    console.log('Account access: MISSING never authorized (run get-ev-bsoc and approve)');
+    console.log('Account access: MISSING never authorized (run `authenticate` and approve)');
   } else if (consent.reason === 'not-authorized') {
-    console.log('Account access: MISSING token rejected; re-authorize (run get-ev-bsoc)');
+    console.log('Account access: MISSING token rejected; re-authorize (run `authenticate --force`)');
   } else {
     console.log(`Account access: not confirmed (${consent.reason}) - ${consent.detail}`);
   }

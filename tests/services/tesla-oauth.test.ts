@@ -279,9 +279,9 @@ describe('parseTokenResponse', () => {
 
 describe('describeTeslaError', () => {
   it('turns documented error strings into actionable advice', () => {
-    // Must name a command that exists. There is no `authenticate` command;
-    // get-ev-bsoc is the cheapest one that triggers the OAuth flow.
-    expect(describeTeslaError(400, 'invalid_auth_code')).toContain('get-ev-bsoc');
+    // Must name a command that exists. `authenticate` is the login command: it
+    // stores credentials and issues no other API call.
+    expect(describeTeslaError(400, 'invalid_auth_code')).toContain('authenticate');
     expect(describeTeslaError(400, 'invalid_redirect_url')).toContain('must equal');
     expect(describeTeslaError(401, 'unauthorized_client')).toContain('client_secret');
     expect(describeTeslaError(401, 'login_required')).toContain('already consumed');

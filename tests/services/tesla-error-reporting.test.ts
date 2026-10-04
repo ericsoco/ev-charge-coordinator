@@ -9,6 +9,7 @@
  * is the only way to catch that class of wiring mistake again.
  */
 import axios, { AxiosError, type AxiosInstance } from 'axios';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { TeslaService } from '../../src/services/TeslaService.js';
 
@@ -130,6 +131,29 @@ describe('TeslaService.authenticate with an unregistered app', () => {
 
     await expect(service.authenticate(() => {})).rejects.toThrow(/HTTP 500/);
     expect(service.needsRegistration).toBe(false);
+  });
+});
+
+describe('test isolation from the developer credential store', () => {
+  // The regression that cost the most: this file calls
+  // TeslaService.authenticate(), which saves credentials. It sets neither
+  // ECC_DISABLE_KEYCHAIN nor ECC_CONFIG_DIR, because vitest.config.ts now sets
+  // both for every suite. Before that, it wrote {"accessToken":"at",...} into the
+  // developer's real macOS keychain; since the keychain is read in preference to
+  // the encrypted file, that junk shadowed the developer's real credentials and
+  // the CLI re-prompted on every run while correct data sat unread on disk.
+  //
+  // The assertions live here rather than in credentials.test.ts because this file
+  // has no file-level setup of its own, so it observes the global guard directly.
+
+  it('has the keychain disabled for the whole run', () => {
+    expect(process.env.ECC_DISABLE_KEYCHAIN).toBe('1');
+  });
+
+  it('redirects the config dir away from the real ~/.ev-charge-coordinator', () => {
+    const dir = process.env.ECC_CONFIG_DIR;
+    expect(dir).toBeTruthy();
+    expect(dir).not.toContain(`${path.sep}.ev-charge-coordinator`);
   });
 });
 
