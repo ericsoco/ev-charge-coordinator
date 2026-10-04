@@ -26,6 +26,10 @@ import {
   VirtualKeyService,
   VirtualKeyStore,
 } from '../../src/services/tesla/VirtualKeyService.js';
+import {
+  describeTeslaError,
+  redactSecrets,
+} from '../../src/services/tesla/oauth.js';
 
 /** A key pair on a curve Tesla does not accept. */
 function createP384Pair(): { publicKeyPem: string; privateKeyPem: string } {
@@ -269,6 +273,126 @@ describe('VirtualKeyService.checkHostedPublicKey', () => {
 
     expect(result.matchesLocalKey).toBe(false);
     expect(fs.existsSync(path.join(dir, PRIVATE_KEY_FILENAME))).toBe(true);
+  });
+});
+
+describe('VirtualKeyService.fetchPartnerToken', () => {
+  // The reported failure: registration died with "Token response did not contain
+  // a refresh_token (was the offline_access scope granted?)". The client_credentials
+  // grant issues no refresh token at all -- the Partner Tokens page documents
+  // neither refresh_token nor offline_access for it -- so requiring one rejected a
+  // valid response. Nothing exercised this method, so it shipped broken.
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-vkey-partner-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A service whose token POST returns exactly `body`. */
+  function serviceReturning(body: unknown, captured: URLSearchParams[] = []) {
+    return new VirtualKeyService({
+      apiBaseUrl: 'https://fleet-api.prd.na.vn.cloud.tesla.com',
+      store: new VirtualKeyStore(dir),
+      http: {
+        get: async () => ({ data: {} }),
+        post: async (_url: string, data?: unknown) => {
+          captured.push(data as URLSearchParams);
+          return { data: body };
+        },
+      },
+    });
+  }
+
+  it('accepts a partner token response, which has no refresh_token', async () => {
+    // The shape Tesla documents for client_credentials.
+    const service = serviceReturning({
+      access_token: 'partner-access-token',
+      token_type: 'Bearer',
+      expires_in: 28800,
+    });
+
+    const token = await service.fetchPartnerToken('cid', 'secret');
+    expect(token.accessToken).toBe('partner-access-token');
+  });
+
+  it('applies the expiry margin to the partner token', async () => {
+    const now = 1_700_000_000_000;
+    const service = serviceReturning({
+      access_token: 'at',
+      expires_in: 28800,
+    });
+
+    const token = await service.fetchPartnerToken('cid', 'secret', now);
+    expect(token.expiresAt).toBe(now + 28_800_000 - 30_000);
+  });
+
+  it('still rejects a response with no access_token', async () => {
+    // Opting out of the refresh_token requirement must not weaken this check.
+    const service = serviceReturning({ token_type: 'Bearer', expires_in: 28800 });
+    await expect(service.fetchPartnerToken('cid', 'secret')).rejects.toThrow(/access_token/);
+  });
+
+  it('sends the documented partner-token form and no offline_access', async () => {
+    const sent: URLSearchParams[] = [];
+    const service = serviceReturning({ access_token: 'at', expires_in: 28800 }, sent);
+
+    await service.fetchPartnerToken('cid', 'secret');
+
+    expect(sent).toHaveLength(1);
+    const form = sent[0];
+    expect(form.get('grant_type')).toBe('client_credentials');
+    expect(form.get('client_id')).toBe('cid');
+    expect(form.get('client_secret')).toBe('secret');
+    expect(form.get('audience')).toBe('https://fleet-api.prd.na.vn.cloud.tesla.com');
+    // offline_access is not a partner-token scope, and asking for it cannot make
+    // a refresh token appear.
+    expect(form.has('scope') && form.get('scope')).not.toContain('offline_access');
+  });
+
+  it('requires both client credentials before calling Tesla', async () => {
+    const sent: URLSearchParams[] = [];
+    const service = serviceReturning({ access_token: 'at' }, sent);
+
+    await expect(service.fetchPartnerToken('', 'secret')).rejects.toThrow(/client_id/);
+    await expect(service.fetchPartnerToken('cid', '')).rejects.toThrow(/client_secret/);
+    expect(sent).toHaveLength(0);
+  });
+});
+
+describe('redactSecrets', () => {
+  it('removes a Tesla client secret', () => {
+    const out = redactSecrets('failed for client ta-secret.EXAMPLEonlyAAaa11 (cid 2fc1d3f9)');
+    expect(out).not.toContain('EXAMPLEonlyAAaa11');
+    expect(out).toContain('[redacted]');
+    // The non-secret context must survive, or the message stops being useful.
+    expect(out).toContain('2fc1d3f9');
+  });
+
+  it('removes a JWT access token', () => {
+    const jwt =
+      'eyJhbGciOiJSUzI1NiIsImtpZCI6IlI0b3Z1cE5uNGpxX0xaQmF4ZHZQRkZ4RGFQVSJ9.' +
+      'eyJhY2NvdW50X3R5cGUiOiJwZXJzb24ifQ.a2YT0Sh0QVtNwvlExk5aqc7me23eeYv4';
+    const out = redactSecrets(`Authorization: Bearer ${jwt}`);
+    expect(out).not.toContain('eyJ');
+    expect(out).toBe('Authorization: Bearer [redacted]');
+  });
+
+  it('removes a Tesla refresh token', () => {
+    expect(redactSecrets('refresh NA_a90869e9dabcdef1234 expired')).toBe(
+      'refresh [redacted] expired'
+    );
+  });
+
+  it('is applied to every error message the CLI prints', () => {
+    // The funnel, not a helper nobody calls: a secret arriving inside a Tesla
+    // error body must not reach the terminal or a pasted bug report.
+    const mapped = describeTeslaError(401, 'invalid_client for ta-secret.EXAMPLEonlyAAaa11');
+    expect(mapped).not.toContain('EXAMPLEonlyAAaa11');
+    expect(mapped).toContain('client_id/secret');
   });
 });
 

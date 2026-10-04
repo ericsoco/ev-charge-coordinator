@@ -61,28 +61,30 @@ npm run build
 > browser, and setting an Allowed Origin, neither of them registers your application
 > with Tesla. Until `POST /api/1/partner_accounts` has been called, Tesla answers
 > *every* `/api/1` call with `HTTP 412`, so sign-in appears to succeed and then
-> nothing works. `pair-tesla-key` (step 7) performs it.
+> nothing works. `pair-tesla-key` (step 8) performs it.
 
 1. Create a Tesla Developer account at https://developer.tesla.com (accounts in
    China register on the separate https://developer.tesla.cn portal)
 2. Create a new application and note the Client ID and Client Secret
 3. Register the origin URL `http://localhost:8089/`, and redirect URI `http://localhost:8089/callback`
-   (must match exactly, or the token exchange fails with `invalid_redirect_url`) and enable these scopes:
-   `openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds`.
-   `offline_access` is what makes Tesla issue a refresh token at all.
-4. Generate a public/private key pair for command signing. `pair-tesla-key` does this
+   (must match exactly, or the token exchange fails with `invalid_redirect_url`).
+4. Select the vehicle scopes on developer.tesla.com: `openid vehicle_device_data
+   vehicle_cmds vehicle_charging_cmds`. `offline_access` is **not** a portal checkbox —
+   this app requests it as a scope in the `/authorize` URL it sends your browser, and
+   that is what makes Tesla issue a refresh token.
+5. Generate a public/private key pair for command signing. `pair-tesla-key` does this
    for you on first run; to do it by hand instead, the equivalent of what it produces
    is:
    ```bash
    openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
    openssl ec -in private-key.pem -pubout -out public-key.pem
    ```
-5. Host the public key at `https://your-domain.com/.well-known/appspecific/com.tesla.3p.public-key.pem`
+6. Host the public key at `https://your-domain.com/.well-known/appspecific/com.tesla.3p.public-key.pem`
    (the domain is registered as the application's allowed origin; the file must be
    reachable over HTTPS with no redirect)
-6. Run `node dist/index.js config --tesla-region <na|eu|cn>` if your account is not
+7. Run `node dist/index.js config --tesla-region <na|eu|cn>` if your account is not
    served by the North America deployment. Asia-Pacific accounts use `na`.
-7. Run `node dist/index.js pair-tesla-key --domain your-domain.com` to generate the
+8. Run `node dist/index.js pair-tesla-key --domain your-domain.com` to generate the
    key pair, verify the published key, register the domain, and print the pairing
    link (see [Virtual key pairing](#virtual-key-pairing)).
 
@@ -110,6 +112,11 @@ npm start -- pair-tesla-key --domain your-domain.com
 3. **Register the domain with Tesla**, then re-read the key back to confirm Tesla
    holds the same one. A mismatch is reported rather than waved through, because it
    pairs successfully and then fails every command.
+
+   This step mints a *partner* token from your Client ID/Secret using the
+   `client_credentials` grant, which is separate from signing in. Tesla documents no
+   `refresh_token` and no `offline_access` scope for that grant — it is re-minted from
+   client credentials rather than refreshed — so `offline_access` has no bearing here.
 
 Finally it prints the pairing deep link:
 

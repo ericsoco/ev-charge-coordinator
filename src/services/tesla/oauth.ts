@@ -184,31 +184,84 @@ export interface TeslaTokenResponse {
   token_type?: string;
 }
 
+/**
+ * Patterns for credentials that must never reach a terminal, a log, or a pasted
+ * bug report. Tesla's client secrets are `ta-secret.<base64ish>` and its access
+ * and refresh tokens are long JWT/opaque strings, so they are matched by shape
+ * rather than by exact value.
+ *
+ * `describeTeslaError` is the single funnel for every message the CLI shows, so
+ * redacting there covers all of them at once.
+ */
+const SECRET_PATTERNS: RegExp[] = [
+  // Tesla client secret, e.g. ta-secret.EXAMPLEonlyAAaa11
+  /ta-secret\.[A-Za-z0-9+/=_-]{4,}/g,
+  // A JWT access token (three base64url segments).
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  // Tesla refresh tokens: NA_a90869e9d... / NA_8f1c...
+  /\bNA_[A-Za-z0-9_-]{8,}\b/g,
+];
+
+/**
+ * Replace anything credential-shaped with a short marker.
+ *
+ * Error strings are frequently pasted into issues and chat, and a single leaked
+ * secret in a transcript has to be treated as compromised. This makes that less
+ * likely; it cannot make it impossible, since a user can always paste by hand.
+ */
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const pattern of SECRET_PATTERNS) {
+    out = out.replace(pattern, '[redacted]');
+  }
+  return out;
+}
+
 export interface TokenSet {
   accessToken: string;
+  /** Absent only for grants that cannot produce one (see requireRefreshToken). */
   refreshToken: string;
   /** Absolute unix time in milliseconds, the format the credential store uses. */
   expiresAt: number;
+}
+
+export interface ParseTokenOptions {
+  /**
+   * Whether a refresh_token is mandatory.
+   *
+   * True for the authorization_code and refresh_token grants, where Tesla issues
+   * one and its absence means the caller forgot the offline_access scope.
+   *
+   * MUST be false for client_credentials (partner) tokens: the Partner Tokens
+   * page documents neither refresh_token nor offline_access for that grant, and
+   * such a token is re-minted from client credentials rather than refreshed.
+   * Requiring one there rejected valid responses -- see fetchPartnerToken.
+   */
+  requireRefreshToken?: boolean;
 }
 
 /**
  * Convert Tesla's token response into the stored shape.
  *
  * `now` is injectable for deterministic expiry assertions. The 30s safety margin
- * keeps the caller from presenting a token that expires in flight. A missing
- * refresh_token is called out specifically because the usual cause is forgetting
- * the offline_access scope, and silently storing undefined would break the next
- * refresh with a confusing error much later.
+ * keeps the caller from presenting a token that expires in flight.
  */
 export function parseTokenResponse(
   data: TeslaTokenResponse,
   now: number = Date.now(),
-  marginMs = 30_000
+  marginMs = 30_000,
+  options: ParseTokenOptions = {}
 ): TokenSet {
+  const requireRefreshToken = options.requireRefreshToken ?? true;
   if (!data || typeof data.access_token !== 'string' || data.access_token.length === 0) {
     throw new Error('Token response did not contain an access_token');
   }
-  if (typeof data.refresh_token !== 'string' || data.refresh_token.length === 0) {
+  if (
+    requireRefreshToken &&
+    (typeof data.refresh_token !== 'string' || data.refresh_token.length === 0)
+  ) {
+    // Only reachable on the grants that do issue refresh tokens, so naming
+    // offline_access here is accurate and actionable.
     throw new Error(
       'Token response did not contain a refresh_token (was the offline_access scope granted?)'
     );
@@ -216,7 +269,9 @@ export function parseTokenResponse(
   const expiresIn = typeof data.expires_in === 'number' ? data.expires_in : 0;
   return {
     accessToken: data.access_token,
-    refreshToken: data.refresh_token,
+    // Empty string rather than undefined when not required, so callers that do
+    // consume it never see `undefined` and accidentally persist the word.
+    refreshToken: data.refresh_token ?? '',
     expiresAt: now + expiresIn * 1000 - marginMs,
   };
 }
@@ -229,7 +284,9 @@ export function describeTeslaError(status: number | undefined, raw: string): str
   // Control characters are stripped because this string can arrive straight from
   // the browser's redirect query and is then written both to the terminal and into
   // the callback page: ANSI escapes and CR/LF must not survive into either.
-  const safeRaw = raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+  // Secrets are redacted first because this is the one function every CLI error
+  // message passes through, and its output is what gets pasted into issues.
+  const safeRaw = redactSecrets(raw).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
   const known: Record<string, string> = {
     // There is no `authenticate` command; any Tesla command triggers the OAuth
     // flow, so naming one here would send the user after a command that does
