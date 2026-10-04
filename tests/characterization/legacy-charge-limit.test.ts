@@ -16,20 +16,40 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 
-const INDEX_SOURCE = fs.readFileSync(
+/**
+ * Source guard for the legacy percent rule.
+ *
+ * Phase 1.5 moved the rule out of index.ts -- where it was duplicated between the
+ * Commander action and the REPL switch -- into src/commands/vehicle.ts, where it
+ * exists once and is called from both. The rule's *text* is therefore expected
+ * exactly once now, not twice.
+ *
+ * The count is still the signal that matters: when Phase 4b replaces this with
+ * energy math and deletes this file, the expression must stop being present at
+ * all. A count of 1 in the right file catches that as well as a count of 2 in
+ * the old one did.
+ */
+const RULE_SOURCE = fs.readFileSync(
+  new URL('../../src/commands/vehicle.ts', import.meta.url),
+  'utf8'
+);
+
+/** Where the rule used to be duplicated; must no longer contain it. */
+const WIRING_SOURCE = fs.readFileSync(
   new URL('../../src/index.ts', import.meta.url),
   'utf8'
 );
 
 const AVAILABLE_EXPRESSION = 'const availableCharge = Math.max(0, batterySoc - buffer);';
-const LIMIT_EXPRESSION = 'const evLimit = Math.max(50, Math.min(100, availableCharge));';
-const GUARD_EXPRESSION = 'if (evLimit <= 50) {';
+const LIMIT_EXPRESSION =
+  'const evLimit = Math.max(MIN_EV_CHARGE_LIMIT, Math.min(MAX_EV_CHARGE_LIMIT, availableCharge));';
+const GUARD_EXPRESSION = 'if (evLimit <= MIN_EV_CHARGE_LIMIT) {';
 
 function countOccurrences(source: string, needle: string): number {
   return source.split(needle).length - 1;
 }
 
-/** Mirror of index.ts:352-355 (REPL) and index.ts:554-555 (non-interactive). */
+/** Mirror of the rule in src/commands/vehicle.ts. */
 function legacyRule(batterySoc: number, buffer: number) {
   const availableCharge = Math.max(0, batterySoc - buffer);
   const evLimit = Math.max(50, Math.min(100, availableCharge));
@@ -37,16 +57,25 @@ function legacyRule(batterySoc: number, buffer: number) {
 }
 
 describe('charge-from-battery - legacy percent rule is still in the source', () => {
-  it('computes available charge identically in the REPL and the one-shot command', () => {
-    expect(countOccurrences(INDEX_SOURCE, AVAILABLE_EXPRESSION)).toBe(2);
+  it('exists exactly once, in the shared handler', () => {
+    expect(countOccurrences(RULE_SOURCE, AVAILABLE_EXPRESSION)).toBe(1);
   });
 
-  it('clamps the EV limit the same way in both call sites', () => {
-    expect(countOccurrences(INDEX_SOURCE, LIMIT_EXPRESSION)).toBe(2);
+  it('clamps the EV limit in that single definition', () => {
+    expect(countOccurrences(RULE_SOURCE, LIMIT_EXPRESSION)).toBe(1);
   });
 
-  it('guards against a limit at or below Tesla 50% minimum in both call sites', () => {
-    expect(countOccurrences(INDEX_SOURCE, GUARD_EXPRESSION)).toBe(2);
+  it('guards against a limit at or below Tesla 50% minimum there', () => {
+    expect(countOccurrences(RULE_SOURCE, GUARD_EXPRESSION)).toBe(1);
+  });
+
+  it('is not duplicated back into the CLI wiring', () => {
+    // Phase 1.5's whole point: the rule existed twice in index.ts and the copies
+    // had already drifted. It must never return there. This guard is what makes
+    // "defined in exactly one place" an enforced property rather than a habit.
+    expect(countOccurrences(WIRING_SOURCE, AVAILABLE_EXPRESSION)).toBe(0);
+    expect(countOccurrences(WIRING_SOURCE, LIMIT_EXPRESSION)).toBe(0);
+    expect(countOccurrences(WIRING_SOURCE, GUARD_EXPRESSION)).toBe(0);
   });
 });
 
