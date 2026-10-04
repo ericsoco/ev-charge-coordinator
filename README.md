@@ -68,10 +68,10 @@ npm run build
 2. Create a new application and note the Client ID and Client Secret
 3. Register the origin URL `http://localhost:8089/`, and redirect URI `http://localhost:8089/callback`
    (must match exactly, or the token exchange fails with `invalid_redirect_url`).
-4. Select the vehicle scopes on developer.tesla.com: `openid vehicle_device_data
-   vehicle_cmds vehicle_charging_cmds`. `offline_access` is **not** a portal checkbox —
-   this app requests it as a scope in the `/authorize` URL it sends your browser, and
-   that is what makes Tesla issue a refresh token.
+4. Select the vehicle scopes on developer.tesla.com:
+     * Vehicle Information (`vehicle_device_data`)
+     * Vehicle Commands (`vehicle_cmds`)
+     * Vehicle Charging Management (`vehicle_charging_cmds`)
 5. Generate a public/private key pair for command signing. `pair-tesla-key` does this
    for you on first run; to do it by hand instead, the equivalent of what it produces
    is:
@@ -116,7 +116,7 @@ npm start -- pair-tesla-key --domain your-domain.com
    This step mints a *partner* token from your Client ID/Secret using the
    `client_credentials` grant, which is separate from signing in. Tesla documents no
    `refresh_token` and no `offline_access` scope for that grant — it is re-minted from
-   client credentials rather than refreshed — so `offline_access` has no bearing here.
+   client credentials rather than refreshed.
 
 Finally it prints the pairing deep link:
 
