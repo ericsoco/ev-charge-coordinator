@@ -171,6 +171,48 @@ describe('CredentialStore - encrypted file fallback', () => {
   });
 });
 
+describe('CredentialStore - backend pinning', () => {
+  // The bug: initialize() and save() each decided between keychain and file
+  // independently and silently fell back. When a test wrote junk into the real
+  // keychain, a later run loaded that junk while saving real credentials to the
+  // file. The keychain wins on read, so the file became invisible and the CLI
+  // re-prompted on every run while correctly-saved data sat on disk.
+  // The fix: resolve the backend once, then stay on it.
+
+  it('reports the file backend when the keychain is disabled', async () => {
+    const store = new mod.CredentialStore();
+    expect(store.storageBackend).toBeNull();
+
+    await store.getTeslaCredentials();
+    expect(store.storageBackend).toBe('file');
+  });
+
+  it('stays on the file backend for the life of the instance', async () => {
+    const store = new mod.CredentialStore();
+    await store.setTeslaCredentials({ clientId: 'cid', clientSecret: 'secret' });
+    expect(store.storageBackend).toBe('file');
+
+    // Backend is decided once at load and never re-derived, so a second write
+    // cannot silently land somewhere the next read will not look.
+    await store.setTeslaCredentials({ vin: '5YJTESTVIN000001' });
+    const reloaded = await new mod.CredentialStore().getTeslaCredentials();
+    expect(reloaded?.vin).toBe('5YJTESTVIN000001');
+    expect(reloaded?.clientId).toBe('cid');
+  });
+
+  it('never leaves a write invisible to the next read', async () => {
+    // The property that actually broke: save then reload must agree.
+    const store = new mod.CredentialStore();
+    await store.setTeslaCredentials({ clientId: 'cid-1', clientSecret: 's-1' });
+    await store.setTeslaCredentials({ accessToken: 'at-1' });
+
+    const reloaded = await new mod.CredentialStore().getTeslaCredentials();
+    expect(reloaded?.clientId).toBe('cid-1');
+    expect(reloaded?.clientSecret).toBe('s-1');
+    expect(reloaded?.accessToken).toBe('at-1');
+  });
+});
+
 describe('CredentialStore - module surface', () => {
   it('exports a ready-made singleton for the CLI to share', () => {
     expect(mod.credentialStore).toBeInstanceOf(mod.CredentialStore);

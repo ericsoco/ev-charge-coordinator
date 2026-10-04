@@ -90,9 +90,9 @@ npm run build
 8. Run `node dist/index.js pair-tesla-key --domain your-domain.com` to generate the
    key pair, verify the published key, register the domain, and print the pairing
    link (see [Virtual key pairing](#virtual-key-pairing)).
-9. Sign in once so the app is granted access to your account:
+9. Sign in so the app is granted access to your account:
    ```bash
-   node dist/index.js get-ev-bsoc
+   node dist/index.js authenticate
    ```
    This is a **separate requirement** from step 8 — Tesla's pairing flow only adds a
    key if you have already authorized the app. `pair-tesla-key` checks for it and
@@ -147,8 +147,8 @@ the second and third are easy to mistake for the first:
 1. **Registration** — `POST /api/1/partner_accounts` enrolls your *key*. This command.
 2. **Consent** — you must have authorized the app for your *account*. Tesla's developer
    guide states the pairing flow requires the user to have already granted
-   `vehicle_device_data`, `vehicle_cmds` or `vehicle_location`. Signing in (`get-ev-bsoc`)
-   does this; registering does not.
+   `vehicle_device_data`, `vehicle_cmds` or `vehicle_location`. Signing in
+   (`authenticate`) does this; registering does not.
 3. **Pairing** — the `_ak/` tap in the app, which only works once 1 and 2 are done.
 
 If you tap the link before consenting, the Tesla app displays an error dialog:
@@ -237,6 +237,7 @@ npm start config --clear-all
 | `start` | Start the Python API proxy and enter interactive mode |
 | `exit` | Terminate all services |
 | `get-ev-bsoc` | Get the current battery state of charge from the EV |
+| `authenticate` | Sign in to Tesla and store credentials (no other side effects) |
 | `get-battery-soc` | Get the current battery state of charge from the solar battery |
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%) |
 | `start-ev-charging` | Start charging the EV |
@@ -380,7 +381,7 @@ The architecture is designed to be extensible. To add support for a new EV or ba
   |---------|-----|
   | `client_not_found` | wrong Client ID; copy it from developer.tesla.com > your app |
   | `invalid_redirect_url` | registered redirect URI differs from the one sent |
-  | `invalid_auth_code` | the code was already used or expired; sign in again (`get-ev-bsoc`) |
+  | `invalid_auth_code` | the code was already used or expired; sign in again (`authenticate`) |
   | `login_required` | password reset or the refresh token was already consumed; re-authenticate |
   | HTTP 412 | app not registered with Tesla in this region; run `pair-tesla-key` |
   | HTTP 421 | right credentials, wrong region; set `--tesla-region` |
