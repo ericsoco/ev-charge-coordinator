@@ -30,6 +30,7 @@ import {
   createPkcePair,
   describeTeslaError,
   parseTokenResponse,
+  redactSecrets,
   TOKEN_FORM_HEADERS,
   type PkcePair,
 } from './tesla/oauth.js';
@@ -638,7 +639,9 @@ export class TeslaService implements EVService {
  * query, and this HTML is rendered in the user's own browser session.
  */
 function errorPage(message: string): string {
-  const safe = message
+  // Redacted as well as escaped: this text originates in a browser redirect query
+  // and is written back into a page, so it must not be able to surface a token.
+  const safe = redactSecrets(message)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

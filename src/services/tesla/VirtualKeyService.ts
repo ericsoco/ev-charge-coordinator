@@ -319,6 +319,12 @@ export class VirtualKeyService {
   /**
    * Exchange client credentials for a partner token. Grants no access to any
    * vehicle; it only proves the caller is the registered application.
+   *
+   * No refresh_token is expected here. The Partner Tokens page documents neither
+   * refresh_token nor offline_access for the client_credentials grant, and a
+   * partner token is re-minted from client credentials rather than refreshed, so
+   * requiring one would reject a perfectly valid response. It is never stored
+   * either -- it is used for the registration calls below and then discarded.
    */
   async fetchPartnerToken(
     clientId: string,
@@ -340,7 +346,9 @@ export class VirtualKeyService {
     const response = await this.http.post(TESLA_TOKEN_URL, form, {
       headers: TOKEN_FORM_HEADERS,
     });
-    const parsed = parseTokenResponse(response.data as TeslaTokenResponse, now);
+    const parsed = parseTokenResponse(response.data as TeslaTokenResponse, now, 30_000, {
+      requireRefreshToken: false,
+    });
     return { accessToken: parsed.accessToken, expiresAt: parsed.expiresAt };
   }
 
