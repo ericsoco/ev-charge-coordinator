@@ -101,7 +101,7 @@ npm run build
 10. Re-run `node dist/index.js pair-tesla-key --domain your-domain.com` and open the
     pairing link on your phone.
 
-### Virtual key pairing
+### Tesla Virtual Key pairing
 
 Vehicles that use the Vehicle Command Protocol verify a signature on every command,
 made with an application key pair that a trusted human must add to the car. Tesla's

@@ -13,6 +13,7 @@
 
 import { Command } from 'commander';
 import axios from 'axios';
+import { createConnection } from 'node:net';
 import { createInterface } from 'node:readline';
 import { FranklinWHService, TeslaService } from './services/index.js';
 import type { ConsentState } from './services/TeslaService.js';
@@ -106,6 +107,50 @@ function reportOrphanedProxy(): void {
   );
 }
 
+/**
+ * Warn when something is listening on the proxy port that no state file records.
+ *
+ * A proxy in this position is invisible to `exit`, which is how an orphan
+ * survives: the state file is only written when this process spawned the proxy,
+ * so a proxy left behind by an earlier failed run is never stopped by anything.
+ * Reporting it turns a silent orphan into something the user can act on.
+ */
+async function warnAboutUntrackedProxy(spawnedPid: number | null): Promise<void> {
+  if (spawnedPid) return; // our own; it is recorded and exit can stop it
+  if (readRuntimeState()) return; // someone else's, and recorded
+  if (!(await isProxyPortOpen(DEFAULT_PROXY_PORT))) return;
+
+  console.log(
+    `\nWarning: something is listening on port ${DEFAULT_PROXY_PORT} but no runtime\n` +
+      `  state records it, so \`exit\` will not stop it. If it is an orphaned proxy:\n` +
+      `    lsof -ti tcp:${DEFAULT_PROXY_PORT} | xargs kill`
+  );
+}
+
+/**
+ * True when something accepts a TCP connection on the loopback port.
+ *
+ * A refused connection means nothing is listening. A timeout is reported as open,
+ * so the warning errs toward telling the user rather than hiding a possible
+ * orphan behind a firewall.
+ */
+function isProxyPortOpen(port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host: '127.0.0.1' });
+    let settled = false;
+    const finish = (open: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(open);
+    };
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false)); // ECONNREFUSED: nothing listening
+    socket.once('timeout', () => finish(true));
+    socket.setTimeout(timeoutMs);
+  });
+}
+
 const program = new Command();
 let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
@@ -165,29 +210,38 @@ async function initializeFranklin(): Promise<boolean> {
       return true;
     } catch (error) {
       console.error('Failed to connect with stored credentials:', error);
-      franklinService = null;
+      // Deliberately NOT `franklinService = null`. That discarded the only
+      // reference to a proxy that initialize() may have just spawned, leaving an
+      // orphan listening on the port with no runtime.json recording it -- so
+      // `exit` had nothing to stop and a stray Python process survived. Keeping
+      // the instance means a later disconnect() can still clean up, and the retry
+      // below replaces it anyway.
+      await franklinService.disconnect().catch(() => undefined);
     }
   }
 
   console.log('\nFranklinWH authentication required.');
   const username = await prompt('Email: ');
   const password = await promptPassword('Password: ');
-  const gatewayId = await prompt('Gateway ID (found in app under More -> Site Address): ');
+  const gatewayId = await prompt('Gateway ID (found in app under More -> Site Devices): ');
 
   franklinService = new FranklinWHService();
   try {
     await franklinService.initialize({ username, password, gatewayId });
-    
+
     const save = await prompt('Save credentials for future use? (y/n): ');
-    if (save.toLowerCase() === 'y') {
+    if (save.trim().toLowerCase() === 'y') {
       await credentialStore.setFranklinCredentials(username, password, gatewayId);
       console.log('✓ Credentials saved securely');
     }
-    
+
     console.log('✓ Connected to FranklinWH');
     return true;
   } catch (error) {
     console.error('Authentication failed:', error);
+    // Same reasoning as above: disconnect() only stops a proxy this instance
+    // spawned, so this cannot kill somebody else's.
+    await franklinService.disconnect().catch(() => undefined);
     franklinService = null;
     return false;
   }
@@ -376,6 +430,7 @@ program
 
     console.log('\n✓ Services started successfully');
     reportResolvedProcesses(franklinService, teslaService);
+    await warnAboutUntrackedProxy(spawnedPid);
     console.log('Type "help" for available commands or "exit" to quit.\n');
 
     // `--daemon` stays resident without the REPL, so `start --daemon` can be
