@@ -41,6 +41,71 @@ import {
   stopEvCharging,
 } from './commands/vehicle.js';
 
+import {
+  clearRuntimeState,
+  isProcessAlive,
+  readRuntimeState,
+  terminateProcess,
+  writeRuntimeState,
+} from './services/ProcessManager.js';
+
+/** Loopback port the Python proxy listens on. Mirrors FranklinWHService's default. */
+const DEFAULT_PROXY_PORT = 3001;
+
+/**
+ * Print the PID and port actually in use, so `start` tells the user something they
+ * can act on rather than a bare "started successfully".
+ */
+function reportResolvedProcesses(
+  franklin: FranklinWHService | null,
+  tesla: TeslaService | null
+): void {
+  if (franklin?.isAuthenticated()) {
+    const pid = franklin.spawnedProxyPid;
+    if (pid) {
+      console.log(`  Solar battery proxy: pid ${pid}, port ${DEFAULT_PROXY_PORT} (started here)`);
+    } else {
+      console.log(
+        `  Solar battery proxy: port ${DEFAULT_PROXY_PORT} (already running, reused)`
+      );
+    }
+  } else {
+    console.log('  Solar battery proxy: not running');
+  }
+  console.log(`  EV: ${tesla?.isAuthenticated() ? '✓ authenticated' : '✗ not authenticated'}`);
+}
+
+/**
+ * Stay alive without a prompt, for `start --daemon`.
+ *
+ * The promise only settles on a shutdown signal, so the process keeps its child
+ * proxy and the recorded runtime state valid until `exit` stops them.
+ */
+function keepResident(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const stop = (signal: string) => {
+      console.log(`\nReceived ${signal}; exiting. The proxy is left running.`);
+      resolve();
+    };
+    process.once('SIGINT', () => stop('SIGINT'));
+    process.once('SIGTERM', () => stop('SIGTERM'));
+  });
+}
+
+/**
+ * Report a proxy listening on the port with no state file.
+ *
+ * Deliberately reports rather than kills: without a recorded PID there is no way
+ * to know the process is ours, and killing whatever holds the port could take out
+ * something unrelated.
+ */
+function reportOrphanedProxy(): void {
+  console.log(
+    `If a proxy is still listening on port ${DEFAULT_PROXY_PORT}, stop it with:\n` +
+      `  lsof -ti tcp:${DEFAULT_PROXY_PORT} | xargs kill`
+  );
+}
+
 const program = new Command();
 let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
@@ -284,27 +349,44 @@ program
 program
   .command('start')
   .description('Start the Python API proxy and NodeJS server')
-  .action(async () => {
+  .option('--daemon', 'Stay resident without the interactive prompt')
+  .action(async (options) => {
     console.log('Starting EV Charge Coordinator...\n');
-    
-    // Initialize FranklinWH
+
     if (!(await initializeFranklin())) {
       console.log('Warning: FranklinWH service not available');
     }
-    
-    // Initialize Tesla
     if (!(await initializeTesla())) {
       console.log('Warning: Tesla service not available');
     }
-    
+
     if (!franklinService?.isAuthenticated() && !teslaService?.isAuthenticated()) {
       console.log('\nNo services available. Exiting.');
+      process.exitCode = 1;
       return;
     }
-    
+
+    // Record the proxy so `exit` can stop it from a different process. Only
+    // written when this process actually spawned one -- attaching to a proxy that
+    // someone else started must not overwrite their recorded PID.
+    const spawnedPid = franklinService?.spawnedProxyPid ?? null;
+    if (spawnedPid) {
+      writeRuntimeState({ pid: spawnedPid, port: DEFAULT_PROXY_PORT, startedAt: Date.now() });
+    }
+
     console.log('\n✓ Services started successfully');
+    reportResolvedProcesses(franklinService, teslaService);
     console.log('Type "help" for available commands or "exit" to quit.\n');
-    
+
+    // `--daemon` stays resident without the REPL, so `start --daemon` can be
+    // backgrounded and `exit` run from another terminal. Exiting instead would
+    // orphan the proxy and defeat the point of the flag.
+    if (options.daemon) {
+      console.log('Running in the background. Stop with: node dist/index.js exit');
+      await keepResident();
+      return;
+    }
+
     // Interactive command loop
     const rl = createReadline();
     
@@ -408,14 +490,23 @@ Available commands:
     
     rl.on('close', async () => {
       console.log('\nShutting down...');
-      
+
+      // disconnect() only stops a proxy this process spawned, so quitting a REPL
+      // that attached to somebody else's proxy leaves it running on purpose. The
+      // state file is cleared only when we own it, so `exit` from another terminal
+      // still has a PID to work with.
       if (franklinService) {
-        await franklinService.disconnect();
+        if (franklinService.spawnedProxyPid) {
+          await franklinService.disconnect();
+          clearRuntimeState();
+        } else {
+          console.log('  Solar battery proxy was reused, not started here; leaving it running.');
+        }
       }
       if (teslaService) {
         await teslaService.disconnect();
       }
-      
+
       console.log('Goodbye!');
       process.exit(0);
     });
@@ -425,16 +516,52 @@ program
   .command('exit')
   .description('Terminate the Python API proxy and NodeJS server')
   .action(async () => {
-    console.log('Shutting down services...');
-    
-    if (franklinService) {
-      await franklinService.disconnect();
-    }
+    console.log('Shutting down services...\n');
+
+    // Stop in-process services first, when this process has any. A fresh process
+    // has none, which is exactly the case this command used to silently no-op on
+    // while reporting success.
     if (teslaService) {
       await teslaService.disconnect();
     }
-    
-    console.log('✓ Services stopped');
+
+    const state = readRuntimeState();
+    if (!state) {
+      console.log('No runtime state file; no proxy was started by `start`.');
+      reportOrphanedProxy();
+      console.log('\n✓ Nothing to stop');
+      return;
+    }
+
+    if (!isProcessAlive(state.pid)) {
+      console.log(`Recorded proxy (pid ${state.pid}) is no longer running; clearing stale state.`);
+      clearRuntimeState();
+      console.log('\n✓ Nothing to stop');
+      return;
+    }
+
+    console.log(`Stopping proxy on port ${state.port} (pid ${state.pid})...`);
+
+    // Ask the proxy to shut down first so it can close cleanly. It calls
+    // os._exit(0) under Werkzeug >= 2.1, so the response body is discarded and the
+    // HTTP call can time out; that is fine, because terminateProcess verifies the
+    // process is actually gone and escalates if it is not.
+    try {
+      await axios.post(`http://127.0.0.1:${state.port}/shutdown`, undefined, { timeout: 5000 });
+    } catch {
+      // Expected on most Werkzeug versions; the escalation below is the real
+      // guarantee that the process ends.
+    }
+
+    const outcome = await terminateProcess(state.pid);
+    clearRuntimeState();
+
+    const verb =
+      outcome === 'exited' ? 'stopped cleanly' :
+      outcome === 'killed' ? 'stopped (SIGKILL required)' :
+      'already gone';
+    console.log(`✓ Proxy ${verb}`);
+    console.log('\n✓ Services stopped');
   });
 
 /**

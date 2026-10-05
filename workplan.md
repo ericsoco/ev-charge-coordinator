@@ -306,32 +306,62 @@ still deletes them).
 
 ## Phase 2 — Real `start` / `exit` lifecycle (~1 d)
 
+**Status: items 1-6 complete on `feature/phase-2-process-lifecycle`. 163 tests green, lint
+clean. Item 7 (configurable OAuth port) was already done in Phase 1. The `start` → new
+terminal → `exit` round trip still needs one human run against a real proxy.**
+
 `prompts.md:17-18` specifies `start`/`exit` as process control; today `exit` structurally
 **cannot** work (services are `null` in a fresh process).
 
-1. **`src/services/ProcessManager.ts`** — write
-   `~/.ev-charge-coordinator/runtime.json` = `{ pid, port, startedAt, tokenHash }` with mode
-   `0600`; on startup, if the state file exists, health-probe it and **reuse** the live proxy
-   rather than spawning a second one.
-2. **`start`** — launch the Python proxy, wait on `/health`, keep the Node side resident
-   (today's foreground REPL; optionally `--daemon`), print resolved PIDs and ports.
-3. **`exit`** — read the state file, call the authenticated `/shutdown`, then `kill(pid)`
-   with `SIGTERM` → `SIGKILL` escalation, then clear the state file. Must work from a **fresh
-   process** and sweep orphans (port probe / PID match).
-4. **Fix the teardown bug** — `index.ts:478-480` (`finally { disconnect() }`) tears down a
-   proxy the one-shot command didn't start, so a second `get-battery-soc` pays full cold
-   start. Only stop what you started.
-5. Handle `EADDRINUSE` on 8089 (OAuth callback) and 3001 (proxy) with actionable messages
-   instead of today's generic 10 s "Proxy startup timed out" (`FranklinWHService.ts:132-137`).
-6. **Interpreter resolution** — prefer `./.venv/bin/python`, then `$ECC_PYTHON`, then
-   `python3`; on `franklinwh` ImportError print the exact fix:
-   `python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt`.
-7. Make the OAuth callback port configurable (replace hardcoded `8089`, `TeslaService.ts:16`
-   and `:229`) and document it must match the registered redirect URI.
+1. ✅ **`src/services/ProcessManager.ts`** — `runtime.json` = `{ pid, port, startedAt }`, mode
+   `0600`, written atomically (temp file + rename). `readRuntimeState` reports a corrupt
+   file as absent rather than throwing, and `terminateProcess` escalates SIGTERM → SIGKILL
+   while confirming the process is actually gone.
+   - **Deviation:** no `tokenHash`. There is no secret to verify until Phase 3 adds the
+     shared proxy token, and a hash nobody can authenticate against is a field with no
+     reader. Phase 3 adds it alongside the secret it checks.
+2. ✅ **`start`** — ensures the proxy is up, records `runtime.json`, prints the resolved
+   PID/port, then enters the REPL. `--daemon` stays resident without the REPL so it can be
+   backgrounded.
+3. ✅ **`exit`** — works from a fresh process: reads the state file, health-checks the PID,
+   calls `/shutdown`, escalates the signal, clears the state. A missing or stale file
+   reports honestly instead of the old "✓ Services stopped" that claimed success it had
+   not achieved. Orphaned proxies are *reported*, not killed — without a recorded PID there
+   is no way to know a process is ours.
+4. ✅ **Teardown bug fixed** — `FranklinWHService` now distinguishes a proxy it spawned
+   from one it attached to. `disconnect()` only kills what it owns, so a one-shot
+   `get-battery-soc` no longer tears down the proxy a resident `start` owns.
+5. ✅ **`EADDRINUSE` and dependency errors** — `describeProxyExit` reads the traceback Flask
+   wrote to stderr and names the cause with the fixing command, replacing
+   `Proxy exited with code 1`. The 10s timeout reports the interpreter and port.
+6. ✅ **Interpreter resolution** — `.venv` → `$ECC_PYTHON` → `python3`, with the exact venv
+   fix printed on a missing dependency.
+7. ✅ **Already done in Phase 1** — `DEFAULT_CALLBACK_PORT` + `callbackPort` option, persisted
+   as `callbackPort`. Marked rather than redone.
 
-**Exit criteria:** `start`, new terminal, `exit` reliably leaves no stray `python3`; running
-`get-battery-soc` twice reuses a single proxy; killing the terminal leaves a state file that
-the next `exit` still cleans up.
+### Verified end to end, from a fresh process
+
+`exit` was run as its own process against a planted live PID: it stopped the process,
+confirmed it gone, and cleared the state file. The stale-PID path was exercised too.
+
+### One test had to be simulated rather than real
+
+The SIGKILL-escalation test originally spawned a process that ignores SIGTERM. That fixture
+was **unreliable under vitest** — a Node child with a `process.on('SIGTERM')` listener and a
+`trap '' TERM` subshell both exited, even though the trap works in a plain shell. Rather
+than keep a test whose outcome depends on runner signal scheduling, the escalation is
+driven through an injectable seam (`terminateProcessWith`) and asserts the signal sequence
+directly. Real-process behaviour is still covered by the "stops a live process" case.
+
+### Remaining for a human
+
+`start --daemon` → new terminal → `exit` needs a real proxy run with FranklinWH
+credentials. Everything above was verified without Python credentials.
+
+**Exit criteria:** ✅ `exit` reliably stops the proxy from a fresh process (verified);
+✅ one-shot commands no longer kill a resident proxy; ✅ killing the terminal leaves a state
+file the next `exit` cleans up (stale path verified); ⏳ `get-battery-soc` twice reusing a
+single proxy — logic verified by test, needs a live run to confirm end to end.
 
 ---
 

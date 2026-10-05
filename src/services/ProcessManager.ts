@@ -111,6 +111,16 @@ export function clearRuntimeState(): void {
   }
 }
 
+/** Injectable process-control seam, so the escalation can be tested deterministically. */
+export interface SignalDeps {
+  /** Whether the pid is still running. */
+  isAlive: (pid: number) => boolean;
+  /** Deliver a signal. Must not throw for a dead process. */
+  send: (pid: number, signal: NodeJS.Signals) => void;
+  /** Wait helper, injectable so tests need no real timers. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /**
  * Send a signal and wait for the process to actually disappear.
  *
@@ -120,29 +130,34 @@ export function clearRuntimeState(): void {
  * chance for cleanup, so nothing guarantees it is gone by the time the request
  * returns.
  */
-export async function terminateProcess(
+export async function terminateProcessWith(
   pid: number,
-  options: { graceMs?: number; pollMs?: number } = {}
+  options: { graceMs?: number; pollMs?: number } & Partial<SignalDeps> = {}
 ): Promise<'exited' | 'killed' | 'gone'> {
+  const isAlive = options.isAlive ?? isProcessAlive;
+  const send = options.send ?? ((target: number, signal: NodeJS.Signals) => {
+    process.kill(target, signal);
+  });
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const graceMs = options.graceMs ?? 5_000;
   const pollMs = options.pollMs ?? 100;
 
-  if (!isProcessAlive(pid)) return 'gone';
+  if (!isAlive(pid)) return 'gone';
 
   try {
-    process.kill(pid, 'SIGTERM');
+    send(pid, 'SIGTERM');
   } catch {
     return 'gone';
   }
 
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) return 'exited';
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    if (!isAlive(pid)) return 'exited';
+    await sleep(pollMs);
   }
 
   try {
-    process.kill(pid, 'SIGKILL');
+    send(pid, 'SIGKILL');
   } catch {
     return 'gone';
   }
@@ -151,8 +166,16 @@ export async function terminateProcess(
   // failure so the caller can report accurately.
   const killDeadline = Date.now() + 1_000;
   while (Date.now() < killDeadline) {
-    if (!isProcessAlive(pid)) return 'killed';
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    if (!isAlive(pid)) return 'killed';
+    await sleep(pollMs);
   }
   return 'killed';
+}
+
+/** terminateProcess against the real process table. */
+export function terminateProcess(
+  pid: number,
+  options: { graceMs?: number; pollMs?: number } = {}
+): Promise<'exited' | 'killed' | 'gone'> {
+  return terminateProcessWith(pid, options);
 }
