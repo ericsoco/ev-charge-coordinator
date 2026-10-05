@@ -483,11 +483,8 @@ program
   .action(async (options) => {
     console.log('Starting EV Charge Coordinator...\n');
 
-    // Reported per service rather than as a single verdict. The previous version
-    // printed an unconditional "✓ Services started successfully" and then, one
-    // line later, the accurate "Solar battery proxy: not running" -- so the banner
-    // contradicted the detail beside it. Each line states what actually happened
-    // for one service.
+    // Service status reported per service.
+    // Each line states what actually happened for one service.
     const franklin = await initializeFranklin();
     const tesla = await initializeTesla();
 
@@ -518,10 +515,6 @@ program
       writeRuntimeState({ pid: spawnedPid, port: DEFAULT_PROXY_PORT, startedAt: Date.now() });
     }
 
-    // No "✓ Services started successfully" banner here. The per-service lines
-    // above are the verdict, and an unconditional success line directly after a
-    // failure is how the earlier version told the user everything was fine when
-    // half of it was not.
     if (franklin.ok) {
       const pid = franklinService?.spawnedProxyPid;
       console.log(
@@ -540,17 +533,10 @@ program
     // orphan the proxy and defeat the point of the flag.
     if (options.daemon) {
       // Only advertise `exit` when it would actually have something to stop.
-      // Telling the user to run a command that reports "Nothing to stop" is
-      // worse than saying nothing: the earlier version printed this
-      // unconditionally, on a run where `exit` had already been shown to find
-      // nothing.
       if (spawnedPid) {
         console.log('Running in the background. Stop with: node dist/index.js exit');
       } else {
-        console.log(
-          'Running in the background. The solar battery proxy is not running, so\n' +
-            '  `exit` has nothing to stop.'
-        );
+        console.log('The solar battery proxy is not running, so `exit` has nothing to stop.');
       }
       await keepResident();
       return;

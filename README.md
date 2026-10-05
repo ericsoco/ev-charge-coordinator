@@ -178,25 +178,6 @@ request and a configured telemetry server. To confirm afterwards, run a command;
 vehicle that rejects the key answers
 `your public key has not been paired with the vehicle`.
 
-### `start` reports each service separately
-
-`start` prints one line per service and nothing else, so a partial failure cannot
-read as success:
-
-```
-✓ Tesla service started successfully
-✗ FranklinWH service not started. Error: HTTP 500 — FranklinWH's service returned an internal error (not a credentials problem)
-```
-
-Failures are reported in one line. `--debug` (or `ECC_DEBUG=1`) adds the full stack
-trace and the raw upstream response body underneath.
-
-A `5xx` from FranklinWH names the upstream as the cause rather than suggesting the
-credentials were wrong — their service being down says nothing about your password.
-
-`start --daemon` only tells you to run `exit` when there is actually a proxy for it
-to stop.
-
 ### FranklinWH Setup
 
 1. You need your FranklinWH account credentials (email/password)
