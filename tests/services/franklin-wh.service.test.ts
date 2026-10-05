@@ -7,7 +7,11 @@
  *
  * startProxy() is never exercised: it spawns `python3 ../../python/franklin_proxy.py`.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import type { AxiosInstance } from 'axios';
 import { FranklinWHService } from '../../src/services/FranklinWHService.js';
 
 interface RecordedCall {
@@ -304,5 +308,96 @@ describe('FranklinWHService - shutdown', () => {
 
     expect(killed).toBe('SIGTERM');
     expect(calls).toEqual([{ method: 'post', url: '/shutdown' }]);
+  });
+});
+
+describe('FranklinWHService proxy lifecycle when authentication is rejected', () => {
+  // `initialize()` spawns the proxy BEFORE authenticating, so a wrong password used
+  // to leave the child running. The CLI's error path then set the service to null,
+  // discarding the only handle to it -- so the orphan kept listening on the port
+  // with no runtime.json recording it. `exit` was then correct to report nothing to
+  // stop while a stray Python process survived.
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-franklin-auth-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Service whose /health and /auth are stubbed; records the URLs requested. */
+  function serviceWithAuthFailure() {
+    const service = new FranklinWHService(3999);
+    const calls: string[] = [];
+    const client = (service as unknown as { client: AxiosInstance }).client;
+    client.defaults.adapter = async (config) => {
+      const url = config.url ?? '';
+      calls.push(url);
+      const reply = (data: unknown): never => ({
+        status: 200,
+        statusText: 'OK',
+        data,
+        headers: {},
+        config,
+      }) as never;
+      if (url === '/health') {
+        // Healthy: attachOrStartProxy() therefore takes the "someone else owns it"
+        // path instead of spawning, which is what the attached-proxy case needs.
+        return reply({ status: 'ok' });
+      }
+      if (url === '/auth') {
+        // What the proxy answers for a wrong password.
+        return reply({ success: false, error: 'Invalid credentials' });
+      }
+      return { status: 404, statusText: 'Not Found', data: {}, headers: {}, config };
+    };
+    return { service, calls };
+  }
+
+  /** Pretend a spawn already happened, with an observable child handle. */
+  function pretendSpawned(service: FranklinWHService): { wasKilled: () => boolean } {
+    let killed = false;
+    const internals = service as unknown as {
+      attachedToExistingProxy: boolean;
+      ownsProxyProcess: boolean;
+      proxyProcess: unknown;
+    };
+    internals.attachedToExistingProxy = false;
+    internals.ownsProxyProcess = true;
+    internals.proxyProcess = {
+      kill: () => {
+        killed = true;
+      },
+    };
+    return { wasKilled: () => killed };
+  }
+
+  it('stops the child it spawned when authentication is rejected', async () => {
+    const { service } = serviceWithAuthFailure();
+    const child = pretendSpawned(service);
+
+    await expect(
+      service.initialize({ username: 'u@example.com', password: 'wrong', gatewayId: 'GW1' })
+    ).rejects.toThrow(/Invalid credentials/);
+
+    // Nobody else knows about this child, so leaving it running orphans a process
+    // that `exit` can never reach.
+    expect(child.wasKilled()).toBe(true);
+  });
+
+  it('leaves a proxy it did not start alone when authentication is rejected', async () => {
+    const { service, calls } = serviceWithAuthFailure();
+    const internals = service as unknown as { attachedToExistingProxy: boolean };
+    // Attached to somebody else's healthy proxy: stopping it would break the
+    // `start` that owns it.
+    internals.attachedToExistingProxy = true;
+
+    await expect(
+      service.initialize({ username: 'u@example.com', password: 'wrong', gatewayId: 'GW1' })
+    ).rejects.toThrow(/Invalid credentials/);
+
+    expect(calls).not.toContain('/shutdown');
   });
 });

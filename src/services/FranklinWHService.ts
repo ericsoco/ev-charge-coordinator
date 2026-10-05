@@ -315,17 +315,32 @@ export class FranklinWHService implements BatteryService {
   async initialize(credentials: BatteryCredentials): Promise<void> {
     // Ensure a proxy is running, and record whether we own it so that
     // disconnect() can leave someone else's proxy running.
-    await this.attachOrStartProxy();
+    const started = await this.attachOrStartProxy();
 
-    // Authenticate with the proxy
-    const response = await this.client.post('/auth', {
-      username: credentials.username,
-      password: credentials.password,
-      gateway_id: credentials.gatewayId
-    });
+    // Authenticate with the proxy.
+    //
+    // The proxy is already running by this point, so a failure here -- a wrong
+    // password above all -- used to leak it: the ChildProcess handle was the only
+    // reference to the child, and the CLI's error path then discarded the whole
+    // service. The orphan kept listening on the port with no runtime.json
+    // recording it, so `exit` correctly reported nothing to stop while a stray
+    // Python process survived. If *we* started it and authentication fails, the
+    // child is of no use to anyone, so stop it before propagating the error.
+    try {
+      const response = await this.client.post('/auth', {
+        username: credentials.username,
+        password: credentials.password,
+        gateway_id: credentials.gatewayId
+      });
 
-    if (!response.data.success) {
-      throw new Error(response.data.error || 'Authentication failed');
+      if (!response.data.success) {
+        throw new Error(response.data.error || 'Authentication failed');
+      }
+    } catch (error) {
+      if (started === 'spawned') {
+        await this.stopProxy();
+      }
+      throw error;
     }
 
     this.authenticated = true;

@@ -344,6 +344,25 @@ terminal → `exit` round trip still needs one human run against a real proxy.**
 `exit` was run as its own process against a planted live PID: it stopped the process,
 confirmed it gone, and cleared the state file. The stale-PID path was exercised too.
 
+### Bug found by using it: a wrong password leaked a proxy
+
+The first real `start --daemon` run failed FranklinWH auth (wrong password) and left a
+Python proxy listening on port 3001 that `exit` could not reach. Root cause:
+
+1. `initialize()` spawns the proxy **before** authenticating, so the child already
+   existed when `/auth` was rejected.
+2. The CLI's catch block set `franklinService = null`, discarding the only handle to
+   that child. That line predates Phase 2, but adding `spawnedProxyPid` made it
+   consequential: before, a leaked process was untidy; now it defeats `exit`.
+3. `start` then found no PID to record, so no `runtime.json` was written — and `exit`
+   was **correct** to report nothing to stop.
+
+Fixed by rolling back the proxy `initialize()` itself spawned when auth fails (leaving a
+proxy it merely *attached* to alone), and by no longer discarding the service on the
+error path. `start` now also warns when something holds port 3001 with no state file
+recording it, so an orphan is visible rather than silent. The regression test was verified
+to fail when the rollback is removed.
+
 ### One test had to be simulated rather than real
 
 The SIGKILL-escalation test originally spawned a process that ignores SIGTERM. That fixture
