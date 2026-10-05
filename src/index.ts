@@ -231,21 +231,37 @@ async function prompt(question: string): Promise<string> {
 }
 
 /**
- * The intent of having promptPassword separate from prompt is be able to
- * hide the password input in the terminal. LLM provided a borked implementation,
- * so this is a placeholder for now.
- * 
- * TODO: try a lib like 'readline-sync' or 'inquirer' to handle hidden input properly.
+ * Prompt for a secret with the input masked.
+ *
+ * The previous implementation was a readline placeholder that echoed whatever was
+ * typed, which put passwords and client secrets on screen and into terminal
+ * scrollback. inquirer is already a dependency and has native ESM support; it is
+ * imported lazily so a non-interactive run (and the test suite, which never
+ * reaches a TTY) does not pay to load it.
+ *
+ * If inquirer cannot be loaded the fallback warns that it is unmasked rather than
+ * silently echoing a secret.
  */
 async function promptPassword(question: string): Promise<string> {
-  const rl = createReadline();
-
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer);
+  try {
+    const { default: inquirer } = await import('inquirer');
+    const answer = await inquirer.prompt([
+      { type: 'password', name: 'secret', message: question },
+    ]);
+    return String(answer.secret ?? '');
+  } catch (error) {
+    console.warn(
+      `Warning: could not mask the prompt (${error instanceof Error ? error.message : error});` +
+        '\n  falling back to an UNMASKED prompt.'
+    );
+    const rl = createReadline();
+    return new Promise((resolve) => {
+      rl.question(question, (answer) => {
+        rl.close();
+        resolve(answer);
+      });
     });
-  });
+  }
 }
 
 async function initializeFranklin(): Promise<ServiceStart> {
