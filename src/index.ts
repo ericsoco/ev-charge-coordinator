@@ -26,6 +26,7 @@ import { resolveRegion } from './services/tesla/endpoints.js';
 import { credentialStore } from './utils/credentials.js';
 
 import {
+  describeError,
   MAX_EV_CHARGE_LIMIT,
   MIN_EV_CHARGE_LIMIT,
   type CommandContext,
@@ -53,28 +54,6 @@ import {
 /** Loopback port the Python proxy listens on. Mirrors FranklinWHService's default. */
 const DEFAULT_PROXY_PORT = 3001;
 
-/**
- * Print the PID and port actually in use, so `start` tells the user something they
- * can act on rather than a bare "started successfully".
- */
-function reportResolvedProcesses(
-  franklin: FranklinWHService | null,
-  tesla: TeslaService | null
-): void {
-  if (franklin?.isAuthenticated()) {
-    const pid = franklin.spawnedProxyPid;
-    if (pid) {
-      console.log(`  Solar battery proxy: pid ${pid}, port ${DEFAULT_PROXY_PORT} (started here)`);
-    } else {
-      console.log(
-        `  Solar battery proxy: port ${DEFAULT_PROXY_PORT} (already running, reused)`
-      );
-    }
-  } else {
-    console.log('  Solar battery proxy: not running');
-  }
-  console.log(`  EV: ${tesla?.isAuthenticated() ? '✓ authenticated' : '✗ not authenticated'}`);
-}
 
 /**
  * Stay alive without a prompt, for `start --daemon`.
@@ -105,6 +84,28 @@ function reportOrphanedProxy(): void {
     `If a proxy is still listening on port ${DEFAULT_PROXY_PORT}, stop it with:\n` +
       `  lsof -ti tcp:${DEFAULT_PROXY_PORT} | xargs kill`
   );
+}
+
+/**
+ * Print the stack trace and raw upstream body for a failed service, under --debug.
+ *
+ * The one-line form deliberately drops detail, so `--debug` is the only way to see
+ * what the upstream actually said. In the case that prompted this, the useful
+ * detail (a 502 URL from FranklinWH's cloud) was buried several levels down a
+ * printed AxiosError while the actionable line above it said only "failed".
+ */
+function reportDebugDetails(debug: boolean | undefined, cause: unknown): void {
+  if (!debug || cause === undefined || cause === null) return;
+  const error = cause as Error & { response?: { status?: number; data?: unknown } };
+  console.error('  --- debug ---');
+  if (error.stack) {
+    console.error(error.stack);
+  } else {
+    console.error(String(cause));
+  }
+  if (error.response?.status !== undefined) {
+    console.error(`  HTTP ${error.response.status} body: ${JSON.stringify(error.response.data)}`);
+  }
 }
 
 /**
@@ -151,6 +152,63 @@ function isProxyPortOpen(port: number, timeoutMs = 500): Promise<boolean> {
   });
 }
 
+/**
+ * Outcome of starting a service.
+ *
+ * These initializers used to return a bare boolean and print any failure as a
+ * side effect, which meant the caller had nothing to report: `start` printed an
+ * unconditional "✓ Services started successfully" even when one service had failed
+ * outright, and told the user to run `exit` when there was nothing to stop. Carrying
+ * the error lets the caller state what actually happened per service.
+ *
+ * `cause` is the original thrown value, kept for `--debug` output. The `error`
+ * string is the one-line form and must not contain a stack trace.
+ */
+export type ServiceStart =
+  | { ok: true }
+  | { ok: false; error: string; cause?: unknown };
+
+/**
+ * Describe a FranklinWH startup failure in one line.
+ *
+ * The failure arrives from the local Python proxy, which wraps upstream
+ * exceptions with its own HTTP status. What matters to the user is whether the
+ * problem is theirs -- credentials, gateway id -- or FranklinWH's outage. A 5xx is
+ * emphatically the latter, and saying so stops the retry loop of retyping a
+ * password that was never wrong.
+ *
+ * The upstream detail is kept out of the one-line form only in the sense that it
+ * is not printed *first*: `--debug` shows the stack and the raw body, which is
+ * where the real message was buried last time.
+ */
+function describeFranklinFailure(error: unknown): ServiceStart {
+  const axiosError = error as {
+    response?: { status?: number; data?: { error?: unknown; details?: unknown } };
+  };
+  const status = axiosError?.response?.status;
+  const body = axiosError?.response?.data;
+
+  if (typeof status === 'number' && status >= 500) {
+    return {
+      ok: false,
+      error: `HTTP ${status} — FranklinWH's service returned an internal error (not a credentials problem)`,
+      cause: error,
+    };
+  }
+  if (typeof status === 'number') {
+    const detail =
+      typeof body?.error === 'string' ? body.error : describeError(error) || 'request failed';
+    return { ok: false, error: `HTTP ${status} — ${detail}`, cause: error };
+  }
+
+  return { ok: false, error: describeError(error) || 'authentication failed', cause: error };
+}
+
+/** Tesla equivalent: the errors are already mapped to advice by describeTeslaError. */
+function describeTeslaFailure(error: unknown): ServiceStart {
+  return { ok: false, error: describeError(error) || 'authentication failed', cause: error };
+}
+
 const program = new Command();
 let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
@@ -190,12 +248,13 @@ async function promptPassword(question: string): Promise<string> {
   });
 }
 
-async function initializeFranklin(): Promise<boolean> {
+async function initializeFranklin(): Promise<ServiceStart> {
   if (franklinService?.isAuthenticated()) {
-    return true;
+    return { ok: true };
   }
 
   const stored = await credentialStore.getFranklinCredentials();
+  let lastFailure: ServiceStart | null = null;
   
   if (stored) {
     console.log('Using stored FranklinWH credentials...');
@@ -207,9 +266,8 @@ async function initializeFranklin(): Promise<boolean> {
         gatewayId: stored.gatewayId
       });
       console.log('✓ Connected to FranklinWH');
-      return true;
+      return { ok: true };
     } catch (error) {
-      console.error('Failed to connect with stored credentials:', error);
       // Deliberately NOT `franklinService = null`. That discarded the only
       // reference to a proxy that initialize() may have just spawned, leaving an
       // orphan listening on the port with no runtime.json recording it -- so
@@ -217,10 +275,18 @@ async function initializeFranklin(): Promise<boolean> {
       // the instance means a later disconnect() can still clean up, and the retry
       // below replaces it anyway.
       await franklinService.disconnect().catch(() => undefined);
+      lastFailure = describeFranklinFailure(error);
     }
   }
 
   console.log('\nFranklinWH authentication required.');
+  // Same as the Tesla path: the stored attempt already failed, so say why before
+  // prompting. Without this the only trace of the real cause was buried in a
+  // stack trace further up.
+  if (lastFailure && !lastFailure.ok) {
+    console.log(`Stored credentials did not work: ${lastFailure.error}`);
+    reportDebugDetails(process.env.ECC_DEBUG === '1', lastFailure.cause);
+  }
   const username = await prompt('Email: ');
   const password = await promptPassword('Password: ');
   const gatewayId = await prompt('Gateway ID (found in app under More -> Site Devices): ');
@@ -236,23 +302,25 @@ async function initializeFranklin(): Promise<boolean> {
     }
 
     console.log('✓ Connected to FranklinWH');
-    return true;
+    return { ok: true };
   } catch (error) {
-    console.error('Authentication failed:', error);
     // Same reasoning as above: disconnect() only stops a proxy this instance
     // spawned, so this cannot kill somebody else's.
     await franklinService.disconnect().catch(() => undefined);
     franklinService = null;
-    return false;
+    // A failure while retrying interactively supersedes the stored-credentials
+    // attempt: it is the latest thing the user actually did.
+    return describeFranklinFailure(error);
   }
 }
 
-async function initializeTesla(): Promise<boolean> {
+async function initializeTesla(): Promise<ServiceStart> {
   if (teslaService?.isAuthenticated()) {
-    return true;
+    return { ok: true };
   }
 
   const stored = await credentialStore.getTeslaCredentials();
+  let lastFailure: ServiceStart | null = null;
   
   // A stored refresh token can be used to refresh the session without any
   // interaction, so the only genuinely missing piece may be the client ID/secret.
@@ -283,14 +351,20 @@ async function initializeTesla(): Promise<boolean> {
       }
       
       console.log('✓ Connected to Tesla');
-      return true;
+      return { ok: true };
     } catch (error) {
-      console.error('Failed to connect with stored credentials:', error);
+      lastFailure = describeTeslaFailure(error);
       teslaService = null;
     }
   }
 
   console.log('\nTesla Fleet API authentication required.');
+  // The stored attempt already failed; say why before prompting, so a user with
+  // genuinely bad stored credentials is not silently asked for them again.
+  if (lastFailure && !lastFailure.ok) {
+    console.log(`Stored credentials did not work: ${lastFailure.error}`);
+    reportDebugDetails(process.env.ECC_DEBUG === '1', lastFailure.cause);
+  }
   console.log('You need a Tesla Developer account with a registered application.');
   console.log('Visit https://developer.tesla.com to create one.');
   if (needsClientCredentials) {
@@ -348,14 +422,14 @@ async function initializeTesla(): Promise<boolean> {
           '  from signing in -- setting an Allowed Origin does not do it either.\n'
       );
       console.log('  Next: node dist/index.js pair-tesla-key --domain <your-domain>');
-      return true;
+      return { ok: true };
     }
 
     // List vehicles and let user select
     const vehicles = await teslaService.listVehicles();
     if (vehicles.length === 0) {
       console.log('No vehicles found in your Tesla account.');
-      return false;
+      return { ok: false, error: 'No vehicles found in this Tesla account.' };
     }
     
     console.log('\nAvailable vehicles:');
@@ -372,7 +446,7 @@ async function initializeTesla(): Promise<boolean> {
       const index = parseInt(selection) - 1;
       if (index < 0 || index >= vehicles.length) {
         console.log('Invalid selection');
-        return false;
+        return { ok: false, error: 'Invalid vehicle selection' };
       }
       selectedVin = vehicles[index].vin;
     }
@@ -386,11 +460,12 @@ async function initializeTesla(): Promise<boolean> {
     await credentialStore.setTeslaVin(selectedVin);
 
     console.log('✓ Connected to Tesla');
-    return true;
+    return { ok: true };
   } catch (error) {
-    console.error('Authentication failed:', error);
     teslaService = null;
-    return false;
+    // An interactive failure supersedes any earlier stored-credentials attempt:
+    // it is the latest thing the user actually did.
+    return describeTeslaFailure(error);
   }
 }
 
@@ -404,17 +479,32 @@ program
   .command('start')
   .description('Start the Python API proxy and NodeJS server')
   .option('--daemon', 'Stay resident without the interactive prompt')
+  .option('--debug', 'Print full stack traces for service startup failures')
   .action(async (options) => {
     console.log('Starting EV Charge Coordinator...\n');
 
-    if (!(await initializeFranklin())) {
-      console.log('Warning: FranklinWH service not available');
+    // Reported per service rather than as a single verdict. The previous version
+    // printed an unconditional "✓ Services started successfully" and then, one
+    // line later, the accurate "Solar battery proxy: not running" -- so the banner
+    // contradicted the detail beside it. Each line states what actually happened
+    // for one service.
+    const franklin = await initializeFranklin();
+    const tesla = await initializeTesla();
+
+    if (tesla.ok) {
+      console.log('✓ Tesla service started successfully');
+    } else {
+      console.log(`✗ Tesla service not started. Error: ${tesla.error}`);
+      reportDebugDetails(options.debug, tesla.cause);
     }
-    if (!(await initializeTesla())) {
-      console.log('Warning: Tesla service not available');
+    if (franklin.ok) {
+      console.log('✓ FranklinWH service started successfully');
+    } else {
+      console.log(`✗ FranklinWH service not started. Error: ${franklin.error}`);
+      reportDebugDetails(options.debug, franklin.cause);
     }
 
-    if (!franklinService?.isAuthenticated() && !teslaService?.isAuthenticated()) {
+    if (!franklin.ok && !tesla.ok) {
       console.log('\nNo services available. Exiting.');
       process.exitCode = 1;
       return;
@@ -428,8 +518,20 @@ program
       writeRuntimeState({ pid: spawnedPid, port: DEFAULT_PROXY_PORT, startedAt: Date.now() });
     }
 
-    console.log('\n✓ Services started successfully');
-    reportResolvedProcesses(franklinService, teslaService);
+    // No "✓ Services started successfully" banner here. The per-service lines
+    // above are the verdict, and an unconditional success line directly after a
+    // failure is how the earlier version told the user everything was fine when
+    // half of it was not.
+    if (franklin.ok) {
+      const pid = franklinService?.spawnedProxyPid;
+      console.log(
+        pid
+          ? `  Solar battery proxy: pid ${pid}, port ${DEFAULT_PROXY_PORT} (started here)`
+          : `  Solar battery proxy: port ${DEFAULT_PROXY_PORT} (already running, reused)`
+      );
+    } else {
+      console.log('  Solar battery proxy: not running');
+    }
     await warnAboutUntrackedProxy(spawnedPid);
     console.log('Type "help" for available commands or "exit" to quit.\n');
 
@@ -437,7 +539,19 @@ program
     // backgrounded and `exit` run from another terminal. Exiting instead would
     // orphan the proxy and defeat the point of the flag.
     if (options.daemon) {
-      console.log('Running in the background. Stop with: node dist/index.js exit');
+      // Only advertise `exit` when it would actually have something to stop.
+      // Telling the user to run a command that reports "Nothing to stop" is
+      // worse than saying nothing: the earlier version printed this
+      // unconditionally, on a run where `exit` had already been shown to find
+      // nothing.
+      if (spawnedPid) {
+        console.log('Running in the background. Stop with: node dist/index.js exit');
+      } else {
+        console.log(
+          'Running in the background. The solar battery proxy is not running, so\n' +
+            '  `exit` has nothing to stop.'
+        );
+      }
       await keepResident();
       return;
     }

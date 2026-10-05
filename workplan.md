@@ -363,6 +363,31 @@ error path. `start` now also warns when something holds port 3001 with no state 
 recording it, so an orphan is visible rather than silent. The regression test was verified
 to fail when the rollback is removed.
 
+### `start` reporting was wrong, found by running it
+
+`start` printed an unconditional `✓ Services started successfully` and then, one line
+later, the accurate `Solar battery proxy: not running` — the banner contradicted the
+detail beside it. It also printed `Stop with: node dist/index.js exit` on a run where
+`exit` had already been shown to find nothing. The gate was `&&`, so "either service
+down" only exited when *both* were.
+
+Now one line per service, and `exit` is only advertised when a PID was recorded.
+`--debug` (or `ECC_DEBUG=1`) adds the stack trace and raw body.
+
+Verified against the live outage that prompted it — FranklinWH's backend returning
+500 for three consecutive requests while their site root returned 200:
+
+```
+Stored credentials did not work: HTTP 500 — FranklinWH's service returned an internal error (not a credentials problem)
+```
+
+with `ECC_DEBUG=1` adding the 11-line trace underneath.
+
+**A lesson about the tests here.** The first version of the reporting test mirrored
+the rendering logic and passed — while the bug was still live, because the mirror had
+drifted from the code. The tests now assert against `src/index.ts` directly. Both were
+verified by reintroducing each bug and confirming a failure.
+
 ### One test had to be simulated rather than real
 
 The SIGKILL-escalation test originally spawned a process that ignores SIGTERM. That fixture
