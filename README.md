@@ -370,6 +370,25 @@ The architecture is designed to be extensible. To add support for a new EV or ba
 
 ## Troubleshooting
 
+### FranklinWH Authentication
+
+A wrong password and a FranklinWH outage look identical from the CLI: every
+exception in `python/franklin_proxy.py`'s handler is flattened to HTTP 500, so both
+arrive as `Internal error`. To tell them apart:
+
+```bash
+npm run check:franklin -- --email you@example.com
+```
+
+This calls the real library and reports the exception type, which separates an
+`InvalidCredentialsException` (your credentials) from a gateway error (FranklinWH's
+outage). Add `--gateway-id` to exercise the gateway too. It exits non-zero on
+failure, so it works as a check in a script.
+
+Passwords and client secrets are prompted for without echo — they never appear on
+screen or in terminal scrollback. If the masking library cannot be loaded, the
+prompt says so rather than echoing silently.
+
 ### Tesla Authentication Issues
 
 - Ensure your Tesla Developer application has the correct scopes enabled
