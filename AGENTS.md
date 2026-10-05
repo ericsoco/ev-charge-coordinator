@@ -43,3 +43,13 @@ Do not push the branch to remote; keep it local and let user check and land chan
 ## Adding New Systems
 1. Implement `BatteryService` or `EVService` interface
 2. Add service to CLI commands in `src/index.ts`
+
+## Handling state
+Prefer stateless architectures / implementations whenever possible.
+When business logic seems to require storing state, verify the approach with the human developer
+with clear reasoning and a detailed description of the proposed approach.
+
+## Comments
+Keep inline comments succinct.
+Do not clutter inline comments with information about previous implementations;
+this historical information can be left in the workplan if valuable.
