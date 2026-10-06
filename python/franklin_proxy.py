@@ -10,6 +10,9 @@ import asyncio
 import json
 import os
 import sys
+import threading
+import time
+import traceback
 from functools import wraps
 
 from flask import Flask, jsonify, request
@@ -38,13 +41,68 @@ _token_fetcher: TokenFetcher | None = None
 _gateway_id: str | None = None
 
 
+# One event loop for the proxy's lifetime.
+#
+# run_async used to create and close a fresh loop per request. franklinwh's
+# Client holds an httpx.AsyncClient whose pooled connections and anyio state
+# are bound to the loop that created them, so once a connection was warmed up
+# on one loop, the next request under a *new* loop raised
+# `RuntimeError: Event loop is closed` -- the proxy answered HTTP 500 even
+# though nothing was wrong upstream (seen live: first get-battery-soc ok,
+# second 500). Keeping one loop, never closed while the process lives, keeps
+# that state valid. The lock serializes access because Flask's dev server
+# handles requests on different threads and a loop must not run concurrently.
+_loop: asyncio.AbstractEventLoop | None = None
+_loop_lock = threading.Lock()
+
+
 def run_async(coro):
     """Run an async coroutine in a synchronous context."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    global _loop
+    with _loop_lock:
+        if _loop is None or _loop.is_closed():
+            _loop = asyncio.new_event_loop()
+        return _loop.run_until_complete(coro)
+
+
+# Mapped exceptions: they already translate to honest HTTP statuses below, and
+# they answer the same way every time -- retrying a wrong password or a locked
+# account only delays the truth (and counts toward Franklin's lockout).
+_DETERMINISTIC_ERRORS = (
+    InvalidCredentialsException,
+    AccountLockedException,
+    DeviceTimeoutException,
+    GatewayOfflineException,
+)
+
+
+def run_read(factory, attempts=3, delays=(0.5, 1.5)):
+    """Run a read-only FranklinWH call, retrying transient upstream failures.
+
+    Franklin's cloud answers HTTP 200 with `result: null` when the gateway has
+    no data ready; franklinwh then raises TypeError('NoneType' object is not
+    subscriptable) and the request surfaces as a 500. Seen live: consecutive
+    /soc calls alternating 200/500 against the same proxy -- and reproduced
+    with a bare franklinwh client, so it is upstream, not this proxy. Reads are
+    idempotent, so a couple of short retries turn most of those into successes;
+    anything deterministic (the four mapped exceptions) and any final failure
+    are raised unchanged for handle_franklin_errors to report.
+    """
+    for index in range(attempts):
+        if index:
+            time.sleep(delays[index - 1])
+        try:
+            return run_async(factory())
+        except _DETERMINISTIC_ERRORS:
+            raise
+        except Exception as error:
+            if index == attempts - 1:
+                raise
+            print(
+                f"franklinwh read failed (attempt {index + 1}/{attempts}): "
+                f"{type(error).__name__}: {error}; retrying",
+                file=sys.stderr,
+            )
 
 
 def require_client(f):
@@ -72,6 +130,12 @@ def handle_franklin_errors(f):
         except GatewayOfflineException as e:
             return jsonify({"error": "Gateway offline", "details": str(e)}), 503
         except Exception as e:
+            # This catch runs before Flask would log anything, so without this
+            # the traceback -- which line of franklinwh actually failed -- never
+            # reaches stderr and a 500 is undiagnosable after the fact. Node
+            # forwards stderr live as [proxy] lines, so this is what makes the
+            # failure visible from the CLI. `details` in the body only has str(e).
+            traceback.print_exc(file=sys.stderr)
             return jsonify({"error": "Internal error", "details": str(e)}), 500
     return decorated
 
@@ -135,8 +199,8 @@ def get_stats():
     
     Returns current power values and daily totals.
     """
-    stats = run_async(_client.get_stats())
-    
+    stats = run_read(_client.get_stats)
+
     return jsonify({
         "current": {
             "solar_production": stats.current.solar_production,
@@ -172,7 +236,7 @@ def get_stats():
 @handle_franklin_errors
 def get_soc():
     """Get the current battery state of charge."""
-    stats = run_async(_client.get_stats())
+    stats = run_read(_client.get_stats)
     
     return jsonify({
         "battery_soc": stats.current.battery_soc
@@ -184,7 +248,7 @@ def get_soc():
 @handle_franklin_errors
 def get_mode():
     """Get the current operating mode."""
-    mode_name, soc = run_async(_client.get_mode())
+    mode_name, soc = run_read(_client.get_mode)
     
     return jsonify({
         "mode": mode_name,
@@ -235,7 +299,7 @@ def set_mode():
 @handle_franklin_errors
 def get_composite_info():
     """Get composite information about the gateway."""
-    info = run_async(_client.get_composite_info())
+    info = run_read(_client.get_composite_info)
     return jsonify(info)
 
 
@@ -244,7 +308,7 @@ def get_composite_info():
 @handle_franklin_errors
 def get_gateways():
     """Get list of home gateways associated with the account."""
-    gateways = run_async(_client.get_home_gateway_list())
+    gateways = run_read(_client.get_home_gateway_list)
     return jsonify({"gateways": gateways})
 
 
