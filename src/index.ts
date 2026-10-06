@@ -15,7 +15,7 @@ import { Command } from 'commander';
 import axios from 'axios';
 import { createConnection } from 'node:net';
 import { createInterface } from 'node:readline';
-import { FranklinWHService, TeslaService } from './services/index.js';
+import { FranklinWHService, ProxyStartupError, setProxyLogSink, TeslaService } from './services/index.js';
 import type { ConsentState } from './services/TeslaService.js';
 import {
   normalizeDomain,
@@ -32,6 +32,7 @@ import {
   type CommandContext,
   type CommandResult,
 } from './commands/context.js';
+import { completeCommand, renderHelp } from './commands/repl.js';
 import {
   chargeFromBattery,
   getBatterySoc,
@@ -213,10 +214,18 @@ const program = new Command();
 let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
 
-function createReadline() {
+/**
+ * A readline for one-off questions, or -- with a completer -- the REPL prompt.
+ *
+ * Tab completion comes from readline's `completer` hook (no package needed);
+ * arrow-key history is built into node:readline already. Value prompts pass no
+ * completer, so a stray Tab cannot splice a command name into an answer.
+ */
+function createReadline(options: { completer?: (line: string) => [string[], string] } = {}) {
   return createInterface({
     input: process.stdin,
-    output: process.stdout
+    output: process.stdout,
+    ...(options.completer ? { completer: options.completer } : {})
   });
 }
 
@@ -291,6 +300,12 @@ async function initializeFranklin(): Promise<ServiceStart> {
       // the instance means a later disconnect() can still clean up, and the retry
       // below replaces it anyway.
       await franklinService.disconnect().catch(() => undefined);
+      if (error instanceof ProxyStartupError) {
+        // The proxy never came up -- a port conflict, missing Python deps --
+        // which is not a credentials problem. Retrying the password cannot fix
+        // it, so return the failure instead of falling through to the prompt.
+        return { ok: false, error: describeError(error), cause: error };
+      }
       lastFailure = describeFranklinFailure(error);
     }
   }
@@ -559,26 +574,24 @@ program
     }
 
     // Interactive command loop
-    const rl = createReadline();
-    
+    const rl = createReadline({ completer: completeCommand });
+
+    // A [proxy] line can arrive while the prompt is on screen; write it, then
+    // re-render the prompt so the line never lands inside the prompt text.
+    let awaitingInput = false;
+    const renderProxyLog = (text: string): void => {
+      console.log(text);
+      if (awaitingInput) rl.prompt(true);
+    };
+    setProxyLogSink(renderProxyLog);
+
     const handleCommand = async (input: string) => {
+      awaitingInput = false;
       const cmd = input.trim().toLowerCase();
       
       switch (cmd) {
         case 'help':
-          console.log(`
-Available commands:
-  authenticate         Sign in to Tesla and store the credentials
-  get-ev-bsoc         Get the current battery state of charge from the EV
-  get-battery-soc     Get the current battery state of charge from the solar battery
-  set-ev-charge-limit Set the EV's charge limit
-  start-ev-charging   Start charging the EV
-  stop-ev-charging    Stop charging the EV
-  charge-from-battery Set the EV charge limit based on solar battery SoC
-  set-battery-buffer  Set the amount of charge to keep in the solar battery
-  status              Show current status of all systems
-  exit                Exit the application
-`);
+          console.log(renderHelp());
           break;
           
         case 'authenticate':
@@ -651,15 +664,22 @@ Available commands:
           console.log(`Unknown command: ${cmd}. Type "help" for available commands.`);
       }
       
+      awaitingInput = true;
       rl.prompt();
     };
-    
+
     rl.setPrompt('ev-charge> ');
+    awaitingInput = true;
     rl.prompt();
     
     rl.on('line', handleCommand);
     
     rl.on('close', async () => {
+      // No more prompts to redraw, and the default console sink is fine once
+      // the interface is gone -- calling prompt() on a closed readline would not
+      // be.
+      awaitingInput = false;
+      setProxyLogSink(null);
       console.log('\nShutting down...');
 
       // disconnect() only stops a proxy this process spawned, so quitting a REPL
@@ -761,13 +781,26 @@ async function runCommand(
   }
 }
 
+/**
+ * One-shot commands: report a failed initialization and stop.
+ *
+ * The old guards negated the awaited initializer result directly, which can
+ * never fire: both initializers return a ServiceStart *object*, and every
+ * object is truthy -- so the check beneath them was dead code. Failures fell
+ * through into the command handler instead, and on one path into
+ * `franklinService!.disconnect()` with a null service.
+ */
+function requireService(name: 'Tesla' | 'FranklinWH', init: ServiceStart): void {
+  if (init.ok) return;
+  console.log(`✗ ${name} service not started. Error: ${init.error}`);
+  process.exit(1);
+}
+
 program
   .command('get-ev-bsoc')
   .description('Get the current battery state of charge from the EV')
   .action(async () => {
-    if (!(await initializeTesla())) {
-      process.exit(1);
-    }
+    requireService('Tesla', await initializeTesla());
     await runCommand(getEvBatterySoc);
   });
 
@@ -775,9 +808,7 @@ program
   .command('get-battery-soc')
   .description('Get the current battery state of charge from the solar battery')
   .action(async () => {
-    if (!(await initializeFranklin())) {
-      process.exit(1);
-    }
+    requireService('FranklinWH', await initializeFranklin());
     try {
       await runCommand(getBatterySoc);
     } finally {
@@ -798,9 +829,7 @@ program
       process.exit(1);
     }
 
-    if (!(await initializeTesla())) {
-      process.exit(1);
-    }
+    requireService('Tesla', await initializeTesla());
     await runCommand((ctx) => setEvChargeLimit(ctx, limit));
   });
 
@@ -808,9 +837,7 @@ program
   .command('start-ev-charging')
   .description('Start charging the EV')
   .action(async () => {
-    if (!(await initializeTesla())) {
-      process.exit(1);
-    }
+    requireService('Tesla', await initializeTesla());
     await runCommand(startEvCharging);
   });
 
@@ -818,9 +845,7 @@ program
   .command('stop-ev-charging')
   .description('Stop charging the EV')
   .action(async () => {
-    if (!(await initializeTesla())) {
-      process.exit(1);
-    }
+    requireService('Tesla', await initializeTesla());
     await runCommand(stopEvCharging);
   });
 
@@ -828,10 +853,10 @@ program
   .command('charge-from-battery')
   .description('Set EV charge limit based on solar battery SoC minus buffer')
   .action(async () => {
-    if (!(await initializeFranklin()) || !(await initializeTesla())) {
-      console.error('Both FranklinWH and Tesla must be connected');
-      process.exit(1);
-    }
+    // Short-circuit preserved: Franklin's failure exits before Tesla is asked
+    // for anything, which is also what `||` did here.
+    requireService('FranklinWH', await initializeFranklin());
+    requireService('Tesla', await initializeTesla());
     
     try {
       // offerToStart is false here, preserving the one-shot behaviour: it sets
