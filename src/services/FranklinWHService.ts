@@ -22,6 +22,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VENV_FIX = 'python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt';
 
 /**
+ * Where forwarded proxy stderr lines ([proxy] ...) are written.
+ *
+ * The REPL installs a sink that rewrites its prompt afterwards, so a log line
+ * arriving while the user is at the prompt does not land inside the prompt text.
+ * Everything else keeps the default: straight to the console.
+ */
+let proxyLogSink: ((text: string) => void) | null = null;
+
+/** Install (or with null, remove) the sink for forwarded proxy output. */
+export function setProxyLogSink(sink: ((text: string) => void) | null): void {
+  proxyLogSink = sink;
+}
+
+/**
  * Locate a Python interpreter that can run the proxy.
  *
  * Order is deliberate: the project-local .venv first, because that is where
@@ -80,6 +94,58 @@ function describeProxyExit(
   // one of the cases above.
   const tail = stderrOutput.trim().slice(-400);
   return tail ? `${head}\n  ${tail}` : `${head}\n  The proxy produced no output.`;
+}
+
+/**
+ * The local proxy could not be brought up.
+ *
+ * Separates "the Python process never became usable" from a failure the proxy
+ * itself reported over HTTP. The CLI needs the difference: when a spawn fails --
+ * a port conflict above all -- re-prompting for a password cannot help, so the
+ * credential prompt must be skipped rather than asked and answered in vain.
+ */
+export class ProxyStartupError extends Error {}
+
+/** Remove the ANSI colour codes the Flask dev server emits, so forwarded lines are plain text. */
+function stripAnsi(text: string): string {
+  return text.replaceAll(String.fromCharCode(27), '').replace(/\[[0-9;]*m/g, '');
+}
+
+/** True when the failure came with an HTTP response (i.e. from the proxy). */
+function hasHttpResponse(error: unknown): error is { response: { status?: number; data?: unknown } } {
+  const response = (error as { response?: { status?: number } } | null)?.response;
+  return typeof response?.status === 'number';
+}
+
+/**
+ * Render a proxy HTTP failure as one readable line.
+ *
+ * The proxy answers errors as JSON -- `{"error": ..., "details": ...}` -- and
+ * `details` carries the upstream reason (a franklinwh assertion, a JSON decode
+ * failure, a gateway timeout). axios's own message discards all of it: the
+ * user-visible symptom of FranklinWH's backend failing was
+ * "Request failed with status code 500", with nothing to tell whose fault it
+ * was and no --debug flag that would have helped, since --debug only enriches
+ * startup failures. Non-HTTP failures (ECONNREFUSED, timeouts) never reach this
+ * function; their own messages are already specific.
+ */
+export function describeProxyHttpError(error: unknown): string {
+  if (!hasHttpResponse(error)) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  const status = error.response.status;
+  const data = error.response.data;
+  let detail = '';
+  if (data !== null && typeof data === 'object') {
+    const body = data as { error?: unknown; details?: unknown };
+    detail = [body.error, body.details]
+      .filter((part): part is string => typeof part === 'string' && part.length > 0)
+      .join(': ');
+  } else if (typeof data === 'string') {
+    detail = data.trim().slice(0, 200);
+  }
+  const fallback = error instanceof Error ? error.message : String(error);
+  return detail ? `HTTP ${status} — ${detail}` : `HTTP ${status} — ${fallback}`;
 }
 
 interface FranklinStatsResponse {
@@ -149,6 +215,15 @@ export class FranklinWHService implements BatteryService {
 
   /**
    * Start the Python proxy server.
+   *
+   * Readiness is detected from `Running on`, which Werkzeug prints only after
+   * the socket is bound. The script's own "Starting FranklinWH API Proxy" line
+   * used to count as well, but it is printed *before* app.run(): a bind failure
+   * (EADDRINUSE) happened after it, so the child was declared started, the exit
+   * handler stayed silent, and describeProxyExit -- the message that names the
+   * port and the command that frees it -- never ran. The user saw a bare HTTP
+   * error from whatever already squatted the port instead, and was prompted for
+   * a password that was never the problem.
    */
   async startProxy(): Promise<void> {
     if (this.proxyProcess) {
@@ -168,43 +243,59 @@ export class FranklinWHService implements BatteryService {
       });
 
       let started = false;
+      const noteStarted = () => {
+        if (started) return;
+        started = true;
+        // Give it a moment to fully start
+        setTimeout(() => resolve(), 500);
+      };
 
       this.proxyProcess.stdout?.on('data', (data: Buffer) => {
-        const output = data.toString();
-        if (output.includes('Starting FranklinWH API Proxy') || output.includes('Running on')) {
-          if (!started) {
-            started = true;
-            // Give it a moment to fully start
-            setTimeout(() => resolve(), 500);
-          }
-        }
+        if (data.toString().includes('Running on')) noteStarted();
       });
 
-      // Buffer stderr so a fast failure can explain itself. Flask writes its startup
-      // output and tracebacks to stderr, and without this the only signal is a
-      // bare exit code or the generic timeout below.
-      let stderrOutput = '';
+      // Two jobs, one stream:
+      // 1. Keep a bounded tail so a fast failure can explain itself -- Flask
+      //    writes startup output and tracebacks to stderr, and without this the
+      //    only signal would be a bare exit code or the generic timeout.
+      // 2. Once started, forward every line to the console as `[proxy] ...`.
+      //    Post-startup stderr used to accumulate in an in-memory buffer that
+      //    nothing ever read again: request logs and crash tracebacks were
+      //    invisible, unbounded, and gone when the session ended. Startup-era
+      //    lines are not forwarded -- the banner is noise, and a pre-bind
+      //    traceback belongs to describeProxyExit below.
+      const STDERR_TAIL_MAX = 4096;
+      let stderrTail = '';
+      let partialLine = '';
       this.proxyProcess.stderr?.on('data', (data: Buffer) => {
-        const output = data.toString();
-        stderrOutput += output;
-        // Flask outputs to stderr, check for running message
-        if (output.includes('Running on') || output.includes('Press CTRL+C')) {
-          if (!started) {
-            started = true;
-            setTimeout(() => resolve(), 500);
+        const text = data.toString();
+        stderrTail = (stderrTail + text).slice(-STDERR_TAIL_MAX);
+        partialLine += text;
+        const lines = partialLine.split('\n');
+        partialLine = lines.pop() ?? '';
+        for (const line of lines) {
+          if (/Running on|Press CTRL\+C/.test(line)) {
+            noteStarted();
+            continue;
+          }
+          if (started && !/WARNING: This is a development server/.test(line)) {
+            const clean = stripAnsi(line);
+            const formatted = `[proxy] ${clean}`;
+            if (proxyLogSink) proxyLogSink(formatted);
+            else console.log(formatted);
           }
         }
       });
 
       this.proxyProcess.on('error', (err) => {
         if (!started) {
-          reject(new Error(`Failed to start proxy using ${source}: ${err.message}`));
+          reject(new ProxyStartupError(`Failed to start proxy using ${source}: ${err.message}`));
         }
       });
 
       this.proxyProcess.on('exit', (code) => {
         if (!started) {
-          reject(new Error(describeProxyExit(code, stderrOutput, this.proxyPort, source)));
+          reject(new ProxyStartupError(describeProxyExit(code, stderrTail, this.proxyPort, source)));
         }
         this.proxyProcess = null;
       });
@@ -213,9 +304,9 @@ export class FranklinWHService implements BatteryService {
       setTimeout(() => {
         if (!started) {
           this.stopProxy();
-          const tail = stderrOutput.trim().slice(-300);
+          const tail = stderrTail.trim().slice(-300);
           reject(
-            new Error(
+            new ProxyStartupError(
               `Proxy did not start within 10s (using ${source}, port ${this.proxyPort}).\n` +
                 (tail ? `  ${tail}\n` : '') +
                 `  If the Python dependencies are missing: ${VENV_FIX}`
@@ -346,13 +437,35 @@ export class FranklinWHService implements BatteryService {
     this.authenticated = true;
   }
 
+  /**
+   * GET a proxy route, rethrowing HTTP failures as one readable line.
+   *
+   * The proxy's JSON body carries `details` with the upstream reason; axios's
+   * default message ("Request failed with status code 500") drops it, which is
+   * how a FranklinWH backend outage reached the user as a bare 500 with no way
+   * to tell whose fault it was. The original error stays attached as `cause`.
+   *
+   * `/auth` deliberately does NOT go through here: the startup path reads the
+   * raw response shape (`describeFranklinFailure`) to distinguish a credentials
+   * problem from an outage, and wrapping would hide it.
+   */
+  private async getProxy<T>(url: string): Promise<T> {
+    try {
+      const response = await this.client.get<T>(url);
+      return response.data;
+    } catch (error) {
+      if (!hasHttpResponse(error)) throw error;
+      throw new Error(describeProxyHttpError(error), { cause: error });
+    }
+  }
+
   async getStateOfCharge(): Promise<number> {
     if (!this.authenticated) {
       throw new Error('Not authenticated with FranklinWH');
     }
 
-    const response = await this.client.get('/soc');
-    return response.data.battery_soc;
+    const data = await this.getProxy<{ battery_soc: number }>('/soc');
+    return data.battery_soc;
   }
 
   async getStats(): Promise<BatteryFullStats> {
@@ -360,8 +473,7 @@ export class FranklinWHService implements BatteryService {
       throw new Error('Not authenticated with FranklinWH');
     }
 
-    const response = await this.client.get<FranklinStatsResponse>('/stats');
-    const data = response.data;
+    const data = await this.getProxy<FranklinStatsResponse>('/stats');
 
     const current: BatteryCurrentStats = {
       solarProduction: data.current.solar_production,
