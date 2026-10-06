@@ -306,9 +306,11 @@ still deletes them).
 
 ## Phase 2 — Real `start` / `exit` lifecycle (~1 d)
 
-**Status: items 1-6 complete on `feature/phase-2-process-lifecycle`. 163 tests green, lint
-clean. Item 7 (configurable OAuth port) was already done in Phase 1. The `start` → new
-terminal → `exit` round trip still needs one human run against a real proxy.**
+**Status: ✅ complete.** Items 1-6 landed on `feature/phase-2-process-lifecycle` (merged to
+main), item 7 was already done in Phase 1. The human run against real credentials plus the
+post-run investigation recorded below closed the last exit criteria: the `start` → new
+terminal → `exit` round trip and `get-battery-soc` twice against one proxy are both
+verified live. 196 tests green, lint clean.
 
 `prompts.md:17-18` specifies `start`/`exit` as process control; today `exit` structurally
 **cannot** work (services are `null` in a fresh process).
@@ -397,15 +399,68 @@ than keep a test whose outcome depends on runner signal scheduling, the escalati
 driven through an injectable seam (`terminateProcessWith`) and asserts the signal sequence
 directly. Real-process behaviour is still covered by the "stops a live process" case.
 
-### Remaining for a human
+### The human run, and what it exposed
 
-`start --daemon` → new terminal → `exit` needs a real proxy run with FranklinWH
-credentials. Everything above was verified without Python credentials.
+The run against real credentials confirmed the phase's core machinery — proxy spawned and
+recorded, per-service banner honest, in-shell `exit` clearing `runtime.json` — and produced
+`Error: Request failed with status code 500` from `get-battery-soc` with no diagnostic
+trail anywhere. That kicked off the investigation recorded as the late findings below.
 
 **Exit criteria:** ✅ `exit` reliably stops the proxy from a fresh process (verified);
 ✅ one-shot commands no longer kill a resident proxy; ✅ killing the terminal leaves a state
-file the next `exit` cleans up (stale path verified); ⏳ `get-battery-soc` twice reusing a
-single proxy — logic verified by test, needs a live run to confirm end to end.
+file the next `exit` cleans up (stale path verified); ✅ `get-battery-soc` twice reusing a
+single proxy — verified live after the fixes below (one attempt visibly retried a transient
+upstream null and returned the SoC).
+
+### Late findings from the human run (all fixed)
+
+**1. The 500 left no trail — by construction.** Three links broke:
+
+- the proxy's `handle_franklin_errors` catch-all returned `{"error", "details"}` but
+  swallowed the traceback before Flask could log anything;
+- Node's `describeError` printed only axios's message ("Request failed with status code
+  500"), discarding the body that carried `details`;
+- proxy stderr after startup accumulated in an in-memory string nothing ever read —
+  invisible, unbounded, gone when the session ended. `--debug` would not have helped: it
+  only enriches *startup* failures.
+
+Fixed: (a) command-time Franklin errors now surface `HTTP 500 — <error>: <details>`
+(`describeProxyHttpError`, original kept as `cause`); (b) the proxy prints the traceback
+to stderr before returning the JSON; (c) stderr is forwarded live as `[proxy] ...`
+(startup banner filtered, ANSI stripped, REPL prompt redrawn after each line), with the
+retained tail bounded at 4 KB for `describeProxyExit`.
+
+**2. Root causes of the 500s — two, plus two latent bugs found while proving them.**
+
+- *Proxy defect:* `run_async` created and closed a fresh event loop per request, while
+  `franklinwh`'s httpx client keeps pooled connections bound to the loop that created
+  them — second request: `RuntimeError: Event loop is closed`. Now one process-lifetime
+  loop behind a lock (process state like the existing `_client` singleton; Flask's
+  threaded dev server needs the serialization).
+- *Upstream:* Franklin's cloud answers HTTP **200 with `result: null`** when the gateway
+  has no data ready, and `franklinwh` then raises `TypeError: 'NoneType' object is not
+  subscriptable`. Reproduced with a bare franklinwh client against
+  `energy.franklinwh.com` (no proxy involved), alternating 200/500 on consecutive calls.
+  Reads are idempotent, so the proxy retries them (`run_read`: 3 attempts, 0.5s/1.5s);
+  the four mapped exceptions are deterministic and never retried. A live 5-call probe
+  went from 2/5 to 5/5, with retries logged as `[proxy]` lines.
+- *EADDRINUSE detection was unreachable:* readiness was detected from the script's
+  **pre-bind** "Starting FranklinWH API Proxy" print, so the child was declared started
+  before the bind failed — `describeProxyExit`'s port message never ran and the CLI
+  prompted for credentials instead (reproduced by occupying port 3001). Detection now
+  waits for Werkzeug's post-bind `Running on`, spawn failures throw `ProxyStartupError`,
+  and the credential prompt is skipped for them.
+- *Dead one-shot guards:* `if (!(await initializeTesla()))` never fired — `ServiceStart`
+  is an object, always truthy — so the `process.exit(1)` beneath was dead code and
+  failures fell through (once into `franklinService!.disconnect()` on a null). Replaced
+  by `requireService`, pinned by `tests/commands/init-failure-guards.test.ts`.
+
+**3. REPL ergonomics.** Arrow-key history turned out to be built into `node:readline`
+(verified over a PTY: ↑ replays the previous command) — nothing was missing there. Tab
+completion was: `createReadline({ completer: completeCommand })`, with the command list
+extracted to `src/commands/repl.ts` as the single source for `help` and completion — zero
+new packages (`vorpal`-style shell frameworks are unmaintained). Verified live:
+`stat` + TAB → `status`.
 
 ---
 
@@ -550,6 +605,9 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 | Virtual key path | Docs-confirmed only: EC keygen -> host public key -> `POST /api/1/partner_accounts` -> mobile pairing deep link. The client-assertion `objects/virtual_key` API is **unconfirmed** and off the table without verification |
 | Command-handler duplication | Extract `src/commands/` **before** Phase 4 (added as Phase 1.5) |
 | Test framework | `vitest`; live Tesla/Franklin calls gated behind `RUN_LIVE_TESTS=1` |
+| Proxy event loop | One process-lifetime loop behind a lock; per-request loops broke httpx's pooled connections (`Event loop is closed`) |
+| Franklin read failures | Retry idempotent reads ×3 (`run_read`, 0.5s/1.5s); the four mapped exceptions are deterministic and never retried |
+| REPL ergonomics | `node:readline` built-ins only — `completer` for tab completion, shared `REPL_COMMANDS` in `src/commands/repl.ts`; no shell-framework package |
 | `LICENSE` holder / `author` | Not yet supplied by user - Phase 5 needs a name before it can close |
 
 ---
@@ -605,9 +663,9 @@ docs: license year/holder, repo URLs, README rewrite, CI workflow
 
 Traced back to `prompts.md`:
 
-- [ ] `start` starts the Python proxy **and** a resident Node process; PIDs printed
-- [ ] `exit` from a **separate shell** terminates both, leaving no stray `python3`
-- [ ] `get-ev-bsoc` / `get-battery-soc` return live values
+- [x] `start` starts the Python proxy **and** a resident Node process; PIDs printed
+- [x] `exit` from a **separate shell** terminates both, leaving no stray `python3`
+- [x] `get-ev-bsoc` / `get-battery-soc` return live values
 - [ ] `set-ev-charge-limit` / `start-ev-charging` / `stop-ev-charging` succeed against a real
       Model Y (requires the Phase 1 virtual-key pairing)
 - [ ] `charge-from-battery` sets a kWh-derived limit and prints the kWh reasoning
