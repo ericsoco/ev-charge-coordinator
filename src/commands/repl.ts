@@ -54,3 +54,22 @@ export function completeCommand(line: string): [string[], string] {
   const hits = REPL_COMMANDS.map((command) => command.name).filter((name) => name.startsWith(line));
   return [hits, line];
 }
+
+/**
+ * Commands the REPL still accepts while another command is in flight.
+ *
+ * They touch no network: `help` prints, `status` reads the local store,
+ * `exit` tears the session down -- and being able to exit during a hung
+ * command is exactly when it matters most.
+ */
+export const LOCAL_WHILE_BUSY: ReadonlySet<string> = new Set(['help', 'status', 'exit', 'quit']);
+
+/**
+ * True for input the dispatch switch would actually run.
+ *
+ * The busy-gate uses this to tell a mistyped command (worth a skip message)
+ * from a sub-prompt answer like `80` or a stray Enter (worth silence).
+ */
+export function isReplCommand(name: string): boolean {
+  return REPL_COMMANDS.some((command) => command.name === name) || LOCAL_WHILE_BUSY.has(name);
+}
