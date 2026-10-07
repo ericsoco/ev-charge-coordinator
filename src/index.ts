@@ -619,7 +619,10 @@ program
         await dispatchCommand(cmd);
       } finally {
         if (!LOCAL_WHILE_BUSY.has(cmd)) blocker = false;
-        active -= 1;
+        // Clamp at zero: a stray extra decrement must not drive the counter
+        // negative, which would make `active === 0` unreachable and leave the
+        // prompt unrestored for the rest of the session.
+        active = Math.max(0, active - 1);
         if (active === 0 && !closed) {
           rl.setPrompt('ev-charge> ');
           awaitingInput = true;
