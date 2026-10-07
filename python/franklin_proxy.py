@@ -100,7 +100,7 @@ def run_read(factory, attempts=3, delays=(0.5, 1.5)):
                 raise
             print(
                 f"franklinwh read failed (attempt {index + 1}/{attempts}): "
-                f"{type(error).__name__}: {error}; retrying",
+                f"{type(error).__name__}: {str(error) or 'no message'}; retrying",
                 file=sys.stderr,
             )
 
@@ -136,7 +136,11 @@ def handle_franklin_errors(f):
             # forwards stderr live as [proxy] lines, so this is what makes the
             # failure visible from the CLI. `details` in the body only has str(e).
             traceback.print_exc(file=sys.stderr)
-            return jsonify({"error": "Internal error", "details": str(e)}), 500
+            # httpx timeouts carry no message; `details: ""` would reach the
+            # CLI as a bare 'HTTP 500 - Internal error' with nothing saying
+            # which class of call failed. Fall back to the exception type.
+            details = str(e) or type(e).__name__
+            return jsonify({"error": "Internal error", "details": details}), 500
     return decorated
 
 

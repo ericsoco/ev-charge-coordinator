@@ -198,7 +198,11 @@ export class FranklinWHService implements BatteryService {
     this.proxyPort = proxyPort;
     this.client = axios.create({
       baseURL: `http://127.0.0.1:${proxyPort}`,
-      timeout: 30000,
+      // The proxy's worst case is three attempts plus retry sleeps, and a
+      // queued request also waits its turn behind the proxy's loop lock.
+      // At 30s axios could cut it off mid-retry with a timeout error that
+      // hides the real upstream failure.
+      timeout: 60000,
       headers: {
         'Content-Type': 'application/json'
       }
