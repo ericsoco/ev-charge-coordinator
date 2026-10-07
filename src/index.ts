@@ -32,7 +32,7 @@ import {
   type CommandContext,
   type CommandResult,
 } from './commands/context.js';
-import { completeCommand, renderHelp } from './commands/repl.js';
+import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, renderHelp } from './commands/repl.js';
 import {
   chargeFromBattery,
   getBatterySoc,
@@ -585,9 +585,50 @@ program
     };
     setProxyLogSink(renderProxyLog);
 
-    const handleCommand = async (input: string) => {
-      awaitingInput = false;
+    // The gate. Readline keeps emitting 'line' while an async handler is still
+    // running, so without this two commands overlap: their output interleaves
+    // and both hit the proxy at once, doubling the load on an already-flaky
+    // upstream. Non-local commands are skipped with an explicit line rather
+    // than queued -- a queue hides the delay and still fires every accidental
+    // duplicate at Franklin. Input that is not a command name (sub-prompt
+    // answers, stray Enter presses) is dropped silently while busy.
+    //
+    // `blocker` is what the skip check tests; `active` counts everything
+    // running, so a whitelisted `help` finishing early cannot re-prompt over a
+    // command still in flight. `closed` keeps the finally off a closed readline.
+    let blocker = false;
+    let active = 0;
+    let closed = false;
+
+    const handleCommand = async (input: string): Promise<void> => {
       const cmd = input.trim().toLowerCase();
+
+      if (blocker && !LOCAL_WHILE_BUSY.has(cmd)) {
+        if (isReplCommand(cmd)) {
+          console.log(`'${cmd}' skipped: a command is still running. Wait for it to finish.`);
+        }
+        return;
+      }
+
+      active += 1;
+      if (!LOCAL_WHILE_BUSY.has(cmd)) blocker = true;
+      awaitingInput = false;
+      // Blank prompt while busy: typing must not render a stale `ev-charge> `.
+      rl.setPrompt('');
+      try {
+        await dispatchCommand(cmd);
+      } finally {
+        if (!LOCAL_WHILE_BUSY.has(cmd)) blocker = false;
+        active -= 1;
+        if (active === 0 && !closed) {
+          rl.setPrompt('ev-charge> ');
+          awaitingInput = true;
+          rl.prompt();
+        }
+      }
+    };
+
+    const dispatchCommand = async (cmd: string): Promise<void> => {
       
       switch (cmd) {
         case 'help':
@@ -654,6 +695,7 @@ program
           
         case 'exit':
         case 'quit':
+          closed = true;
           rl.close();
           return;
           
@@ -663,9 +705,6 @@ program
         default:
           console.log(`Unknown command: ${cmd}. Type "help" for available commands.`);
       }
-      
-      awaitingInput = true;
-      rl.prompt();
     };
 
     rl.setPrompt('ev-charge> ');
@@ -677,7 +716,8 @@ program
     rl.on('close', async () => {
       // No more prompts to redraw, and the default console sink is fine once
       // the interface is gone -- calling prompt() on a closed readline would not
-      // be.
+      // be. `closed` also stops a handler still unwinding from prompting.
+      closed = true;
       awaitingInput = false;
       setProxyLogSink(null);
       console.log('\nShutting down...');
