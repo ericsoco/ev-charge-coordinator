@@ -9,6 +9,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import * as paint from '../utils/color.js';
 import type {
   BatteryService,
   BatteryCredentials,
@@ -286,7 +287,7 @@ export class FranklinWHService implements BatteryService {
             const clean = stripAnsi(line);
             const formatted = `[proxy] ${clean}`;
             if (proxyLogSink) proxyLogSink(formatted);
-            else console.log(formatted);
+            else console.log(paint.info(formatted));
           }
         }
       });

@@ -14,6 +14,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as http from 'http';
 import type { EVService, EVCredentials, EVStatus, EVBatteryStats, TeslaTokens } from '../types/ev.js';
 import { credentialStore } from '../utils/credentials.js';
+import * as paint from '../utils/color.js';
 import {
   buildRevokeConsentUrl,
   resolveRegion,
@@ -172,7 +173,7 @@ export class TeslaService implements EVService {
             // because the caller only ever sees the original 401 otherwise, and
             // "your refresh token was burned" and "wrong region" look identical.
             this.authenticated = false;
-            console.error('Token refresh failed:', describeAxiosError(refreshError));
+            console.error(paint.error(`Token refresh failed: ${describeAxiosError(refreshError)}`));
           }
         }
         // Every vehicle/command call fails through here, so this is where a Fleet

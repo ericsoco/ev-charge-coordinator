@@ -7,6 +7,8 @@
  * REPL command must be added both here and there.
  */
 
+import { info } from '../utils/color.js';
+
 export interface ReplCommand {
   readonly name: string;
   readonly description: string;
@@ -35,15 +37,17 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
   { name: 'exit', description: 'Exit the application' },
 ];
 
-/** The body of the REPL's `help` command. */
+/** The body of the REPL's `help` command. One Info color for the whole block. */
 export function renderHelp(): string {
   const width = Math.max(...REPL_COMMANDS.map((command) => command.name.length)) + 2;
-  return [
-    '',
-    'Available commands:',
-    ...REPL_COMMANDS.map((command) => `  ${command.name.padEnd(width)}${command.description}`),
-    '',
-  ].join('\n');
+  return info(
+    [
+      '',
+      'Available commands:',
+      ...REPL_COMMANDS.map((command) => `  ${command.name.padEnd(width)}${command.description}`),
+      '',
+    ].join('\n')
+  );
 }
 
 /**
