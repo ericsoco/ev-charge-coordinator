@@ -624,6 +624,7 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 | Franklin read failures | Retry idempotent reads ×3 (`run_read`, 0.5s/1.5s); the four mapped exceptions are deterministic and never retried |
 | REPL ergonomics | `node:readline` built-ins only — `completer` for tab completion, shared `REPL_COMMANDS` in `src/commands/repl.ts`; no shell-framework package |
 | REPL in-flight commands | Reject non-local commands while one is running (busy-gate); whitelist `help`/`status`/`exit`; no queue — the proxy's loop lock already serializes its network calls |
+| Output theming | User-chosen 24-bit RGB palette in `src/utils/color.ts`, zero dependencies; gated at call time on `isTTY && !NO_COLOR`, so tests, redirects, and NO_COLOR users receive byte-identical plain output |
 | `LICENSE` holder / `author` | Not yet supplied by user - Phase 5 needs a name before it can close |
 
 ---
