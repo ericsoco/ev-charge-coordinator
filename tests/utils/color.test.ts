@@ -51,7 +51,7 @@ describe('color themes', () => {
   it('emits truecolor SGR on a TTY', () => {
     withTty(true, undefined, () => {
       expect(paint.error('boom')).toBe(`${ESC}[38;2;224;90;81mboom${ESC}[0m`);
-      expect(paint.prompt('ev-charge> ')).toBe(`${ESC}[38;2;142;200;205mev-charge> ${ESC}[0m`);
+      expect(paint.prompt('ev-charge> ')).toBe(`${ESC}[1;38;2;142;200;205mev-charge> ${ESC}[0m`);
       expect(paint.success('✓ done')).toBe(`${ESC}[38;2;95;206;144m✓ done${ESC}[0m`);
     });
   });
@@ -73,7 +73,7 @@ describe('color themes', () => {
     withTty(true, undefined, () => {
       const sgr = (r: number, g: number, b: number, bold = false) =>
         `${ESC}[${bold ? '1;' : ''}38;2;${r};${g};${b}mX${ESC}[0m`;
-      expect(paint.prompt('X')).toBe(sgr(142, 200, 205));
+      expect(paint.prompt('X')).toBe(sgr(142, 200, 205, true));
       expect(paint.info('X')).toBe(sgr(190, 190, 190));
       expect(paint.debug('X')).toBe(sgr(160, 160, 160));
       expect(paint.warning('X')).toBe(sgr(168, 91, 75));
