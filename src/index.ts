@@ -33,6 +33,7 @@ import {
   type CommandResult,
 } from './commands/context.js';
 import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, renderHelp } from './commands/repl.js';
+import * as paint from './utils/color.js';
 import {
   chargeFromBattery,
   getBatterySoc,
@@ -65,7 +66,7 @@ const DEFAULT_PROXY_PORT = 3001;
 function keepResident(): Promise<void> {
   return new Promise<void>((resolve) => {
     const stop = (signal: string) => {
-      console.log(`\nReceived ${signal}; exiting. The proxy is left running.`);
+      console.log(paint.info(`\nReceived ${signal}; exiting. The proxy is left running.`));
       resolve();
     };
     process.once('SIGINT', () => stop('SIGINT'));
@@ -82,8 +83,10 @@ function keepResident(): Promise<void> {
  */
 function reportOrphanedProxy(): void {
   console.log(
-    `If a proxy is still listening on port ${DEFAULT_PROXY_PORT}, stop it with:\n` +
-      `  lsof -ti tcp:${DEFAULT_PROXY_PORT} | xargs kill`
+    paint.positive(
+      `If a proxy is still listening on port ${DEFAULT_PROXY_PORT}, stop it with:\n` +
+        `  lsof -ti tcp:${DEFAULT_PROXY_PORT} | xargs kill`
+    )
   );
 }
 
@@ -98,14 +101,14 @@ function reportOrphanedProxy(): void {
 function reportDebugDetails(debug: boolean | undefined, cause: unknown): void {
   if (!debug || cause === undefined || cause === null) return;
   const error = cause as Error & { response?: { status?: number; data?: unknown } };
-  console.error('  --- debug ---');
+  console.error(paint.debug('  --- debug ---'));
   if (error.stack) {
-    console.error(error.stack);
+    console.error(paint.debug(error.stack));
   } else {
-    console.error(String(cause));
+    console.error(paint.debug(String(cause)));
   }
   if (error.response?.status !== undefined) {
-    console.error(`  HTTP ${error.response.status} body: ${JSON.stringify(error.response.data)}`);
+    console.error(paint.debug(`  HTTP ${error.response.status} body: ${JSON.stringify(error.response.data)}`));
   }
 }
 
@@ -123,9 +126,11 @@ async function warnAboutUntrackedProxy(spawnedPid: number | null): Promise<void>
   if (!(await isProxyPortOpen(DEFAULT_PROXY_PORT))) return;
 
   console.log(
-    `\nWarning: something is listening on port ${DEFAULT_PROXY_PORT} but no runtime\n` +
-      `  state records it, so \`exit\` will not stop it. If it is an orphaned proxy:\n` +
-      `    lsof -ti tcp:${DEFAULT_PROXY_PORT} | xargs kill`
+    paint.warning(
+      `\nWarning: something is listening on port ${DEFAULT_PROXY_PORT} but no runtime\n` +
+        `  state records it, so \`exit\` will not stop it. If it is an orphaned proxy:\n` +
+        `    lsof -ti tcp:${DEFAULT_PROXY_PORT} | xargs kill`
+    )
   );
 }
 
@@ -232,7 +237,8 @@ function createReadline(options: { completer?: (line: string) => [string[], stri
 async function prompt(question: string): Promise<string> {
   const rl = createReadline();
   return new Promise((resolve) => {
-    rl.question(question, (answer) => {
+    // Category: Question -- every readline question in the CLI funnels here.
+    rl.question(paint.question(question), (answer) => {
       rl.close();
       resolve(answer);
     });
@@ -260,12 +266,14 @@ async function promptPassword(question: string): Promise<string> {
     return String(answer.secret ?? '');
   } catch (error) {
     console.warn(
-      `Warning: could not mask the prompt (${error instanceof Error ? error.message : error});` +
-        '\n  falling back to an UNMASKED prompt.'
+      paint.warning(
+        `Warning: could not mask the prompt (${error instanceof Error ? error.message : error});` +
+          '\n  falling back to an UNMASKED prompt.'
+      )
     );
     const rl = createReadline();
     return new Promise((resolve) => {
-      rl.question(question, (answer) => {
+      rl.question(paint.question(question), (answer) => {
         rl.close();
         resolve(answer);
       });
@@ -282,7 +290,7 @@ async function initializeFranklin(): Promise<ServiceStart> {
   let lastFailure: ServiceStart | null = null;
   
   if (stored) {
-    console.log('Using stored FranklinWH credentials...');
+    console.log(paint.info('Using stored FranklinWH credentials...'));
     franklinService = new FranklinWHService();
     try {
       await franklinService.initialize({
@@ -290,7 +298,7 @@ async function initializeFranklin(): Promise<ServiceStart> {
         password: stored.password,
         gatewayId: stored.gatewayId
       });
-      console.log('✓ Connected to FranklinWH');
+      console.log(paint.positive('✓ Connected to FranklinWH'));
       return { ok: true };
     } catch (error) {
       // Deliberately NOT `franklinService = null`. That discarded the only
@@ -310,12 +318,12 @@ async function initializeFranklin(): Promise<ServiceStart> {
     }
   }
 
-  console.log('\nFranklinWH authentication required.');
+  console.log(paint.info('\nFranklinWH authentication required.'));
   // Same as the Tesla path: the stored attempt already failed, so say why before
   // prompting. Without this the only trace of the real cause was buried in a
   // stack trace further up.
   if (lastFailure && !lastFailure.ok) {
-    console.log(`Stored credentials did not work: ${lastFailure.error}`);
+    console.log(paint.error(`Stored credentials did not work: ${lastFailure.error}`));
     reportDebugDetails(process.env.ECC_DEBUG === '1', lastFailure.cause);
   }
   const username = await prompt('Email: ');
@@ -329,10 +337,10 @@ async function initializeFranklin(): Promise<ServiceStart> {
     const save = await prompt('Save credentials for future use? (y/n): ');
     if (save.trim().toLowerCase() === 'y') {
       await credentialStore.setFranklinCredentials(username, password, gatewayId);
-      console.log('✓ Credentials saved securely');
+      console.log(paint.positive('✓ Credentials saved securely'));
     }
 
-    console.log('✓ Connected to FranklinWH');
+    console.log(paint.positive('✓ Connected to FranklinWH'));
     return { ok: true };
   } catch (error) {
     // Same reasoning as above: disconnect() only stops a proxy this instance
@@ -362,7 +370,7 @@ async function initializeTesla(): Promise<ServiceStart> {
   const needsClientCredentials = !storedClientId || !storedClientSecret;
 
   if (stored?.accessToken && stored?.refreshToken && storedClientId && storedClientSecret) {
-    console.log('Using stored Tesla credentials...');
+    console.log(paint.info('Using stored Tesla credentials...'));
     teslaService = new TeslaService({
       region: stored.region,
       callbackPort: stored.callbackPort
@@ -381,7 +389,7 @@ async function initializeTesla(): Promise<ServiceStart> {
         teslaService.setVin(stored.vin);
       }
       
-      console.log('✓ Connected to Tesla');
+      console.log(paint.positive('✓ Connected to Tesla'));
       return { ok: true };
     } catch (error) {
       lastFailure = describeTeslaFailure(error);
@@ -389,19 +397,19 @@ async function initializeTesla(): Promise<ServiceStart> {
     }
   }
 
-  console.log('\nTesla Fleet API authentication required.');
+  console.log(paint.info('\nTesla Fleet API authentication required.'));
   // The stored attempt already failed; say why before prompting, so a user with
   // genuinely bad stored credentials is not silently asked for them again.
   if (lastFailure && !lastFailure.ok) {
-    console.log(`Stored credentials did not work: ${lastFailure.error}`);
+    console.log(paint.error(`Stored credentials did not work: ${lastFailure.error}`));
     reportDebugDetails(process.env.ECC_DEBUG === '1', lastFailure.cause);
   }
-  console.log('You need a Tesla Developer account with a registered application.');
-  console.log('Visit https://developer.tesla.com to create one.');
+  console.log(paint.info('You need a Tesla Developer account with a registered application.'));
+  console.log(paint.positive('Visit https://developer.tesla.com to create one.'));
   if (needsClientCredentials) {
-    console.log('The stored session is missing its Client ID/secret; enter them to complete it.');
+    console.log(paint.info('The stored session is missing its Client ID/secret; enter them to complete it.'));
   }
-  console.log('To sign in without any other side effects, run: node dist/index.js authenticate\n');
+  console.log(paint.positive('To sign in without any other side effects, run: node dist/index.js authenticate\n'));
   
   // Reuse whatever is already stored, so a record that is only missing the
   // secret (the common case after a key rotation) asks for one thing, not four.
@@ -420,24 +428,24 @@ async function initializeTesla(): Promise<ServiceStart> {
   const save = await prompt('Store these credentials in the keychain? (y/n): ');
   if (save.trim().toLowerCase() === 'y') {
     await credentialStore.setTeslaCredentials({ clientId, clientSecret });
-    console.log('✓ Client ID/secret saved');
+    console.log(paint.positive('✓ Client ID/secret saved'));
   } else {
     // Not stored, but still remembered for this process: pair-tesla-key may be
     // run separately later and would otherwise have nothing to register with.
-    console.log('  Not saved. Re-run this command later to store them.');
+    console.log(paint.info('  Not saved. Re-run this command later to store them.'));
   }
 
   teslaService = new TeslaService();
   await teslaService.initialize({ clientId, clientSecret });
   
-  console.log('\nStarting OAuth authentication...');
-  console.log('A browser window should open. If not, copy and paste the URL below.\n');
+  console.log(paint.info('\nStarting OAuth authentication...'));
+  console.log(paint.info('A browser window should open. If not, copy and paste the URL below.\n'));
   
   try {
     await teslaService.authenticate((authUrl) => {
-      console.log('Please visit this URL to authorize:\n');
-      console.log(authUrl);
-      console.log('\nWaiting for authorization...');
+      console.log(paint.info('Please visit this URL to authorize:\n'));
+      console.log(paint.positive(authUrl));
+      console.log(paint.info('\nWaiting for authorization...'));
     });
 
     // Registration (POST /api/1/partner_accounts) is a step separate from OAuth
@@ -446,24 +454,26 @@ async function initializeTesla(): Promise<ServiceStart> {
     // partial success it is -- tokens are stored and usable -- rather than as a
     // failed login.
     if (teslaService.needsRegistration) {
-      console.log('\n✓ Authorized, and the tokens were saved.');
+      console.log(paint.positive('\n✓ Authorized, and the tokens were saved.'));
       console.log(
-        '  Tesla has not yet registered this application, so vehicles cannot be\n' +
-          '  listed and no command will work until it is. That is a separate step\n' +
-          '  from signing in -- setting an Allowed Origin does not do it either.\n'
+        paint.info(
+          '  Tesla has not yet registered this application, so vehicles cannot be\n' +
+            '  listed and no command will work until it is. That is a separate step\n' +
+            '  from signing in -- setting an Allowed Origin does not do it either.\n'
+        )
       );
-      console.log('  Next: node dist/index.js pair-tesla-key --domain <your-domain>');
+      console.log(paint.positive('  Next: node dist/index.js pair-tesla-key --domain <your-domain>'));
       return { ok: true };
     }
 
     // List vehicles and let user select
     const vehicles = await teslaService.listVehicles();
     if (vehicles.length === 0) {
-      console.log('No vehicles found in your Tesla account.');
+      console.log(paint.warning('No vehicles found in your Tesla account.'));
       return { ok: false, error: 'No vehicles found in this Tesla account.' };
     }
     
-    console.log('\nAvailable vehicles:');
+    console.log(paint.info('\nAvailable vehicles:'));
     vehicles.forEach((v, i) => {
       console.log(`  ${i + 1}. ${v.displayName} (${v.vin})`);
     });
@@ -471,12 +481,12 @@ async function initializeTesla(): Promise<ServiceStart> {
     let selectedVin: string;
     if (vehicles.length === 1) {
       selectedVin = vehicles[0].vin;
-      console.log(`\nUsing vehicle: ${vehicles[0].displayName}`);
+      console.log(paint.info(`\nUsing vehicle: ${vehicles[0].displayName}`));
     } else {
       const selection = await prompt('Select vehicle number: ');
       const index = parseInt(selection) - 1;
       if (index < 0 || index >= vehicles.length) {
-        console.log('Invalid selection');
+        console.log(paint.warning('Invalid selection'));
         return { ok: false, error: 'Invalid vehicle selection' };
       }
       selectedVin = vehicles[index].vin;
@@ -490,7 +500,7 @@ async function initializeTesla(): Promise<ServiceStart> {
     // above, before the OAuth round trip.
     await credentialStore.setTeslaVin(selectedVin);
 
-    console.log('✓ Connected to Tesla');
+    console.log(paint.positive('✓ Connected to Tesla'));
     return { ok: true };
   } catch (error) {
     teslaService = null;
@@ -512,7 +522,7 @@ program
   .option('--daemon', 'Stay resident without the interactive prompt')
   .option('--debug', 'Print full stack traces for service startup failures')
   .action(async (options) => {
-    console.log('Starting EV Charge Coordinator...\n');
+    console.log(paint.info('Starting EV Charge Coordinator...\n'));
 
     // Service status reported per service.
     // Each line states what actually happened for one service.
@@ -520,20 +530,20 @@ program
     const tesla = await initializeTesla();
 
     if (tesla.ok) {
-      console.log('✓ Tesla service started successfully');
+      console.log(paint.positive('✓ Tesla service started successfully'));
     } else {
-      console.log(`✗ Tesla service not started. Error: ${tesla.error}`);
+      console.log(paint.error(`✗ Tesla service not started. Error: ${tesla.error}`));
       reportDebugDetails(options.debug, tesla.cause);
     }
     if (franklin.ok) {
-      console.log('✓ FranklinWH service started successfully');
+      console.log(paint.positive('✓ FranklinWH service started successfully'));
     } else {
-      console.log(`✗ FranklinWH service not started. Error: ${franklin.error}`);
+      console.log(paint.error(`✗ FranklinWH service not started. Error: ${franklin.error}`));
       reportDebugDetails(options.debug, franklin.cause);
     }
 
     if (!franklin.ok && !tesla.ok) {
-      console.log('\nNo services available. Exiting.');
+      console.log(paint.error('\nNo services available. Exiting.'));
       process.exitCode = 1;
       return;
     }
@@ -549,15 +559,17 @@ program
     if (franklin.ok) {
       const pid = franklinService?.spawnedProxyPid;
       console.log(
-        pid
-          ? `  Solar battery proxy: pid ${pid}, port ${DEFAULT_PROXY_PORT} (started here)`
-          : `  Solar battery proxy: port ${DEFAULT_PROXY_PORT} (already running, reused)`
+        paint.positive(
+          pid
+            ? `  Solar battery proxy: pid ${pid}, port ${DEFAULT_PROXY_PORT} (started here)`
+            : `  Solar battery proxy: port ${DEFAULT_PROXY_PORT} (already running, reused)`
+        )
       );
     } else {
-      console.log('  Solar battery proxy: not running');
+      console.log(paint.error('  Solar battery proxy: not running'));
     }
     await warnAboutUntrackedProxy(spawnedPid);
-    console.log('Type "help" for available commands or "exit" to quit.\n');
+    console.log(paint.info('Type "help" for available commands or "exit" to quit.\n'));
 
     // `--daemon` stays resident without the REPL, so `start --daemon` can be
     // backgrounded and `exit` run from another terminal. Exiting instead would
@@ -565,9 +577,9 @@ program
     if (options.daemon) {
       // Only advertise `exit` when it would actually have something to stop.
       if (spawnedPid) {
-        console.log('Running in the background. Stop with: node dist/index.js exit');
+        console.log(paint.info('Running in the background. Stop with: node dist/index.js exit'));
       } else {
-        console.log('The solar battery proxy is not running, so `exit` has nothing to stop.');
+        console.log(paint.info('The solar battery proxy is not running, so `exit` has nothing to stop.'));
       }
       await keepResident();
       return;
@@ -580,7 +592,7 @@ program
     // re-render the prompt so the line never lands inside the prompt text.
     let awaitingInput = false;
     const renderProxyLog = (text: string): void => {
-      console.log(text);
+      console.log(paint.info(text));
       if (awaitingInput) rl.prompt(true);
     };
     setProxyLogSink(renderProxyLog);
@@ -605,7 +617,7 @@ program
 
       if (blocker && !LOCAL_WHILE_BUSY.has(cmd)) {
         if (isReplCommand(cmd)) {
-          console.log(`'${cmd}' skipped: a command is still running. Wait for it to finish.`);
+          console.log(paint.warning(`'${cmd}' skipped: a command is still running. Wait for it to finish.`));
         }
         return;
       }
@@ -624,7 +636,7 @@ program
         // prompt unrestored for the rest of the session.
         active = Math.max(0, active - 1);
         if (active === 0 && !closed) {
-          rl.setPrompt('ev-charge> ');
+          rl.setPrompt(paint.prompt('ev-charge> '));
           awaitingInput = true;
           rl.prompt();
         }
@@ -664,7 +676,7 @@ program
           const limitStr = await prompt('Enter charge limit (50-100%): ');
           const limit = parseInt(limitStr);
           if (isNaN(limit)) {
-            console.log('Invalid charge limit. Must be a number between 50 and 100.');
+            console.log(paint.warning('Invalid charge limit. Must be a number between 50 and 100.'));
             break;
           }
           await setEvChargeLimit(currentContext(), limit);
@@ -689,7 +701,7 @@ program
           const bufferStr = await prompt('Enter battery buffer percentage (0-100): ');
           const buffer = parseInt(bufferStr);
           if (isNaN(buffer)) {
-            console.log('Invalid buffer. Must be a number between 0 and 100.');
+            console.log(paint.warning('Invalid buffer. Must be a number between 0 and 100.'));
             break;
           }
           await setBatteryBuffer(currentContext(), buffer);
@@ -706,11 +718,11 @@ program
           break;
           
         default:
-          console.log(`Unknown command: ${cmd}. Type "help" for available commands.`);
+          console.log(paint.warning(`Unknown command: ${cmd}. Type "help" for available commands.`));
       }
     };
 
-    rl.setPrompt('ev-charge> ');
+    rl.setPrompt(paint.prompt('ev-charge> '));
     awaitingInput = true;
     rl.prompt();
     
@@ -723,7 +735,7 @@ program
       closed = true;
       awaitingInput = false;
       setProxyLogSink(null);
-      console.log('\nShutting down...');
+      console.log(paint.info('\nShutting down...'));
 
       // disconnect() only stops a proxy this process spawned, so quitting a REPL
       // that attached to somebody else's proxy leaves it running on purpose. The
@@ -734,14 +746,14 @@ program
           await franklinService.disconnect();
           clearRuntimeState();
         } else {
-          console.log('  Solar battery proxy was reused, not started here; leaving it running.');
+          console.log(paint.info('  Solar battery proxy was reused, not started here; leaving it running.'));
         }
       }
       if (teslaService) {
         await teslaService.disconnect();
       }
 
-      console.log('Goodbye!');
+      console.log(paint.info('Goodbye!'));
       process.exit(0);
     });
   });
@@ -750,7 +762,7 @@ program
   .command('exit')
   .description('Terminate the Python API proxy and NodeJS server')
   .action(async () => {
-    console.log('Shutting down services...\n');
+    console.log(paint.info('Shutting down services...\n'));
 
     // Stop in-process services first, when this process has any. A fresh process
     // has none, which is exactly the case this command used to silently no-op on
@@ -761,20 +773,20 @@ program
 
     const state = readRuntimeState();
     if (!state) {
-      console.log('No runtime state file; no proxy was started by `start`.');
+      console.log(paint.info('No runtime state file; no proxy was started by `start`.'));
       reportOrphanedProxy();
-      console.log('\n✓ Nothing to stop');
+      console.log(paint.positive('\n✓ Nothing to stop'));
       return;
     }
 
     if (!isProcessAlive(state.pid)) {
-      console.log(`Recorded proxy (pid ${state.pid}) is no longer running; clearing stale state.`);
+      console.log(paint.info(`Recorded proxy (pid ${state.pid}) is no longer running; clearing stale state.`));
       clearRuntimeState();
-      console.log('\n✓ Nothing to stop');
+      console.log(paint.positive('\n✓ Nothing to stop'));
       return;
     }
 
-    console.log(`Stopping proxy on port ${state.port} (pid ${state.pid})...`);
+    console.log(paint.info(`Stopping proxy on port ${state.port} (pid ${state.pid})...`));
 
     // Ask the proxy to shut down first so it can close cleanly. It calls
     // os._exit(0) under Werkzeug >= 2.1, so the response body is discarded and the
@@ -794,8 +806,8 @@ program
       outcome === 'exited' ? 'stopped cleanly' :
       outcome === 'killed' ? 'stopped (SIGKILL required)' :
       'already gone';
-    console.log(`✓ Proxy ${verb}`);
-    console.log('\n✓ Services stopped');
+    console.log(paint.positive(`✓ Proxy ${verb}`));
+    console.log(paint.positive('\n✓ Services stopped'));
   });
 
 /**
@@ -835,7 +847,7 @@ async function runCommand(
  */
 function requireService(name: 'Tesla' | 'FranklinWH', init: ServiceStart): void {
   if (init.ok) return;
-  console.log(`✗ ${name} service not started. Error: ${init.error}`);
+  console.log(paint.error(`✗ ${name} service not started. Error: ${init.error}`));
   process.exit(1);
 }
 
@@ -868,7 +880,7 @@ program
   .action(async (percent: string) => {
     const limit = parseInt(percent);
     if (isNaN(limit) || limit < MIN_EV_CHARGE_LIMIT || limit > MAX_EV_CHARGE_LIMIT) {
-      console.error(`Charge limit must be between ${MIN_EV_CHARGE_LIMIT} and ${MAX_EV_CHARGE_LIMIT}`);
+      console.error(paint.warning(`Charge limit must be between ${MIN_EV_CHARGE_LIMIT} and ${MAX_EV_CHARGE_LIMIT}`));
       process.exit(1);
     }
 
@@ -907,7 +919,7 @@ program
       // explicit rather than an accident of which copy you happen to read.
       await runCommand((ctx) => chargeFromBattery(ctx, { offerToStart: false }));
     } catch (error) {
-      console.error('Error:', error instanceof Error ? error.message : error);
+      console.error(paint.error(`Error: ${error instanceof Error ? error.message : error}`));
       process.exit(1);
     } finally {
       await franklinService!.disconnect();
@@ -921,7 +933,7 @@ program
   .action(async (percent: string) => {
     const buffer = parseInt(percent);
     if (isNaN(buffer) || buffer < 0 || buffer > 100) {
-      console.error('Buffer must be between 0 and 100');
+      console.error(paint.warning('Buffer must be between 0 and 100'));
       process.exit(1);
     }
 
@@ -952,13 +964,15 @@ async function runAuthenticate(
     Boolean(existing?.clientSecret);
   if (hasSession && !options.force) {
     const expiresAt = existing?.expiresAt ?? 0;
-    console.log('Already signed in to Tesla.');
+    console.log(paint.info('Already signed in to Tesla.'));
     console.log(
-      expiresAt > Date.now()
-        ? `  Stored tokens valid until ${new Date(expiresAt).toISOString()}.`
-        : '  Stored tokens have expired; the CLI will refresh them on next use.'
+      paint.info(
+        expiresAt > Date.now()
+          ? `  Stored tokens valid until ${new Date(expiresAt).toISOString()}.`
+          : '  Stored tokens have expired; the CLI will refresh them on next use.'
+      )
     );
-    console.log('  Re-authorize anyway with: node dist/index.js authenticate --force');
+    console.log(paint.positive('  Re-authorize anyway with: node dist/index.js authenticate --force'));
     return true;
   }
 
@@ -969,20 +983,20 @@ async function runAuthenticate(
     options.clientSecret ?? existing?.clientSecret ?? (await promptPassword('Client Secret: '));
 
   if (!clientId.trim() || !clientSecret.trim()) {
-    console.error('A Client ID and Client Secret are both required.');
+    console.error(paint.warning('A Client ID and Client Secret are both required.'));
     return false;
   }
 
-  console.log('\nStarting OAuth authentication...');
-  console.log('A browser window should open. If not, copy and paste the URL below.\n');
+  console.log(paint.info('\nStarting OAuth authentication...'));
+  console.log(paint.info('A browser window should open. If not, copy and paste the URL below.\n'));
 
   const service = new TeslaService({ region: existing?.region });
   try {
     await service.initialize({ clientId: clientId.trim(), clientSecret: clientSecret.trim() });
     await service.authenticate((authUrl) => {
-      console.log('Please visit this URL to authorize:\n');
-      console.log(authUrl);
-      console.log('\nWaiting for authorization...');
+      console.log(paint.info('Please visit this URL to authorize:\n'));
+      console.log(paint.positive(authUrl));
+      console.log(paint.info('\nWaiting for authorization...'));
     });
 
     // Store the app credentials only after a successful exchange. authenticate()
@@ -992,7 +1006,7 @@ async function runAuthenticate(
       clientSecret: clientSecret.trim(),
       region: service.region as 'na' | 'eu' | 'cn',
     });
-    console.log('✓ Signed in, and the credentials were stored securely');
+    console.log(paint.positive('✓ Signed in, and the credentials were stored securely'));
 
     // authenticate() resolves a VIN, which is a /api/1 call. If the app is not
     // registered that is expected, and it is not a reason to call login a
@@ -1000,13 +1014,15 @@ async function runAuthenticate(
     // not perform.
     if (service.needsRegistration) {
       console.log(
-        '  Tesla has not registered this application yet, so vehicles cannot be listed.\n' +
-          '  Register it with: node dist/index.js pair-tesla-key --domain <your-domain>'
+        paint.positive(
+          '  Tesla has not registered this application yet, so vehicles cannot be listed.\n' +
+            '  Register it with: node dist/index.js pair-tesla-key --domain <your-domain>'
+        )
       );
     }
     return true;
   } catch (error) {
-    console.error('Authentication failed:', error instanceof Error ? error.message : error);
+    console.error(paint.error(`Authentication failed: ${error instanceof Error ? error.message : error}`));
     return false;
   }
 }
@@ -1044,10 +1060,10 @@ program
       try {
         const domain = normalizeDomain(options.teslaDomain);
         await credentialStore.setTeslaCredentials({ domain });
-        console.log(`✓ Tesla key domain set to ${domain}`);
-        console.log('  Run pair-tesla-key to register it with Tesla.');
+        console.log(paint.positive(`✓ Tesla key domain set to ${domain}`));
+        console.log(paint.info('  Run pair-tesla-key to register it with Tesla.'));
       } catch (error) {
-        console.error(error instanceof Error ? error.message : error);
+        console.error(paint.error(describeError(error)));
         process.exitCode = 1;
       }
     } else if (options.teslaRegion) {
@@ -1056,28 +1072,28 @@ program
       try {
         const { region, coverage } = resolveRegion(options.teslaRegion);
         await credentialStore.setTeslaCredentials({ region });
-        console.log(`✓ Tesla region set to ${region} (${coverage})`);
-        console.log('  Re-run the pairing step if this moves you to a different deployment.');
+        console.log(paint.positive(`✓ Tesla region set to ${region} (${coverage})`));
+        console.log(paint.info('  Re-run the pairing step if this moves you to a different deployment.'));
       } catch (error) {
-        console.error(error instanceof Error ? error.message : error);
+        console.error(paint.error(describeError(error)));
         process.exitCode = 1;
       }
     } else if (options.clearFranklin) {
       await credentialStore.clearFranklinCredentials();
-      console.log('✓ FranklinWH credentials cleared');
+      console.log(paint.positive('✓ FranklinWH credentials cleared'));
     } else if (options.clearTesla) {
       await credentialStore.clearTeslaCredentials();
-      console.log('✓ Tesla credentials cleared');
+      console.log(paint.positive('✓ Tesla credentials cleared'));
     } else if (options.clearAll) {
       await credentialStore.clearAll();
-      console.log('✓ All credentials cleared');
+      console.log(paint.positive('✓ All credentials cleared'));
     } else {
       // Show current config
       const franklin = await credentialStore.getFranklinCredentials();
       const tesla = await credentialStore.getTeslaCredentials();
       const buffer = await credentialStore.getBatteryBuffer();
       
-      console.log('\n--- Configuration ---');
+      console.log(paint.info('\n--- Configuration ---'));
       console.log(`FranklinWH: ${franklin ? `Configured (Gateway: ${franklin.gatewayId})` : 'Not configured'}`);
       console.log(`Tesla: ${tesla ? `Configured${tesla.vin ? ` (VIN: ${tesla.vin})` : ''}${tesla.region ? ` Region: ${tesla.region}` : ''}${tesla.domain ? ` Key domain: ${tesla.domain}` : ''}` : 'Not configured'}`);
       console.log(`Battery Buffer: ${buffer}%`);
@@ -1107,8 +1123,10 @@ program
     const domainInput = options.domain ?? stored?.domain;
     if (!domainInput) {
       console.error(
-        'No domain configured. Pass --domain <domain> or save one with:\n' +
-          '  node dist/index.js config --tesla-domain <domain>'
+        paint.error(
+          'No domain configured. Pass --domain <domain> or save one with:\n' +
+            '  node dist/index.js config --tesla-domain <domain>'
+        )
       );
       process.exitCode = 1;
       return;
@@ -1119,7 +1137,7 @@ program
       // Validated up front so a typo fails before any key material is touched.
       domain = normalizeDomain(domainInput);
     } catch (error) {
-      console.error(error instanceof Error ? error.message : error);
+      console.error(paint.error(describeError(error)));
       process.exitCode = 1;
       return;
     }
@@ -1133,11 +1151,11 @@ program
 
     // Step 1: the key must exist locally before anything is published or sent.
     const instructions = await virtualKeys.getHostingInstructions(domain);
-    console.log('\n--- Step 1 of 3: host the public key ---');
-    console.log(`\nKey pair: ${virtualKeys.privateKeyPath} (keep this file; it signs every command)`);
-    console.log(`Public key: ${virtualKeys.publicKeyPath}`);
-    console.log(`\nServe this file at exactly:\n  ${instructions.url}`);
-    console.log('\nIt must be the PEM itself, over HTTPS, with no redirect and no HTML page in front.');
+    console.log(paint.info('\n--- Step 1 of 3: host the public key ---'));
+    console.log(paint.info(`\nKey pair: ${virtualKeys.privateKeyPath} (keep this file; it signs every command)`));
+    console.log(paint.info(`Public key: ${virtualKeys.publicKeyPath}`));
+    console.log(paint.positive(`\nServe this file at exactly:\n  ${instructions.url}`));
+    console.log(paint.info('\nIt must be the PEM itself, over HTTPS, with no redirect and no HTML page in front.'));
     if (process.stdin.isTTY) {
       console.log(`\nPublic key contents:\n${instructions.publicKeyPem.trim()}`);
     }
@@ -1147,26 +1165,26 @@ program
     // ends up holding a key whose private half is not on this machine, the
     // pairing appears to succeed and every later command is rejected, so it is
     // much cheaper to notice a bad URL here.
-    console.log('\n--- Step 2 of 3: verify the published key ---');
+    console.log(paint.info('\n--- Step 2 of 3: verify the published key ---'));
     const hosted = await virtualKeys.checkHostedPublicKey(domain);
     if (!hosted.matchesLocalKey) {
-      console.error(`\n✗ ${hosted.error ?? 'The published key could not be verified.'}`);
+      console.error(paint.error(`\n✗ ${hosted.error ?? 'The published key could not be verified.'}`));
       // The preview earns its own line only when the server actually answered
       // with a body; on a transport failure it just repeats the reason above.
       if (hosted.bodyPreview && hosted.reachable === false && hosted.status !== undefined) {
-        console.error(`  Got instead: ${hosted.bodyPreview}`);
+        console.error(paint.error(`  Got instead: ${hosted.bodyPreview}`));
       }
       if (hosted.status !== undefined) {
-        console.error(`  HTTP status: ${hosted.status}`);
+        console.error(paint.error(`  HTTP status: ${hosted.status}`));
       }
-      console.error('\nFix the hosting above and re-run. Nothing has been sent to Tesla yet.');
+      console.error(paint.info('\nFix the hosting above and re-run. Nothing has been sent to Tesla yet.'));
       process.exitCode = 1;
       return;
     }
-    console.log(`✓ ${hosted.url} serves the matching public key`);
+    console.log(paint.positive(`✓ ${hosted.url} serves the matching public key`));
 
     if (options.skipRegistration) {
-      console.log('\nSkipping Tesla registration (--skip-registration).');
+      console.log(paint.info('\nSkipping Tesla registration (--skip-registration).'));
       await printPairingLinkIfReady(virtualKeys, domain, vin);
       return;
     }
@@ -1186,7 +1204,7 @@ async function registerDomainWithTesla(
   domain: string,
   stored: { clientId?: string; clientSecret?: string } | undefined
 ): Promise<boolean> {
-  console.log('\n--- Step 3 of 3: register the domain with Tesla ---');
+  console.log(paint.info('\n--- Step 3 of 3: register the domain with Tesla ---'));
 
   // Registration needs a *partner* token, minted from the application's own
   // client_id/secret (the client_credentials grant), not the user's third-party
@@ -1199,13 +1217,17 @@ async function registerDomainWithTesla(
   let clientSecret = stored?.clientSecret;
   if (!clientId || !clientSecret) {
     console.log(
-      'This step authenticates the application itself (a "partner" token), which\n' +
-        'needs the Client ID and Secret from developer.tesla.com > your app.'
+      paint.info(
+        'This step authenticates the application itself (a "partner" token), which\n' +
+          'needs the Client ID and Secret from developer.tesla.com > your app.'
+      )
     );
     if (!process.stdin.isTTY) {
       console.error(
-        '\nCannot prompt for credentials when stdin is not a terminal. Either run this\n' +
-          'command interactively, or store the credentials first with a Tesla command.'
+        paint.error(
+          '\nCannot prompt for credentials when stdin is not a terminal. Either run this\n' +
+            'command interactively, or store the credentials first with a Tesla command.'
+        )
       );
       process.exitCode = 1;
       return false;
@@ -1213,26 +1235,26 @@ async function registerDomainWithTesla(
     clientId = (await prompt('Client ID: ')).trim();
     clientSecret = await promptPassword('Client Secret: ');
     if (!clientId || !clientSecret) {
-      console.error('Client ID and Secret are both required to register.');
+      console.error(paint.error('Client ID and Secret are both required to register.'));
       process.exitCode = 1;
       return false;
     }
     const save = await prompt('Store them for next time? (y/n): ');
     if (save.trim().toLowerCase() === 'y') {
       await credentialStore.setTeslaCredentials({ clientId, clientSecret });
-      console.log('✓ Client ID/secret saved');
+      console.log(paint.positive('✓ Client ID/secret saved'));
     }
   }
 
   try {
     const partnerToken = await virtualKeys.fetchPartnerToken(clientId, clientSecret);
     await virtualKeys.registerKey(partnerToken.accessToken, domain);
-    console.log(`✓ Registered ${domain}`);
+    console.log(paint.positive(`✓ Registered ${domain}`));
 
     const verification = await virtualKeys.verifyRegistration(partnerToken.accessToken, domain);
     if (!verification.registered) {
-      console.error('✗ Tesla did not return a registered key for this domain.');
-      console.error('  It may take a moment to propagate; re-run --check-only in a minute.');
+      console.error(paint.error('✗ Tesla did not return a registered key for this domain.'));
+      console.error(paint.info('  It may take a moment to propagate; re-run --check-only in a minute.'));
       process.exitCode = 1;
       return false;
     }
@@ -1240,24 +1262,26 @@ async function registerDomainWithTesla(
       // The dangerous case: Tesla holds a key whose private half is not on this
       // machine. Pairing here would appear to succeed and then fail every command.
       console.error(
-        `✗ Tesla holds a different public key for ${domain} than the one on this machine.\n` +
-          '  Commands signed locally would be rejected. Check which domain you registered,\n' +
-          '  and re-publish the public key at the path shown above.'
+        paint.error(
+          `✗ Tesla holds a different public key for ${domain} than the one on this machine.\n` +
+            '  Commands signed locally would be rejected. Check which domain you registered,\n' +
+            '  and re-publish the public key at the path shown above.'
+        )
       );
       process.exitCode = 1;
       return false;
     }
-    console.log('✓ Tesla holds the matching public key');
+    console.log(paint.positive('✓ Tesla holds the matching public key'));
 
     // Remember the domain so later runs do not need --domain.
     const current = await credentialStore.getTeslaCredentials();
     if (current?.domain !== domain) {
       await credentialStore.setTeslaCredentials({ domain });
-      console.log('✓ Domain saved to configuration');
+      console.log(paint.positive('✓ Domain saved to configuration'));
     }
     return true;
   } catch (error) {
-    console.error('Registration failed:', error instanceof Error ? error.message : error);
+    console.error(paint.error(`Registration failed: ${error instanceof Error ? error.message : error}`));
     process.exitCode = 1;
     return false;
   }
@@ -1310,37 +1334,43 @@ async function printPairingLinkIfReady(
   domain: string,
   vin?: string
 ): Promise<void> {
-  console.log('\n--- Pair the vehicle ---');
+  console.log(paint.info('\n--- Pair the vehicle ---'));
 
   const consent = await checkUserConsent();
   if (consent && !consent.granted) {
-    console.error(`\n✗ ${consent.detail}`);
+    console.error(paint.error(`\n✗ ${consent.detail}`));
     if (consent.reason === 'not-signed-in' || consent.reason === 'not-authorized') {
       console.error(
-        '\nThe pairing link only works after you authorize this app. Sign in first:\n' +
-          '  node dist/index.js authenticate\n' +
-          '  (approve in the browser, then re-run pair-tesla-key)'
+        paint.positive(
+          '\nThe pairing link only works after you authorize this app. Sign in first:\n' +
+            '  node dist/index.js authenticate\n' +
+            '  (approve in the browser, then re-run pair-tesla-key)'
+        )
       );
     } else {
       console.error(
-        '  Finish the previous step, then re-run this command.'
+        paint.info(
+          '  Finish the previous step, then re-run this command.'
+        )
       );
     }
     process.exitCode = 1;
     return;
   }
   if (consent) {
-    console.log('✓ This app has been granted access to your Tesla account.');
+    console.log(paint.positive('✓ This app has been granted access to your Tesla account.'));
   }
 
-  console.log('\nOpen this link on a device signed in to the Tesla app that owns the car:');
-  console.log(`\n  ${virtualKeys.buildPairingUrl(domain, vin)}\n`);
-  console.log('Approve the key in the app when it prompts. Pairing is a manual,');
-  console.log('in-the-car step: Tesla documents no API that reports per-vehicle key');
-  console.log('pairing, so this cannot be verified from the command line.');
+  console.log(paint.info('\nOpen this link on a device signed in to the Tesla app that owns the car:'));
+  console.log(paint.positive(`\n  ${virtualKeys.buildPairingUrl(domain, vin)}\n`));
+  console.log(paint.info('Approve the key in the app when it prompts. Pairing is a manual,'));
+  console.log(paint.info('in-the-car step: Tesla documents no API that reports per-vehicle key'));
+  console.log(paint.info('pairing, so this cannot be verified from the command line.'));
   console.log(
-    'To confirm afterwards, run a command (for example `get-ev-bsoc`); a vehicle that\n' +
-      'rejects the key answers "your public key has not been paired with the vehicle".'
+    paint.info(
+      'To confirm afterwards, run a command (for example `get-ev-bsoc`); a vehicle that\n' +
+        'rejects the key answers "your public key has not been paired with the vehicle".'
+    )
   );
 }
 
@@ -1350,31 +1380,33 @@ async function reportKeyState(
   domain: string,
   options: { verifyWithTesla: boolean; credentials?: { clientId?: string; clientSecret?: string } }
 ): Promise<void> {
-  console.log(`\n--- Virtual key state for ${domain} ---`);
+  console.log(paint.info(`\n--- Virtual key state for ${domain} ---`));
 
   // Read through the service rather than stat()ing the path directly, so the
   // same code path that would create a key is the one being reported on.
   const stored = await new VirtualKeyStore().load();
   console.log(
-    stored
-      ? `Local key pair: ${virtualKeys.privateKeyPath}`
-      : 'Local key pair: not created yet (run pair-tesla-key to generate one)'
+    paint.info(
+      stored
+        ? `Local key pair: ${virtualKeys.privateKeyPath}`
+        : 'Local key pair: not created yet (run pair-tesla-key to generate one)'
+    )
   );
 
   const hosted = await virtualKeys.checkHostedPublicKey(domain);
   if (hosted.matchesLocalKey) {
-    console.log(`Hosted key: OK ${hosted.url} serves the matching public key`);
+    console.log(paint.positive(`Hosted key: OK ${hosted.url} serves the matching public key`));
   } else {
-    console.log(`Hosted key: PROBLEM ${hosted.error ?? 'could not be verified'}`);
-    if (hosted.status !== undefined) console.log(`  HTTP status: ${hosted.status}`);
+    console.log(paint.error(`Hosted key: PROBLEM ${hosted.error ?? 'could not be verified'}`));
+    if (hosted.status !== undefined) console.log(paint.error(`  HTTP status: ${hosted.status}`));
     if (hosted.bodyPreview && hosted.reachable === false && hosted.status !== undefined) {
-      console.log(`  Got instead: ${hosted.bodyPreview}`);
+      console.log(paint.error(`  Got instead: ${hosted.bodyPreview}`));
     }
   }
 
   if (!options.verifyWithTesla) return;
   if (!options.credentials?.clientId || !options.credentials?.clientSecret) {
-    console.log('Tesla registration: skipped (no stored client ID/secret)');
+    console.log(paint.info('Tesla registration: skipped (no stored client ID/secret)'));
   } else {
     try {
       const token = await virtualKeys.fetchPartnerToken(
@@ -1383,15 +1415,17 @@ async function reportKeyState(
       );
       const result = await virtualKeys.verifyRegistration(token.accessToken, domain);
       if (!result.registered) {
-        console.log('Tesla registration: no key registered for this domain');
+        console.log(paint.warning('Tesla registration: no key registered for this domain'));
       } else if (result.matchesLocalKey) {
-        console.log('Tesla registration: OK Tesla holds the matching public key');
+        console.log(paint.positive('Tesla registration: OK Tesla holds the matching public key'));
       } else {
-        console.log('Tesla registration: PROBLEM Tesla holds a DIFFERENT public key for this domain');
+        console.log(paint.error('Tesla registration: PROBLEM Tesla holds a DIFFERENT public key for this domain'));
       }
     } catch (error) {
       console.log(
-        `Tesla registration: could not be checked (${error instanceof Error ? error.message : error})`
+        paint.warning(
+          `Tesla registration: could not be checked (${error instanceof Error ? error.message : error})`
+        )
       );
     }
   }
@@ -1401,15 +1435,15 @@ async function reportKeyState(
   // answers "what is still outstanding" rather than requiring three.
   const consent = await checkUserConsent();
   if (consent === null) {
-    console.log('Account access: unknown (could not reach Tesla)');
+    console.log(paint.info('Account access: unknown (could not reach Tesla)'));
   } else if (consent.granted) {
-    console.log('Account access: OK the user has granted this app access to their account');
+    console.log(paint.positive('Account access: OK the user has granted this app access to their account'));
   } else if (consent.reason === 'not-signed-in') {
-    console.log('Account access: MISSING never authorized (run `authenticate` and approve)');
+    console.log(paint.warning('Account access: MISSING never authorized (run `authenticate` and approve)'));
   } else if (consent.reason === 'not-authorized') {
-    console.log('Account access: MISSING token rejected; re-authorize (run `authenticate --force`)');
+    console.log(paint.warning('Account access: MISSING token rejected; re-authorize (run `authenticate --force`)'));
   } else {
-    console.log(`Account access: not confirmed (${consent.reason}) - ${consent.detail}`);
+    console.log(paint.warning(`Account access: not confirmed (${consent.reason}) - ${consent.detail}`));
   }
 
 }

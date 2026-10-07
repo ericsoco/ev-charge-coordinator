@@ -17,37 +17,38 @@ import {
   type CommandContext,
   type CommandResult,
 } from './context.js';
+import * as paint from '../utils/color.js';
 
 export async function getEvBatterySoc(ctx: CommandContext): Promise<CommandResult> {
   if (!ctx.tesla?.isAuthenticated()) {
-    log(ctx, 'Tesla not connected');
+    log(ctx, paint.warning('Tesla not connected'));
     return { ok: false, error: 'Tesla not connected' };
   }
   try {
-    log(ctx, 'Getting EV battery state of charge...');
+    log(ctx, paint.info('Getting EV battery state of charge...'));
     const soc = await ctx.tesla.getStateOfCharge();
-    log(ctx, `EV Battery SoC: ${soc}%`);
+    log(ctx, paint.success('EV Battery SoC: ') + paint.successBold(`${soc}%`));
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
-    log(ctx, `Error: ${message}`);
+    log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
   }
 }
 
 export async function getBatterySoc(ctx: CommandContext): Promise<CommandResult> {
   if (!ctx.franklin?.isAuthenticated()) {
-    log(ctx, 'Solar battery not connected');
+    log(ctx, paint.warning('Solar battery not connected'));
     return { ok: false, error: 'Solar battery not connected' };
   }
   try {
-    log(ctx, 'Getting solar battery state of charge...');
+    log(ctx, paint.info('Getting solar battery state of charge...'));
     const soc = await ctx.franklin.getStateOfCharge();
-    log(ctx, `Solar Battery SoC: ${soc}%`);
+    log(ctx, paint.success('Solar Battery SoC: ') + paint.successBold(`${soc}%`));
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
-    log(ctx, `Error: ${message}`);
+    log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
   }
 }
@@ -58,38 +59,38 @@ export async function setEvChargeLimit(
 ): Promise<CommandResult> {
   if (Number.isNaN(percent) || percent < MIN_EV_CHARGE_LIMIT || percent > MAX_EV_CHARGE_LIMIT) {
     const message = `Charge limit must be between ${MIN_EV_CHARGE_LIMIT} and ${MAX_EV_CHARGE_LIMIT}`;
-    log(ctx, message);
+    log(ctx, paint.warning(message));
     return { ok: false, error: message };
   }
   if (!ctx.tesla?.isAuthenticated()) {
-    log(ctx, 'Tesla not connected');
+    log(ctx, paint.warning('Tesla not connected'));
     return { ok: false, error: 'Tesla not connected' };
   }
   try {
-    log(ctx, 'Setting EV charge limit...');
+    log(ctx, paint.info('Setting EV charge limit...'));
     await ctx.tesla.setChargeLimit(percent);
-    log(ctx, `✓ EV charge limit set to ${percent}%`);
+    log(ctx, paint.success(`✓ EV charge limit set to ${percent}%`));
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
-    log(ctx, `Error: ${message}`);
+    log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
   }
 }
 
 export async function startEvCharging(ctx: CommandContext): Promise<CommandResult> {
   if (!ctx.tesla?.isAuthenticated()) {
-    log(ctx, 'Tesla not connected');
+    log(ctx, paint.warning('Tesla not connected'));
     return { ok: false, error: 'Tesla not connected' };
   }
   try {
-    log(ctx, 'Starting EV charging...');
+    log(ctx, paint.info('Starting EV charging...'));
     await ctx.tesla.startCharging();
-    log(ctx, '✓ EV charging started');
+    log(ctx, paint.success('✓ EV charging started'));
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
-    log(ctx, `Error: ${message}`);
+    log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
   }
 }
@@ -100,13 +101,13 @@ export async function stopEvCharging(ctx: CommandContext): Promise<CommandResult
     return { ok: false, error: 'Tesla not connected' };
   }
   try {
-    log(ctx, 'Stopping EV charging...');
+    log(ctx, paint.info('Stopping EV charging...'));
     await ctx.tesla.stopCharging();
-    log(ctx, '✓ EV charging stopped');
+    log(ctx, paint.success('✓ EV charging stopped'));
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
-    log(ctx, `Error: ${message}`);
+    log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
   }
 }
@@ -117,16 +118,16 @@ export async function setBatteryBuffer(
 ): Promise<CommandResult> {
   if (Number.isNaN(percent) || percent < 0 || percent > 100) {
     const message = 'Buffer must be between 0 and 100';
-    log(ctx, message);
+    log(ctx, paint.warning(message));
     return { ok: false, error: message };
   }
   try {
     await ctx.store.setBatteryBuffer(percent);
-    log(ctx, `✓ Battery buffer set to ${percent}%`);
+    log(ctx, paint.success(`✓ Battery buffer set to ${percent}%`));
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
-    log(ctx, `Error: ${message}`);
+    log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
   }
 }
@@ -150,50 +151,60 @@ export async function chargeFromBattery(
 ): Promise<CommandResult> {
   if (!ctx.franklin?.isAuthenticated() || !ctx.tesla?.isAuthenticated()) {
     const message = 'Both FranklinWH and Tesla must be connected';
-    log(ctx, message);
+    log(ctx, paint.warning(message));
     return { ok: false, error: message };
   }
 
   try {
-    log(ctx, 'Getting solar battery state...');
+    log(ctx, paint.info('Getting solar battery state...'));
     const batterySoc = await ctx.franklin.getStateOfCharge();
     const buffer = await ctx.store.getBatteryBuffer();
 
     const availableCharge = Math.max(0, batterySoc - buffer);
     const evLimit = Math.max(MIN_EV_CHARGE_LIMIT, Math.min(MAX_EV_CHARGE_LIMIT, availableCharge));
 
-    log(ctx, `Solar Battery: ${batterySoc}%`);
-    log(ctx, `Buffer: ${buffer}%`);
-    log(ctx, `Available for EV: ${availableCharge}%`);
-    log(ctx, `Setting EV limit to: ${evLimit}%`);
+    log(ctx, paint.positive(`Solar Battery: ${batterySoc}%`));
+    log(ctx, paint.positive(`Buffer: ${buffer}%`));
+    log(ctx, paint.positive(`Available for EV: ${availableCharge}%`));
+    log(ctx, paint.positive(`Setting EV limit to: ${evLimit}%`));
 
     if (evLimit <= MIN_EV_CHARGE_LIMIT) {
-      log(ctx, `Not enough charge available (minimum EV limit is ${MIN_EV_CHARGE_LIMIT}%)`);
+      log(ctx, paint.warning(`Not enough charge available (minimum EV limit is ${MIN_EV_CHARGE_LIMIT}%)`));
       return { ok: false, error: 'not enough charge available' };
     }
 
     await ctx.tesla.setChargeLimit(evLimit);
-    log(ctx, `✓ EV charge limit set to ${evLimit}%`);
+    log(ctx, paint.success(`✓ EV charge limit set to ${evLimit}%`));
 
     if (options.offerToStart) {
       const answer = await ctx.ask('Start charging now? (y/n): ');
       if (answer.trim().toLowerCase() === 'y') {
         await ctx.tesla.startCharging();
-        log(ctx, '✓ EV charging started');
+        log(ctx, paint.success('✓ EV charging started'));
       }
     }
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
-    log(ctx, `Error: ${message}`);
+    log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
   }
 }
 
 export async function showStatus(ctx: CommandContext): Promise<CommandResult> {
-  log(ctx, '\n--- System Status ---');
-  log(ctx, `FranklinWH: ${ctx.franklin?.isAuthenticated() ? '✓ Connected' : '✗ Not connected'}`);
-  log(ctx, `Tesla: ${ctx.tesla?.isAuthenticated() ? '✓ Connected' : '✗ Not connected'}`);
+  log(ctx, paint.info('\n--- System Status ---'));
+  log(
+    ctx,
+    `FranklinWH: ${
+      ctx.franklin?.isAuthenticated() ? paint.positive('✓ Connected') : paint.error('✗ Not connected')
+    }`
+  );
+  log(
+    ctx,
+    `Tesla: ${
+      ctx.tesla?.isAuthenticated() ? paint.positive('✓ Connected') : paint.error('✗ Not connected')
+    }`
+  );
   log(ctx, `Battery Buffer: ${await ctx.store.getBatteryBuffer()}%`);
   log(ctx, '');
   return { ok: true };
