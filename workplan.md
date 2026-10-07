@@ -462,6 +462,21 @@ extracted to `src/commands/repl.ts` as the single source for `help` and completi
 new packages (`vorpal`-style shell frameworks are unmaintained). Verified live:
 `stat` + TAB → `status`.
 
+**4. Commands could be submitted while one was in flight.** Readline keeps emitting
+`line` events while an async handler runs, so a second `get-battery-soc` overlapped the
+first: interleaved output, two concurrent reads against an already-flaky upstream (more
+ReadTimeouts), and a stale `ev-charge> ` rendered over in-progress output when typing
+mid-command. The REPL now gates: non-local commands are skipped with an explicit line
+(`LOCAL_WHILE_BUSY` keeps `help`/`status`/`exit` available — `exit` matters most during a
+hang), sub-prompt answers like `80` are dropped silently, and the prompt is blanked while
+busy. No queue: a queue would hide the delay and still fire every accidental duplicate at
+Franklin, and the proxy needs none of its own — the shared loop lock already serializes
+its network calls. Verified live: rapid double-submit runs once and prints the skip line;
+`help` mid-flight does not re-prompt early. Supporting fixes: httpx timeouts carry no
+message, so `details` falls back to the exception type (`HTTP 500 — Internal error:
+ReadTimeout` instead of a bare `Internal error`), and the Franklin axios timeout went
+30s → 60s so a queued or retrying proxy response is never cut off mid-flight.
+
 ---
 
 ## Phase 3 — Python proxy security + packaging (~0.5 d)
@@ -608,6 +623,7 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 | Proxy event loop | One process-lifetime loop behind a lock; per-request loops broke httpx's pooled connections (`Event loop is closed`) |
 | Franklin read failures | Retry idempotent reads ×3 (`run_read`, 0.5s/1.5s); the four mapped exceptions are deterministic and never retried |
 | REPL ergonomics | `node:readline` built-ins only — `completer` for tab completion, shared `REPL_COMMANDS` in `src/commands/repl.ts`; no shell-framework package |
+| REPL in-flight commands | Reject non-local commands while one is running (busy-gate); whitelist `help`/`status`/`exit`; no queue — the proxy's loop lock already serializes its network calls |
 | `LICENSE` holder / `author` | Not yet supplied by user - Phase 5 needs a name before it can close |
 
 ---
