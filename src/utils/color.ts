@@ -30,8 +30,8 @@ function rgb(r: number, g: number, b: number, options: { bold?: boolean } = {}) 
   };
 }
 
-/** The REPL prompt. */
-export const prompt = rgb(142, 200, 205);
+/** The REPL prompt -- bold, so it stands apart from command output. */
+export const prompt = rgb(142, 200, 205, { bold: true });
 
 /** Progress, hints, status headers, forwarded [proxy] lines. */
 export const info = rgb(190, 190, 190);
