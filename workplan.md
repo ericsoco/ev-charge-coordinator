@@ -481,21 +481,49 @@ ReadTimeout` instead of a bare `Internal error`), and the Franklin axios timeout
 
 ## Phase 3 — Python proxy security + packaging (~0.5 d)
 
-1. **Shared secret:** Node generates a random token, passes it via env, Flask requires
-   `X-Proxy-Token` on every route except `/health`. Today any process on the host can
-   `POST /mode` and rewrite battery operating mode.
-2. **`/health` must stop leaking `gateway_id`** (`franklin_proxy.py:79-86`).
-3. **`/auth` must not retain the plaintext password** — drop it once `Client` is built;
-   right now it lives in `_token_fetcher` for the process lifetime (`franklin_proxy.py:115-117`).
-4. **Fix `/shutdown`** (`franklin_proxy.py:251-259`): `werkzeug.server.shutdown` was removed
-   in Flask ≥ 2.1, so that branch is dead code and the `os._exit(0)` fallback hard-kills
-   mid-request without cleanup. Use a signal-based shutdown on the main thread.
-5. Keep the `127.0.0.1` bind (correct today) but **fail fast** if an override requests
-   `0.0.0.0`, since these routes are battery-write capable.
-6. Pin `python/requirements.txt` to what's actually installed and API-compatible:
-   `franklinwh>=2026.2.1` (the current `>=0.2.0` does not match the code's API surface).
-7. Add a smoke test: proxy boots in a temp venv and `GET /health` → 200. Gate live Franklin
-   calls behind `RUN_LIVE_TESTS=1`.
+**Status: ✅ complete.** All seven items landed on `phase-3-proxy-security`. 216 tests
+green (7 of them the new proxy smoke suite), lint clean. Verified live: curl without a
+token → 401 naming `X-Proxy-Token`; the daemon session recorded its token in
+`runtime.json`; a one-shot command attached using it (`/health → /auth → /soc` all 200);
+`exit` from a fresh process got `/shutdown 200` and stopped the proxy cleanly;
+occupying port 3001 still produces the honest EADDRINUSE guidance.
+
+1. ✅ **Shared secret:** Node mints 32 random bytes per spawn, passes them via
+   `FRANKLIN_PROXY_TOKEN`, Flask requires `X-Proxy-Token` on every route except
+   `/health` (`hmac.compare_digest`, checked *before* `require_client`). The proxy
+   refuses to boot without the env var, so a manual launch can never come up open.
+   The token is stored **raw** in `runtime.json` (owner-only 0600) — see the
+   deviation note below; a state file without one (pre-Phase 3) degrades honestly:
+   `exit` falls back to SIGTERM, attach lets the proxy's 401 speak, which
+   `upgradeTokenRejection` turns into `lsof` guidance rather than a credentials error.
+2. ✅ **`/health` no longer leaks `gateway_id`** — Node only ever read `status`.
+3. ✅ **The proxy keeps no password copy of its own** — `_token_fetcher` is gone
+   (local to `/auth`). **Evidence-based deviation:** one copy unavoidably remains
+   inside franklinwh's `TokenFetcher`, because `Client.refresh_token()` re-runs the
+   full login (posts an MD5 of the password) and the library has no refresh-token
+   path. The login response was introspected live: **no refresh token exists** —
+   keys are `token` plus account/MFA metadata — so no client-side workaround can
+   drop it. Exit criterion adjusted below to what is true.
+4. ✅ **`/shutdown` is signal-based:** replies, then SIGTERMs itself from a short-lived
+   thread; the main-thread handler raises `SystemExit`, so `serve_forever` unwinds and
+   the interpreter exits normally. Live: `/shutdown 200` → **exit code 0**, no
+   traceback, no `os._exit`. `stopProxy`/`exit`/`terminateProcess` comments updated —
+   the response can still lose the 0.2s race, so the signal escalation remains the
+   guarantee.
+5. ✅ **Loopback fail-fast:** optional `FRANKLIN_PROXY_HOST` (the CLI never sets it)
+   refuses anything outside `127.0.0.1`/`localhost`/`::1` with a message naming the
+   battery-write routes.
+6. ✅ **`requirements.txt` pins `franklinwh>=2026.2.1`.** The smoke venv installs
+   2026.3.0 under that pin and boots the proxy, so the pin is verified against a
+   newer release too, not just what is installed.
+7. ✅ **Smoke test** (`tests/proxy-smoke.test.ts`): temp venv built from
+   `requirements.txt` (cached in the OS tmpdir; one pip retry because the first run
+   downloads everything), then asserts health-without-gateway_id, 401s for missing and
+   wrong tokens, decorator order (right token, no `/auth` → "Not authenticated"),
+   refusal without `FRANKLIN_PROXY_TOKEN`, refusal of `0.0.0.0`, and the clean exit-0
+   shutdown. Skips when `python3` is absent. Live Franklin calls live in
+   `tests/live/franklin-live.test.ts`, gated behind `RUN_LIVE_TESTS=1` with
+   env-var credentials (the suite force-disables the keychain).
 
 **Verified API surface** (`franklinwh 2026.2.1`, confirmed by introspection — the proxy's
 calls are correct): `TokenFetcher(username, password)`, `Client(fetcher, gateway, url_base)`,
@@ -503,8 +531,16 @@ calls are correct): `TokenFetcher(username, password)`, `Client(fetcher, gateway
 `get_home_gateway_list`, `Mode.{time_of_use,self_consumption,emergency_backup}`, and
 exceptions `InvalidCredentials` / `AccountLocked` / `DeviceTimeout` / `GatewayOffline`.
 
-**Exit criteria:** requests without the token get 401; no plaintext password persists;
-`exit` shuts the proxy down cleanly with no `os._exit`.
+**Deviation — `token` (not `tokenHash`) in `runtime.json`:** the Phase 2 note imagined a
+hash, but both readers — `exit` authenticating `/shutdown` and the attach flow
+authenticating everything else — must *present* the secret; a hash has no reader that
+can authenticate. The file is owner-only, and a same-user process could read the token
+from the proxy's environment anyway, so storing it raw adds no exposure.
+
+**Exit criteria:** ✅ requests without the token get 401 (smoke suite + live curl);
+✅ no plaintext password persists *beyond what franklinwh itself requires for token
+refresh* — the proxy's own copy is gone and the constraint is documented above;
+✅ `exit` shuts the proxy down cleanly with no `os._exit` (live: exit code 0).
 
 ---
 
@@ -625,6 +661,7 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 | REPL ergonomics | `node:readline` built-ins only — `completer` for tab completion, shared `REPL_COMMANDS` in `src/commands/repl.ts`; no shell-framework package |
 | REPL in-flight commands | Reject non-local commands while one is running (busy-gate); whitelist `help`/`status`/`exit`; no queue — the proxy's loop lock already serializes its network calls |
 | Output theming | User-chosen 24-bit RGB palette in `src/utils/color.ts`, zero dependencies; gated at call time on `isTTY && !NO_COLOR`, so tests, redirects, and NO_COLOR users receive byte-identical plain output |
+| Proxy shared secret | Raw token minted per spawn, stored in owner-only `runtime.json` (a hash cannot authenticate); `hmac.compare_digest` on every route except `/health`, which the attach flow needs before it knows the token |
 | `LICENSE` holder / `author` | Not yet supplied by user - Phase 5 needs a name before it can close |
 
 ---
@@ -689,7 +726,7 @@ Traced back to `prompts.md`:
 - [ ] `set-battery-buffer` persists across restarts
 - [ ] Tesla OAuth completes in a browser, honors user actions, tokens survive restart + refresh
 - [ ] FranklinWH credentials prompted once, stored securely, never echoed
-- [ ] No proxy route writable without the shared token
+- [x] No proxy route writable without the shared token
 - [ ] `npm run build`, `npm run lint`, `npm test` and CI all green
 - [ ] MIT `LICENSE` + README CLI docs accurate for the shipped commands
 
