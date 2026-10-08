@@ -31,7 +31,7 @@ pip install -r python/requirements.txt  # Python deps
 
 ## Testing
 - Run `node dist/index.js --help` to verify CLI
-- Run `python3 python/franklin_proxy.py` to test proxy startup
+- Run `FRANKLIN_PROXY_TOKEN=dev python3 python/franklin_proxy.py` to test proxy startup (the proxy refuses to boot without a token)
 - Run `npm run test` to run tests with vitest
 - Run `npm run lint` to run linter
 

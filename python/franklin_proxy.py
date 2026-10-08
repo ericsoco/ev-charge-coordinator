@@ -7,8 +7,10 @@ This allows the Node.js application to communicate with FranklinWH systems throu
 """
 
 import asyncio
+import hmac
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -32,12 +34,26 @@ except ImportError:
     print("Error: franklinwh package not installed. Run: pip install franklinwh", file=sys.stderr)
     sys.exit(1)
 
+# Shared secret (Phase 3): Node mints a random token per spawn and passes it
+# here; every route except /health then demands it as X-Proxy-Token. Refusing
+# to start without it means a manually launched proxy can never come up open --
+# previously any process on the host could POST /mode and rewrite the battery's
+# operating mode.
+_PROXY_TOKEN = os.environ.get("FRANKLIN_PROXY_TOKEN")
+if not _PROXY_TOKEN:
+    print(
+        "Error: FRANKLIN_PROXY_TOKEN is not set.\n"
+        "  Start the proxy through the CLI (npm start), or pass one explicitly:\n"
+        "    FRANKLIN_PROXY_TOKEN=$(openssl rand -hex 32) python3 python/franklin_proxy.py",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 app = Flask(__name__)
 CORS(app)
 
 # Global client instance
 _client: Client | None = None
-_token_fetcher: TokenFetcher | None = None
 _gateway_id: str | None = None
 
 
@@ -115,6 +131,28 @@ def require_client(f):
     return decorated
 
 
+def require_token(f):
+    """Reject any request that does not carry this proxy's shared token.
+
+    Checked before require_client, so an unauthenticated local process learns
+    "missing token" rather than anything about the FranklinWH auth state.
+    /health is deliberately excluded: the CLI's attach flow probes it before
+    it knows which token the running proxy holds. Byte comparison on both
+    sides because hmac.compare_digest rejects non-ASCII str.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        supplied = request.headers.get("X-Proxy-Token", "").encode("utf-8", "replace")
+        expected = (_PROXY_TOKEN or "").encode("utf-8")
+        if not hmac.compare_digest(supplied, expected):
+            return jsonify({
+                "error": "Unauthorized: missing or invalid X-Proxy-Token",
+                "detail": "This proxy only accepts requests from the CLI that started it.",
+            }), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
 def handle_franklin_errors(f):
     """Decorator to handle FranklinWH API errors."""
     @wraps(f)
@@ -146,15 +184,20 @@ def handle_franklin_errors(f):
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Health check endpoint."""
+    """Health check endpoint.
+
+    No token required (the attach flow needs it before knowing the token),
+    and no gateway_id: the route answered on loopback, but the site id is
+    still account data that no caller here uses -- Node reads only `status`.
+    """
     return jsonify({
         "status": "ok",
         "authenticated": _client is not None,
-        "gateway_id": _gateway_id
     })
 
 
 @app.route("/auth", methods=["POST"])
+@require_token
 @handle_franklin_errors
 def authenticate():
     """
@@ -167,7 +210,7 @@ def authenticate():
             "gateway_id": "your_gateway_id"
         }
     """
-    global _client, _token_fetcher, _gateway_id
+    global _client, _gateway_id
     
     data = request.get_json()
     if not data:
@@ -180,8 +223,13 @@ def authenticate():
     if not all([username, password, gateway_id]):
         return jsonify({"error": "username, password, and gateway_id are required"}), 400
     
-    _token_fetcher = TokenFetcher(username, password)
-    _client = Client(_token_fetcher, gateway_id)
+    # Local, not a module global: the proxy keeps no copy of the password of
+    # its own. One copy unavoidably survives inside franklinwh's Client
+    # (self.fetcher), because Client.refresh_token() re-runs the full login on
+    # every refresh -- fetch_token posts an MD5 of the password and the library
+    # has no refresh-token path. See workplan Phase 3 item 3.
+    token_fetcher = TokenFetcher(username, password)
+    _client = Client(token_fetcher, gateway_id)
     _gateway_id = gateway_id
     
     # Test authentication by refreshing token
@@ -195,6 +243,7 @@ def authenticate():
 
 
 @app.route("/stats", methods=["GET"])
+@require_token
 @require_client
 @handle_franklin_errors
 def get_stats():
@@ -236,6 +285,7 @@ def get_stats():
 
 
 @app.route("/soc", methods=["GET"])
+@require_token
 @require_client
 @handle_franklin_errors
 def get_soc():
@@ -248,6 +298,7 @@ def get_soc():
 
 
 @app.route("/mode", methods=["GET"])
+@require_token
 @require_client
 @handle_franklin_errors
 def get_mode():
@@ -261,6 +312,7 @@ def get_mode():
 
 
 @app.route("/mode", methods=["POST"])
+@require_token
 @require_client
 @handle_franklin_errors
 def set_mode():
@@ -299,6 +351,7 @@ def set_mode():
 
 
 @app.route("/composite-info", methods=["GET"])
+@require_token
 @require_client
 @handle_franklin_errors
 def get_composite_info():
@@ -308,6 +361,7 @@ def get_composite_info():
 
 
 @app.route("/gateways", methods=["GET"])
+@require_token
 @require_client
 @handle_franklin_errors
 def get_gateways():
@@ -317,19 +371,46 @@ def get_gateways():
 
 
 @app.route("/shutdown", methods=["POST"])
+@require_token
 def shutdown():
-    """Shutdown the proxy server."""
-    func = request.environ.get("werkzeug.server.shutdown")
-    if func is None:
-        # For production/different servers, just exit
-        os._exit(0)
-    func()
+    """Shut the proxy down cleanly, after this response has been sent.
+
+    Flask >= 2.1 removed werkzeug.server.shutdown, and the old fallback,
+    os._exit(0), hard-killed the process mid-request with no cleanup. Instead
+    the reply goes out first, then a short-lived thread SIGTERMs the process;
+    the handler installed in __main__ turns that signal into SystemExit on the
+    main thread, which is parked in serve_forever -- so app.run() unwinds and
+    the interpreter exits normally. The caller still verifies the process is
+    actually gone; a response lost to the 0.2s race is not an error.
+    """
+    def fire_sigterm():
+        time.sleep(0.2)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=fire_sigterm, daemon=True).start()
     return jsonify({"message": "Server shutting down..."})
+
+
+def _exit_on_sigterm(signum, frame):
+    """Main-thread SIGTERM: unwind serve_forever instead of hard-killing."""
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("FRANKLIN_PROXY_PORT", 3001))
+    host = os.environ.get("FRANKLIN_PROXY_HOST", "127.0.0.1")
+    # The routes include battery writes (POST /mode); a non-loopback bind would
+    # expose them to the network. The CLI never sets this -- it exists so a
+    # manual override fails loudly instead of quietly.
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"Refusing to bind {host!r}: this proxy exposes battery-write routes\n"
+            "  and must stay on loopback. Unset FRANKLIN_PROXY_HOST to use 127.0.0.1.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
     debug = os.environ.get("FRANKLIN_PROXY_DEBUG", "false").lower() == "true"
-    
+
     print(f"Starting FranklinWH API Proxy on port {port}")
-    app.run(host="127.0.0.1", port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug)
