@@ -6,10 +6,12 @@
 
 import axios, { AxiosInstance } from 'axios';
 import { spawn, ChildProcess } from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as paint from '../utils/color.js';
+import { readRuntimeState } from './ProcessManager.js';
 import type {
   BatteryService,
   BatteryCredentials,
@@ -149,6 +151,28 @@ export function describeProxyHttpError(error: unknown): string {
   return detail ? `HTTP ${status} — ${detail}` : `HTTP ${status} — ${fallback}`;
 }
 
+/**
+ * Turn the proxy's token rejection into actionable guidance.
+ *
+ * A healthy listener that rejects our token was not started by this CLI, or
+ * the recorded token is stale (the proxy was restarted behind our back).
+ * Reporting that as a FranklinWH credentials failure would send the user to
+ * retype a password that has nothing to do with it -- the same mistake the
+ * EADDRINUSE path used to make. Anything that is not that specific 401 passes
+ * through untouched.
+ */
+function upgradeTokenRejection(error: unknown, port: number): unknown {
+  if (!axios.isAxiosError(error) || error.response?.status !== 401) return error;
+  const body = error.response.data as { error?: unknown } | undefined;
+  if (typeof body?.error !== 'string' || !body.error.includes('X-Proxy-Token')) return error;
+  return new ProxyStartupError(
+    `A proxy is listening on port ${port} but rejected this CLI's token:\n` +
+      `  it was not started by this CLI, or its recorded token is stale.\n` +
+      `  Stop it with: lsof -ti tcp:${port} | xargs kill`,
+    { cause: error }
+  );
+}
+
 interface FranklinStatsResponse {
   current: {
     solar_production: number;
@@ -194,6 +218,12 @@ export class FranklinWHService implements BatteryService {
   private ownsProxyProcess = false;
   /** True when we attached to a proxy that someone else started. */
   private attachedToExistingProxy = false;
+  /**
+   * X-Proxy-Token of the running proxy: minted at spawn, or read from
+   * runtime.json at attach. `start` records it so `exit` from another
+   * terminal and later attach rounds can present it.
+   */
+  private proxyToken: string | null = null;
 
   constructor(proxyPort = 3001) {
     this.proxyPort = proxyPort;
@@ -237,12 +267,19 @@ export class FranklinWHService implements BatteryService {
 
     const pythonScript = path.join(__dirname, '../../python/franklin_proxy.py');
     const { command, source } = resolvePythonInterpreter();
+
+    // Mint the shared secret before spawning: the child refuses to boot
+    // without it, and every request this instance sends must carry it.
+    const token = crypto.randomBytes(32).toString('hex');
+    this.proxyToken = token;
+    this.client.defaults.headers.common['X-Proxy-Token'] = token;
     
     return new Promise((resolve, reject) => {
       this.proxyProcess = spawn(command, [pythonScript], {
         env: {
           ...process.env,
-          FRANKLIN_PROXY_PORT: String(this.proxyPort)
+          FRANKLIN_PROXY_PORT: String(this.proxyPort),
+          FRANKLIN_PROXY_TOKEN: token
         },
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -348,17 +385,23 @@ export class FranklinWHService implements BatteryService {
     try {
       await this.client.post('/shutdown');
     } catch {
-      // The proxy's /shutdown calls os._exit(0) when Werkzeug's shutdown hook is
-      // absent, which it is on Werkzeug >= 2.1. The endpoint does stop the
-      // process, but it discards the response body on the way out, so a timeout
-      // here is expected rather than exceptional. The caller's SIGTERM/SIGKILL
-      // escalation is what confirms the process is gone.
+      // /shutdown replies and then exits via SIGTERM ~0.2s later; if the
+      // process wins that race the response is lost and this throws.
+      // Expected, not exceptional -- the SIGTERM below, plus the caller's
+      // terminateProcess escalation, are what confirm the process is gone.
     }
 
     this.proxyProcess.kill('SIGTERM');
     this.proxyProcess = null;
     this.ownsProxyProcess = false;
     this.authenticated = false;
+    // Only touch the header when this instance set one: test doubles replace
+    // the axios client wholesale, and there is nothing to clear on a service
+    // that never minted a token.
+    if (this.proxyToken !== null) {
+      this.proxyToken = null;
+      delete this.client.defaults.headers.common['X-Proxy-Token'];
+    }
   }
 
   /**
@@ -375,6 +418,15 @@ export class FranklinWHService implements BatteryService {
     }
 
     if (await this.isProxyHealthy()) {
+      // Present the recorded token when there is one. When there is not (an
+      // orphan, or a state file from before Phase 3), send nothing and let
+      // /auth's 401 speak -- initialize() maps it to guidance. The proxy is
+      // the judge; a client-side pre-check would just duplicate it.
+      const state = readRuntimeState();
+      if (state?.token && state.port === this.proxyPort) {
+        this.proxyToken = state.token;
+        this.client.defaults.headers.common['X-Proxy-Token'] = state.token;
+      }
       this.attachedToExistingProxy = true;
       this.ownsProxyProcess = false;
       return 'attached';
@@ -389,6 +441,17 @@ export class FranklinWHService implements BatteryService {
   /** PID of the proxy this instance spawned, or null when it attached to one. */
   get spawnedProxyPid(): number | null {
     return this.ownsProxyProcess && this.proxyProcess?.pid ? this.proxyProcess.pid : null;
+  }
+
+  /**
+   * The running proxy's X-Proxy-Token as this instance knows it, or null.
+   *
+   * `start` records it in runtime.json next to the PID, which is what lets
+   * `exit` from another terminal authenticate its /shutdown and later attach
+   * rounds authenticate everything else.
+   */
+  get sharedToken(): string | null {
+    return this.proxyToken;
   }
 
   /** True when a proxy is running that this instance did not start. */
@@ -436,7 +499,7 @@ export class FranklinWHService implements BatteryService {
       if (started === 'spawned') {
         await this.stopProxy();
       }
-      throw error;
+      throw upgradeTokenRejection(error, this.proxyPort);
     }
 
     this.authenticated = true;

@@ -62,6 +62,26 @@ describe('runtime state file', () => {
     expect(readRuntimeState()).toEqual(state);
   });
 
+  it('round-trips the proxy token when present (Phase 3)', () => {
+    writeRuntimeState({ pid: 4242, port: 3001, startedAt: 1, token: 'secret-token' });
+    expect(readRuntimeState()?.token).toBe('secret-token');
+  });
+
+  it('still parses a state file written before Phase 3, without a token', () => {
+    // Transitional: an old file must not read as corrupt -- `exit` degrades to
+    // SIGTERM and attach lets the proxy's 401 speak, both honest outcomes.
+    fs.writeFileSync(runtimeStatePath(), JSON.stringify({ pid: 1, port: 3001, startedAt: 1 }));
+    expect(readRuntimeState()?.token).toBeUndefined();
+  });
+
+  it('treats a non-string token as corrupt rather than sending it', () => {
+    fs.writeFileSync(
+      runtimeStatePath(),
+      JSON.stringify({ pid: 1, port: 3001, startedAt: 1, token: 42 })
+    );
+    expect(readRuntimeState()).toBeNull();
+  });
+
   it('reports nothing when no file exists', () => {
     expect(readRuntimeState()).toBeNull();
   });
@@ -146,8 +166,9 @@ describe('terminateProcess', () => {
 
   it('stops a live process and confirms it is gone', async () => {
     const pid = spawnSleeper();
-    // The escalation must verify rather than assume: the proxy's /shutdown uses
-    // os._exit(0), so "the endpoint returned" is not evidence the process ended.
+    // The escalation must verify rather than assume: the proxy's /shutdown
+    // replies before its deferred SIGTERM lands, so "the endpoint returned" is
+    // not evidence the process ended.
     await expect(terminateProcess(pid)).resolves.toMatch(/exited|killed/);
     await expect(waitForExit(pid)).resolves.toBe(true);
   });
