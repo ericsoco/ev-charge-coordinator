@@ -31,6 +31,21 @@ export interface RuntimeState {
   port: number;
   /** Unix ms, so a stale file can be recognised as stale. */
   startedAt: number;
+  /**
+   * X-Proxy-Token of the recorded proxy (Phase 3).
+   *
+   * Raw rather than a hash: `exit` and the attach flow must *present* the
+   * token, and a hash has no reader that could authenticate with it (the
+   * workplan originally mused about `tokenHash`; this is the field that
+   * actually has readers). The file is owner-only (0600): other users cannot
+   * read it, and a same-user process could read the token from the proxy's
+   * environment anyway, so this adds no exposure.
+   *
+   * Optional so a state file written before Phase 3 still parses; callers
+   * degrade honestly -- `exit` falls back to SIGTERM, attach lets the proxy's
+   * 401 speak.
+   */
+  token?: string;
 }
 
 export function runtimeStatePath(): string {
@@ -76,7 +91,10 @@ export function readRuntimeState(): RuntimeState | null {
     ) {
       return null;
     }
-    return { pid: parsed.pid, port: parsed.port, startedAt: parsed.startedAt };
+    if (parsed.token !== undefined && typeof parsed.token !== 'string') {
+      return null;
+    }
+    return { pid: parsed.pid, port: parsed.port, startedAt: parsed.startedAt, token: parsed.token };
   } catch {
     return null;
   }
@@ -125,10 +143,10 @@ export interface SignalDeps {
  * Send a signal and wait for the process to actually disappear.
  *
  * Escalates SIGTERM -> SIGKILL rather than assuming the signal was honoured,
- * which matters here specifically because the Python proxy's /shutdown endpoint
- * calls os._exit(0): the process does go away, but by a path that leaves no
- * chance for cleanup, so nothing guarantees it is gone by the time the request
- * returns.
+ * which matters here specifically because the proxy's /shutdown replies *before*
+ * its deferred SIGTERM lands, so "the endpoint returned" is not evidence the
+ * process ended -- and a wedged process ignores SIGTERM entirely. Being sure
+ * means polling until the process is actually gone.
  */
 export async function terminateProcessWith(
   pid: number,

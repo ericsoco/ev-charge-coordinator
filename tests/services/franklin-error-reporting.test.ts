@@ -118,3 +118,37 @@ describe('FranklinWHService command reads', () => {
     });
   });
 });
+
+describe('proxy token rejection (Phase 3)', () => {
+  it("maps the proxy's token 401 to startup guidance, not a credentials failure", async () => {
+    // A healthy listener rejecting our token is an orphan or a stale state
+    // file -- sending the user to retype their FranklinWH password would be
+    // the same mistake the EADDRINUSE path used to make.
+    const service = new FranklinWHService(4997);
+    const client = (service as unknown as { client: AxiosInstance }).client;
+    client.defaults.adapter = async (config) => {
+      const url = config.url ?? '';
+      if (url === '/health') {
+        return { status: 200, statusText: 'OK', data: { status: 'ok' }, headers: {}, config };
+      }
+      if (url === '/auth') {
+        const response = {
+          status: 401,
+          statusText: 'Unauthorized',
+          data: {
+            error: 'Unauthorized: missing or invalid X-Proxy-Token',
+            detail: 'This proxy only accepts requests from the CLI that started it.',
+          },
+          headers: {},
+          config,
+        };
+        throw new AxiosError('Request failed with status code 401', '401', config, undefined, response);
+      }
+      return { status: 404, statusText: 'Not Found', data: {}, headers: {}, config };
+    };
+
+    const failure = service.initialize({ username: 'u@example.com', password: 'x', gatewayId: 'GW1' });
+    await expect(failure).rejects.toThrow(/rejected this CLI's token/);
+    await expect(failure).rejects.toThrow(/lsof -ti tcp:4997/);
+  });
+});

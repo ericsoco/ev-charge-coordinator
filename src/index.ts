@@ -553,7 +553,13 @@ program
     // someone else started must not overwrite their recorded PID.
     const spawnedPid = franklinService?.spawnedProxyPid ?? null;
     if (spawnedPid) {
-      writeRuntimeState({ pid: spawnedPid, port: DEFAULT_PROXY_PORT, startedAt: Date.now() });
+      writeRuntimeState({
+        pid: spawnedPid,
+        port: DEFAULT_PROXY_PORT,
+        startedAt: Date.now(),
+        // Raw token, owner-only file; see RuntimeState for why not a hash.
+        token: franklinService?.sharedToken ?? undefined,
+      });
     }
 
     if (franklin.ok) {
@@ -788,14 +794,19 @@ program
 
     console.log(paint.info(`Stopping proxy on port ${state.port} (pid ${state.pid})...`));
 
-    // Ask the proxy to shut down first so it can close cleanly. It calls
-    // os._exit(0) under Werkzeug >= 2.1, so the response body is discarded and the
-    // HTTP call can time out; that is fine, because terminateProcess verifies the
-    // process is actually gone and escalates if it is not.
+    // Ask the proxy to shut down first so it can close cleanly: it replies,
+    // then SIGTERMs itself into a normal interpreter exit (no os._exit). The
+    // response can still lose that race, so terminateProcess below remains
+    // the real guarantee that the process ends.
     try {
-      await axios.post(`http://127.0.0.1:${state.port}/shutdown`, undefined, { timeout: 5000 });
+      await axios.post(`http://127.0.0.1:${state.port}/shutdown`, undefined, {
+        timeout: 5000,
+        // A state file from before Phase 3 carries no token; the proxy then
+        // 401s and the SIGTERM path performs the same clean shutdown anyway.
+        ...(state.token ? { headers: { 'X-Proxy-Token': state.token } } : {}),
+      });
     } catch {
-      // Expected on most Werkzeug versions; the escalation below is the real
+      // A lost response is a race, not a failure; the escalation below is the
       // guarantee that the process ends.
     }
 
