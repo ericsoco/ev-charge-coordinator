@@ -32,6 +32,7 @@ import {
   type CommandContext,
   type CommandResult,
 } from './commands/context.js';
+import { pendingQuestion, prompt, promptNumeric, setReplReadline } from './commands/prompt.js';
 import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, renderHelp } from './commands/repl.js';
 import * as paint from './utils/color.js';
 import {
@@ -220,28 +221,18 @@ let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
 
 /**
- * A readline for one-off questions, or -- with a completer -- the REPL prompt.
+ * The REPL's readline (and the password fallback's).
  *
  * Tab completion comes from readline's `completer` hook (no package needed);
- * arrow-key history is built into node:readline already. Value prompts pass no
- * completer, so a stray Tab cannot splice a command name into an answer.
+ * arrow-key history is built into node:readline already. Sub-prompts borrow
+ * this one interface instead of opening a second on the same stdin -- see
+ * commands/prompt.ts for why that doubling was a bug.
  */
 function createReadline(options: { completer?: (line: string) => [string[], string] } = {}) {
   return createInterface({
     input: process.stdin,
     output: process.stdout,
     ...(options.completer ? { completer: options.completer } : {})
-  });
-}
-
-async function prompt(question: string): Promise<string> {
-  const rl = createReadline();
-  return new Promise((resolve) => {
-    // Category: Question -- every readline question in the CLI funnels here.
-    rl.question(paint.question(question), (answer) => {
-      rl.close();
-      resolve(answer);
-    });
   });
 }
 
@@ -483,7 +474,12 @@ async function initializeTesla(): Promise<ServiceStart> {
       selectedVin = vehicles[0].vin;
       console.log(paint.info(`\nUsing vehicle: ${vehicles[0].displayName}`));
     } else {
-      const selection = await prompt('Select vehicle number: ');
+      const selection = await promptNumeric('Select vehicle number (ESC to cancel): ');
+      if (selection === null) {
+        // ESC never submits a line, so start a fresh one for the notice.
+        console.log(paint.warning('\nVehicle selection cancelled.'));
+        return { ok: false, error: 'Vehicle selection cancelled' };
+      }
       const index = parseInt(selection) - 1;
       if (index < 0 || index >= vehicles.length) {
         console.log(paint.warning('Invalid selection'));
@@ -593,6 +589,9 @@ program
 
     // Interactive command loop
     const rl = createReadline({ completer: completeCommand });
+    // Sub-prompts borrow this interface; opening a second one on the same
+    // stdin is what caused the double-echo and the broken-prompt bugs.
+    setReplReadline(rl);
 
     // A [proxy] line can arrive while the prompt is on screen; write it, then
     // re-render the prompt so the line never lands inside the prompt text.
@@ -641,9 +640,15 @@ program
         // negative, which would make `active === 0` unreachable and leave the
         // prompt unrestored for the rest of the session.
         active = Math.max(0, active - 1);
+        const openQuestion = pendingQuestion();
         if (active === 0 && !closed) {
           rl.setPrompt(paint.prompt('ev-charge> '));
           awaitingInput = true;
+          rl.prompt();
+        } else if (openQuestion && !closed) {
+          // `help`/`status` ran while a sub-prompt was open and the busy-gate
+          // had blanked the prompt; put the question back on screen.
+          rl.setPrompt(paint.question(openQuestion));
           rl.prompt();
         }
       }
@@ -679,7 +684,12 @@ program
           break;
 
         case 'set-ev-charge-limit': {
-          const limitStr = await prompt('Enter charge limit (50-100%): ');
+          const limitStr = await promptNumeric('Enter charge limit (50-100%, ESC to cancel): ');
+          if (limitStr === null) {
+            // ESC never submits a line, so start a fresh one for the notice.
+            console.log(paint.info('\nCancelled.'));
+            break;
+          }
           const limit = parseInt(limitStr);
           if (isNaN(limit)) {
             console.log(paint.warning('Invalid charge limit. Must be a number between 50 and 100.'));
@@ -704,7 +714,12 @@ program
           break;
 
         case 'set-battery-buffer': {
-          const bufferStr = await prompt('Enter battery buffer percentage (0-100): ');
+          const bufferStr = await promptNumeric('Enter battery buffer percentage (0-100, ESC to cancel): ');
+          if (bufferStr === null) {
+            // ESC never submits a line, so start a fresh one for the notice.
+            console.log(paint.info('\nCancelled.'));
+            break;
+          }
           const buffer = parseInt(bufferStr);
           if (isNaN(buffer)) {
             console.log(paint.warning('Invalid buffer. Must be a number between 0 and 100.'));
@@ -739,6 +754,7 @@ program
       // the interface is gone -- calling prompt() on a closed readline would not
       // be. `closed` also stops a handler still unwinding from prompting.
       closed = true;
+      setReplReadline(null);
       awaitingInput = false;
       setProxyLogSink(null);
       console.log(paint.info('\nShutting down...'));
