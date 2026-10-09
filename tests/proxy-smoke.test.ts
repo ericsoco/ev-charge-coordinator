@@ -7,12 +7,19 @@
  * asserts the Phase 3 contract end to end:
  *
  *  - /health answers 200 without a token and without gateway_id
- *  - protected routes reject missing and wrong tokens (401 naming the token)
+ *  - protected routes reject missing and wrong tokens (401 naming the token),
+ *    including the /shutdown route whose with-token test must not be the only
+ *    thing guarding it
  *  - a correct token without /auth falls through to require_client, proving
  *    the decorator order
  *  - the proxy refuses to boot without FRANKLIN_PROXY_TOKEN
  *  - the proxy refuses a non-loopback FRANKLIN_PROXY_HOST
  *  - /shutdown replies 200 and the process exits with code 0 (no os._exit)
+ *
+ * Accepting a correct token is asserted on /shutdown (200) and on the
+ * decorator-order case (token gate passes, next layer answers). A data route
+ * completing with a correct token needs a Franklin session cookie and lives in
+ * tests/live/franklin-live.test.ts behind RUN_LIVE_TESTS=1.
  *
  * No FranklinWH credentials are used: /auth is never called. Skips when
  * python3 is unavailable; the first run on a new machine needs network for pip.
@@ -163,6 +170,28 @@ suite('proxy security smoke (Phase 3)', () => {
     expect(res.status).toBe(401);
     const body = (await res.json()) as { error?: string };
     expect(body.error).toContain('X-Proxy-Token');
+  }, 15_000);
+
+  // Each route carries @require_token individually, so a forgotten decorator
+  // would only surface on that route. /mode already covers the write path;
+  // these pin the read path and -- more importantly -- /shutdown, whose
+  // with-token test below would still pass if the guard were dropped.
+
+  it('rejects GET /soc with no token', async () => {
+    const res = await fetch(`${BASE}/soc`);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toContain('X-Proxy-Token');
+  }, 15_000);
+
+  it('rejects POST /shutdown with no token, leaving the proxy running', async () => {
+    const res = await fetch(`${BASE}/shutdown`, { method: 'POST' });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toContain('X-Proxy-Token');
+    // A leaked shutdown would kill the shared proxy and take the rest of
+    // the suite (decorator order, then the real shutdown) down with it.
+    expect(proxy!.child.exitCode).toBeNull();
   }, 15_000);
 
   it('checks the token before require_client (decorator order)', async () => {
