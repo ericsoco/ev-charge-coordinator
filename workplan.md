@@ -544,6 +544,63 @@ refresh* — the proxy's own copy is gone and the constraint is documented above
 
 ---
 
+## Inter-phase — REPL sub-prompt bugs (all four fixed)
+
+The human reported four defects in the `set-battery-buffer` / `set-ev-charge-limit`
+prompts: every keystroke echoed twice, alphabetic input accepted by numeric questions,
+no cancel key, and a prompt that "echoes input but does nothing" after an answer.
+
+**Root cause (bug 4 almost certainly included):** `prompt()` opened a *second* readline
+Interface on the same stdin while the REPL's interface was still live. Two terminal-mode
+interfaces echo every keystroke; `rl.question` has no key filtering and no cancellation
+path; closing the nested interface tears down stdin state the main prompt still needs.
+Fix: `src/commands/prompt.ts` — one interface, ever. A sub-prompt borrows the REPL's
+readline via one-shot listeners (`line`, input `keypress`, interface `SIGINT`, `close`),
+removes them on every exit path, and swaps the tab completer out for the duration.
+One-shot flows still create a private interface and close it.
+
+**Mechanics verified empirically against Node 24** (none of this is in the docs):
+- a lone ESC does not fire immediately — `emitKeypressEvents` waits 500 ms
+  (`ESCAPE_CODE_TIMEOUT`) so it never eats a real escape sequence; cancel lands ~0.5 s
+  after the keypress;
+- keystroke processing runs through the instance method `_ttyWrite`, and an
+  instance-level patch intercepts every key *before* echo — that is how `promptNumeric`
+  swallows non-digits deterministically;
+- `rl.completer` is an instance property (swapping it to `undefined` disables tab safely);
+- an `rl.on('SIGINT')` listener converts Ctrl+C from process-kill into cancel.
+
+**Behavioural choices:**
+- `promptNumeric` returns `string | null`: `null` → `Cancelled.` on its own line; `''`
+  (bare Enter) keeps the old invalid-input warning.
+- `prompt()` folds a cancel into `''`, so free-text/y-n call sites and `CommandContext.ask`
+  are untouched — ESC at a y/n prompt behaves exactly like answering "no". (Plan had
+  proposed widening `ask` to `string | null`; folding needed fewer changes and is
+  behaviourally identical at every call site.)
+- answers are stripped from the shared history so `25` cannot resurface via ↑;
+- command names typed at a *free-text* prompt go to the main handler (`help` mid-question
+  prints help and the `finally` redraws the question); at a *numeric* prompt the letters
+  are keystroke-blocked by design (bug 2's fix), so reaching that redraw live requires a
+  free-text prompt.
+
+**Live verification (PTY, three sessions):** single `7` echo (never `77`); `a` never
+echoed and never buffered (backspace + `25` → `✓ Battery buffer set to 25%`); ESC →
+`Cancelled.` on its own line; every subsequent command dispatched normally (bug 4 fixed);
+clean shutdown each time. Buffer restored to 20% afterwards.
+
+**Not live-verified:** the redraw branch after `help`-mid-free-text-question — reaching it
+requires a successful `setChargeLimit`, and Tesla now returns **HTTP 403 "Vehicle Command
+Protocol required"** for it (REST `vehicle_commands` deprecation). Pinned by a source
+guard instead. ⚠️ **This 403 blocks `charge-from-battery`'s success path entirely and must
+be solved as part of Phase 4b** (Vehicle Command Protocol / signed commands), independent
+of the energy-math refactor.
+
+**Tests:** `tests/commands/prompt.test.ts` — 15 cases driving a real terminal-mode
+readline over PassThrough streams (digit filtering, backspace, ESC, close-during-question,
+completer swap, history strip, main-handler split) plus source guards on the index.ts
+wiring.
+
+---
+
 ## Phase 4 — Credential UX + spec'd charging behavior (~1.5 d)
 
 **Depends on Phase 1.5** (shared handlers) so the percent math is deleted once, not twice.
@@ -660,6 +717,7 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 | Franklin read failures | Retry idempotent reads ×3 (`run_read`, 0.5s/1.5s); the four mapped exceptions are deterministic and never retried |
 | REPL ergonomics | `node:readline` built-ins only — `completer` for tab completion, shared `REPL_COMMANDS` in `src/commands/repl.ts`; no shell-framework package |
 | REPL in-flight commands | Reject non-local commands while one is running (busy-gate); whitelist `help`/`status`/`exit`; no queue — the proxy's loop lock already serializes its network calls |
+| REPL sub-prompts | One shared readline with one-shot listeners (a second interface on the same stdin caused the double echo and the broken prompt); digits-only keystroke filter via an instance `_ttyWrite` patch; ESC/Ctrl+C cancel; cancel folds to `''` at free-text prompts so `CommandContext.ask` keeps its `Promise<string>` type |
 | Output theming | User-chosen 24-bit RGB palette in `src/utils/color.ts`, zero dependencies; gated at call time on `isTTY && !NO_COLOR`, so tests, redirects, and NO_COLOR users receive byte-identical plain output |
 | Proxy shared secret | Raw token minted per spawn, stored in owner-only `runtime.json` (a hash cannot authenticate); `hmac.compare_digest` on every route except `/health`, which the attach flow needs before it knows the token |
 | `LICENSE` holder / `author` | Not yet supplied by user - Phase 5 needs a name before it can close |
@@ -673,7 +731,11 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
   host the key). Budget one debug round-trip on the user's side.
 - **Fleet API is billed**, and `set_charge_limit` (`TeslaService.ts:384`) may be deprecated on
   newer firmware in favor of scheduled-charging endpoints. Verify against the vehicle during
-  Phase 1.
+  Phase 1. **⚠️ Confirmed materialized (inter-phase REPL session): Tesla now answers HTTP 403
+  "Vehicle Command Protocol required" for the REST vehicle-commands endpoint
+  (docs: `announcements#2023-10-09-rest-api-vehicle-commands-endpoint-deprecation-warning`),
+  so `setChargeLimit` — and with it `charge-from-battery`'s success path — is dead until the
+  Vehicle Command Protocol (signed commands) is implemented. Fold into Phase 4b.**
 - **FranklinWH is write-capable** - `set_mode` is exposed by the proxy. `charge-from-battery`
   must stay **read-only** against the battery; never mutate operating mode without an explicit
   user command.
