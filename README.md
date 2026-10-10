@@ -385,9 +385,12 @@ This calls the real library and reports the exception type, which separates an
 outage). Add `--gateway-id` to exercise the gateway too. It exits non-zero on
 failure, so it works as a check in a script.
 
-Passwords and client secrets are prompted for without echo — they never appear on
-screen or in terminal scrollback. If the masking library cannot be loaded, the
-prompt says so rather than echoing silently.
+Passwords and client secrets are prompted for with masked input (`*` per
+keystroke) on the same single readline interface as every other prompt -- no
+prompt library, no second interface to double-echo against. The Gateway ID is
+deliberately unmasked: it is a device identifier visible in the FranklinWH app,
+not a secret. Without a TTY (piped input, CI) there is nothing to mask with, so
+the prompt says so rather than echoing silently.
 
 ### Tesla Authentication Issues
 

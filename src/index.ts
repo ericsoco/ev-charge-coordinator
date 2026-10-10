@@ -32,7 +32,7 @@ import {
   type CommandContext,
   type CommandResult,
 } from './commands/context.js';
-import { pendingQuestion, prompt, promptNumeric, setReplReadline } from './commands/prompt.js';
+import { pendingQuestion, prompt, promptNumeric, promptSecret, setReplReadline } from './commands/prompt.js';
 import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, renderHelp } from './commands/repl.js';
 import * as paint from './utils/color.js';
 import {
@@ -221,12 +221,13 @@ let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
 
 /**
- * The REPL's readline (and the password fallback's).
+ * The REPL's readline.
  *
  * Tab completion comes from readline's `completer` hook (no package needed);
  * arrow-key history is built into node:readline already. Sub-prompts borrow
  * this one interface instead of opening a second on the same stdin -- see
- * commands/prompt.ts for why that doubling was a bug.
+ * commands/prompt.ts for why that doubling was a bug. Secrets go through
+ * promptSecret on that same interface, masked keystroke by keystroke.
  */
 function createReadline(options: { completer?: (line: string) => [string[], string] } = {}) {
   return createInterface({
@@ -234,42 +235,6 @@ function createReadline(options: { completer?: (line: string) => [string[], stri
     output: process.stdout,
     ...(options.completer ? { completer: options.completer } : {})
   });
-}
-
-/**
- * Prompt for a secret with the input masked.
- *
- * The previous implementation was a readline placeholder that echoed whatever was
- * typed, which put passwords and client secrets on screen and into terminal
- * scrollback. inquirer is already a dependency and has native ESM support; it is
- * imported lazily so a non-interactive run (and the test suite, which never
- * reaches a TTY) does not pay to load it.
- *
- * If inquirer cannot be loaded the fallback warns that it is unmasked rather than
- * silently echoing a secret.
- */
-async function promptPassword(question: string): Promise<string> {
-  try {
-    const { default: inquirer } = await import('inquirer');
-    const answer = await inquirer.prompt([
-      { type: 'password', name: 'secret', message: question },
-    ]);
-    return String(answer.secret ?? '');
-  } catch (error) {
-    console.warn(
-      paint.warning(
-        `Warning: could not mask the prompt (${error instanceof Error ? error.message : error});` +
-          '\n  falling back to an UNMASKED prompt.'
-      )
-    );
-    const rl = createReadline();
-    return new Promise((resolve) => {
-      rl.question(paint.question(question), (answer) => {
-        rl.close();
-        resolve(answer);
-      });
-    });
-  }
 }
 
 async function initializeFranklin(): Promise<ServiceStart> {
@@ -318,7 +283,7 @@ async function initializeFranklin(): Promise<ServiceStart> {
     reportDebugDetails(process.env.ECC_DEBUG === '1', lastFailure.cause);
   }
   const username = await prompt('Email: ');
-  const password = await promptPassword('Password: ');
+  const password = await promptSecret('Password: ');
   const gatewayId = await prompt('Gateway ID (found in app under More -> Site Devices): ');
 
   franklinService = new FranklinWHService();
@@ -405,7 +370,7 @@ async function initializeTesla(): Promise<ServiceStart> {
   // Reuse whatever is already stored, so a record that is only missing the
   // secret (the common case after a key rotation) asks for one thing, not four.
   const clientId = storedClientId ?? (await prompt('Client ID: '));
-  const clientSecret = storedClientSecret ?? (await promptPassword('Client Secret: '));
+  const clientSecret = storedClientSecret ?? (await promptSecret('Client Secret: '));
 
   // Persist the app credentials BEFORE the OAuth round trip, not after it.
   //
@@ -1007,7 +972,7 @@ async function runAuthenticate(
   // the user to re-paste the secret they already saved.
   const clientId = options.clientId ?? existing?.clientId ?? (await prompt('Client ID: '));
   const clientSecret =
-    options.clientSecret ?? existing?.clientSecret ?? (await promptPassword('Client Secret: '));
+    options.clientSecret ?? existing?.clientSecret ?? (await promptSecret('Client Secret: '));
 
   if (!clientId.trim() || !clientSecret.trim()) {
     console.error(paint.warning('A Client ID and Client Secret are both required.'));
@@ -1260,7 +1225,7 @@ async function registerDomainWithTesla(
       return false;
     }
     clientId = (await prompt('Client ID: ')).trim();
-    clientSecret = await promptPassword('Client Secret: ');
+    clientSecret = await promptSecret('Client Secret: ');
     if (!clientId || !clientSecret) {
       console.error(paint.error('Client ID and Secret are both required to register.'));
       process.exitCode = 1;
