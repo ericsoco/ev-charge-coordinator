@@ -1,54 +1,57 @@
 /**
  * Secret prompts must not echo.
  *
- * `promptPassword` was a readline placeholder that printed whatever was typed, so
- * passwords and client secrets landed on screen and in terminal scrollback. It now
- * masks via inquirer (already a declared dependency, with native ESM support).
- *
- * The implementation lives in index.ts, which runs program.parse() on import and so
- * cannot be imported by a test. What is pinned here is the property that matters and
- * the one thing that could silently regress: the fallback must announce that it is
- * unmasked rather than quietly echoing a secret.
+ * Secrets go through promptSecret in src/commands/prompt.ts, which borrows the
+ * one shared readline interface and masks keystroke by keystroke -- there is no
+ * second prompter to double-echo against. Pinned here: the implementation must
+ * not import a prompt library, the masking lives in the shared sub-prompt
+ * module (not a second interface in index.ts), and the no-TTY fallback warns
+ * rather than silently echoing.
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+const PROMPT_SOURCE = readFileSync(new URL('../../src/commands/prompt.ts', import.meta.url), 'utf8');
+const PACKAGE = JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
+) as { dependencies?: Record<string, string> };
 
-describe('promptPassword', () => {
-  function body(): string {
-    const start = INDEX_SOURCE.indexOf('async function promptPassword');
-    expect(start).toBeGreaterThan(-1);
-    return INDEX_SOURCE.slice(start, INDEX_SOURCE.indexOf('\nasync function ', start + 10));
-  }
-
-  it('masks input using inquirer', () => {
-    expect(body()).toContain("import('inquirer')");
-    expect(body()).toContain("type: 'password'");
+describe('promptSecret', () => {
+  it('masks keystrokes instead of echoing them', () => {
+    expect(PROMPT_SOURCE).toContain('export function promptSecret');
+    expect(PROMPT_SOURCE).toContain("this.output.write('*')");
   });
 
-  it('uses inquirer on the primary path, not readline', () => {
-    // The old implementation was exactly `rl.question(question, ...)` and nothing
-    // else. The primary path must now be inquirer; rl.question may survive only
-    // inside the catch as an announced fallback, which the next test checks.
-    const primary = body().slice(0, body().indexOf('catch'));
-    expect(primary).toContain("import('inquirer')");
-    expect(primary).not.toContain('rl.question');
+  it('keeps the secret out of the line buffer and the shared history', () => {
+    // Nothing typed reaches readline's buffer, so the secret can never echo,
+    // resurface via arrow-up, or read as a command name for the main handler.
+    expect(PROMPT_SOURCE).toContain('secret += s');
+    expect(PROMPT_SOURCE).toContain('finish(secret)');
+  });
+
+  it('uses no prompt library', () => {
+    expect(PROMPT_SOURCE).not.toContain('inquirer');
+    expect(INDEX_SOURCE).not.toContain('inquirer');
+    expect(INDEX_SOURCE).not.toMatch(/async function promptPassword\(/);
+    expect(PACKAGE.dependencies ?? {}).not.toHaveProperty('inquirer');
   });
 
   it('warns when it falls back, so an unmasked prompt is never silent', () => {
-    // Asking for a secret and hiding that it is visible is worse than echoing it.
-    expect(body()).toContain('UNMASKED prompt');
-    expect(body()).toContain('console.warn');
+    // Without a TTY there is nothing to patch; asking for a secret and hiding
+    // that it is visible is worse than echoing it.
+    expect(PROMPT_SOURCE).toContain('UNMASKED prompt');
+    expect(PROMPT_SOURCE).toContain('console.warn');
   });
 
-  it('keeps the old behaviour available as a fallback rather than failing', () => {
-    // A broken import must not lock the user out of the CLI entirely.
-    expect(body()).toContain('createReadline()');
+  it('borrows the shared interface instead of opening a second one', () => {
+    expect(PROMPT_SOURCE).toContain('export function promptSecret');
+    expect(INDEX_SOURCE).toContain('setReplReadline(rl)');
+    expect(INDEX_SOURCE).not.toMatch(/async function promptSecret\(/);
   });
 
   it('is used for both the gateway password and the client secret', () => {
-    expect(INDEX_SOURCE).toMatch(/promptPassword\('Client Secret: '\)/);
-    expect(INDEX_SOURCE).toMatch(/promptPassword\('Password: '\)/);
+    expect(INDEX_SOURCE).toMatch(/promptSecret\('Client Secret: '\)/);
+    expect(INDEX_SOURCE).toMatch(/promptSecret\('Password: '\)/);
   });
 });

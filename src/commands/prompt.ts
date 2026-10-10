@@ -34,6 +34,12 @@
  * instance-level patch intercepts every key before it is echoed) -- so only
  * digit keystrokes reach the line buffer. Non-digit keys are never echoed and
  * never accepted; validation runs on a buffer that can only hold digits.
+ *
+ * `promptSecret` wraps `_ttyWrite` the other way: typed characters never reach
+ * readline's line buffer (so they cannot echo or leak into history) and each
+ * one prints as `*`. Editing keys that would desync the mask are dropped;
+ * without a TTY there is nothing to patch, so it warns and falls back
+ * unmasked rather than echoing a secret silently.
  */
 
 import { createInterface, type Completer, type Interface, type Key } from 'node:readline';
@@ -47,6 +53,7 @@ import { isReplCommand } from './repl.js';
  */
 interface PromptInterface extends Interface {
   input: NodeJS.ReadableStream;
+  output: NodeJS.WritableStream;
   completer?: Completer | undefined;
   _ttyWrite?: (this: PromptInterface, s?: string, key?: Key) => void;
 }
@@ -75,7 +82,7 @@ export function pendingQuestion(): string | null {
  * empty line: y/n prompts answer "no", validation rejects the empty value.
  */
 export async function prompt(question: string): Promise<string> {
-  return (await ask(question, false)) ?? '';
+  return (await ask(question, {})) ?? '';
 }
 
 /**
@@ -84,20 +91,53 @@ export async function prompt(question: string): Promise<string> {
  * caller can distinguish "cancelled" from "entered something invalid".
  */
 export function promptNumeric(question: string): Promise<string | null> {
-  return ask(question, true);
+  return ask(question, { digitsOnly: true });
 }
 
-function ask(question: string, digitsOnly: boolean): Promise<string | null> {
+/**
+ * Ask for a secret with each keystroke masked as `*`.
+ *
+ * Borrows the one interface like every other sub-prompt -- there is no second
+ * prompter to double-echo against. A cancel (ESC, Ctrl+C, the interface
+ * closing) folds into '', so call sites behave as if Enter was pressed on an
+ * empty line and their existing empty-value validation rejects it.
+ */
+export function promptSecret(question: string): Promise<string> {
+  return ask(question, { mask: true }).then((answer) => answer ?? '');
+}
+
+function ask(
+  question: string,
+  opts: { digitsOnly?: boolean; mask?: boolean }
+): Promise<string | null> {
   const shared = replRl !== null;
   const rl = (replRl ?? createStandalone()) as PromptInterface;
   const owned = !shared;
+  const masking = opts.mask === true && typeof rl._ttyWrite === 'function';
+
+  if (opts.mask === true && !masking) {
+    // No terminal to patch (piped input, CI): say so instead of silently echoing.
+    console.warn(
+      paint.warning('Warning: terminal masking is unavailable; falling back to an UNMASKED prompt.')
+    );
+  }
+
   const originalCompleter = rl.completer;
-  const originalTtyWrite = digitsOnly ? rl._ttyWrite : undefined;
+  const originalTtyWrite = opts.digitsOnly === true || masking ? rl._ttyWrite : undefined;
 
   return new Promise((resolve) => {
     let settled = false;
+    // Masked keystrokes bypass readline's buffer entirely, so the secret lives
+    // here until Enter hands it over. Unmasked prompts leave this unused.
+    let secret = '';
 
     const onLine = (line: string): void => {
+      if (masking) {
+        // `line` is always '' here -- nothing typed reached the buffer -- so a
+        // secret that reads as a command name can never leak to the main handler.
+        finish(secret);
+        return;
+      }
       if (!owned) {
         // A command name belongs to the main handler, not to this answer.
         if (isReplCommand(line)) return;
@@ -135,7 +175,39 @@ function ask(question: string, digitsOnly: boolean): Promise<string | null> {
       resolve(value);
     }
 
-    if (originalTtyWrite) {
+    if (masking && originalTtyWrite) {
+      const writeMasked = originalTtyWrite;
+      rl._ttyWrite = function (s?: string, key?: Key): void {
+        if (s === undefined) {
+          writeMasked.call(this, s, key);
+          return;
+        }
+        // Control combos carry no secret characters; readline still owns them
+        // so Ctrl+C keeps cancelling via the SIGINT listener and Ctrl+D closes.
+        if (key?.ctrl === true || key?.meta === true) {
+          writeMasked.call(this, s, key);
+          return;
+        }
+        const name = key?.name;
+        if (name === 'enter' || name === 'return' || s === '\r' || s === '\n') {
+          writeMasked.call(this, s, key);
+          return;
+        }
+        if (name === 'escape') return; // the keypress listener turns this into a cancel
+        if (name === 'backspace') {
+          if (secret.length > 0) {
+            secret = secret.slice(0, -1);
+            this.output.write('\b \b');
+          }
+          return;
+        }
+        // Arrows, tab, and friends would move a cursor the mask cannot see;
+        // dropping them keeps the asterisks and the buffer in sync.
+        if (name !== undefined && name.length > 1) return;
+        secret += s;
+        this.output.write('*');
+      };
+    } else if (originalTtyWrite) {
       rl._ttyWrite = function (s?: string, key?: Key): void {
         if (shouldDropKey(s, key)) return; // never echoed, never buffered
         originalTtyWrite.call(this, s, key);

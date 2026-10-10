@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { createInterface, type Interface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
-import { pendingQuestion, prompt, promptNumeric, setReplReadline } from '../../src/commands/prompt.js';
+import { pendingQuestion, prompt, promptNumeric, promptSecret, setReplReadline } from '../../src/commands/prompt.js';
 
 interface Repl {
   rl: Interface;
@@ -178,6 +178,62 @@ describe('promptNumeric', () => {
     expect(pendingQuestion()).toBe('Number please: ');
     h.type('1\n');
     await p;
+    expect(pendingQuestion()).toBeNull();
+  });
+});
+
+describe('promptSecret', () => {
+  it('masks each keystroke and returns the real secret', async () => {
+    const h = makeRepl();
+    const p = promptSecret('Secret: ');
+    h.type('s3cr');
+    h.type('et');
+    await delay(20);
+    h.type('\n');
+    await expect(p).resolves.toBe('s3cret');
+    const out = h.written.join('');
+    expect(out).not.toContain('s3cret'); // the plaintext never reaches the terminal
+    expect(out).toContain('******'); // six keystrokes, six asterisks
+  });
+
+  it('edits with backspace without desyncing the mask', async () => {
+    const h = makeRepl();
+    const p = promptSecret('Secret: ');
+    h.type('ab\x7fc\n');
+    await expect(p).resolves.toBe('ac');
+  });
+
+  it('never hands a secret to the main handler, even one naming a command', async () => {
+    const h = makeRepl();
+    const lines: string[] = [];
+    h.rl.on('line', (l) => lines.push(l));
+    const p = promptSecret('Secret: ');
+    h.type('help\n');
+    await expect(p).resolves.toBe('help');
+    await delay(20);
+    // The line event fired with the empty buffer, not the secret.
+    expect(lines).not.toContain('help');
+  });
+
+  it('settles a cancel as an empty answer and restores echo afterwards', async () => {
+    const h = makeRepl();
+    const p = promptSecret('Secret: ');
+    h.type('\x1b'); // ESC resolves after readline's 500ms escape timeout
+    await expect(p).resolves.toBe('');
+    const again = prompt('Q: ');
+    h.type('visible\n');
+    await expect(again).resolves.toBe('visible');
+    expect(h.written.join('')).toContain('visible'); // echo is back
+  });
+
+  it('leaves the shared interface open and the completer restored', async () => {
+    const h = makeRepl();
+    const p = promptSecret('Secret: ');
+    h.type('x\n');
+    await p;
+    h.type('\t');
+    await delay(20);
+    expect(h.completerCalls()).toBe(1);
     expect(pendingQuestion()).toBeNull();
   });
 });
