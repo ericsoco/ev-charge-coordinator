@@ -49,19 +49,6 @@ export interface EnergyChargeLimit {
 }
 
 /**
- * Sensible defaults for this hardware. bufferPercent is always replaced at
- * call time by the stored `set-battery-buffer` setting; it exists here so the
- * config shape is complete.
- */
-export const DEFAULT_ENERGY_CONFIG: EnergyConfig = {
-  batteryCapacityKwh: 13.5, // FranklinWH aPower 2 usable
-  evBatteryKwh: 75, // Tesla Model Y usable
-  bufferPercent: 20,
-  chargeEfficiency: 0.9, // onboard charger + conversion losses
-  minChargeKwh: 1.0,
-};
-
-/**
  * Per-field validation shared by the config store (on load and on write) and
  * by computeChargeLimit (defense for direct callers). Keys are in schema
  * order -- the order the first-run flow prompts in.

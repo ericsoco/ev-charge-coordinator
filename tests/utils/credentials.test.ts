@@ -82,7 +82,7 @@ describe('CredentialStore - encrypted file fallback', () => {
 
   it('stores the AES key in a sibling file with no group/other permissions', async () => {
     const store = new mod.CredentialStore();
-    await store.setBatteryBuffer(35);
+    await store.setFranklinCredentials('user@example.com', 'hunter2', 'GW12345');
 
     const keyPath = path.join(configDir, KEY_FILE);
     expect(fs.existsSync(keyPath)).toBe(true);
@@ -105,21 +105,6 @@ describe('CredentialStore - encrypted file fallback', () => {
     // Characterization: the GCM auth failure is swallowed and the user gets an empty
     // store instead of an error. Worth revisiting; pinned for now.
     await expect(reloaded.getFranklinCredentials()).resolves.toBeUndefined();
-    await expect(reloaded.getBatteryBuffer()).resolves.toBe(20);
-  });
-
-  it('defaults the battery buffer to 20% when nothing is stored', async () => {
-    const store = new mod.CredentialStore();
-    await expect(store.getBatteryBuffer()).resolves.toBe(20);
-  });
-
-  it('persists an explicitly configured battery buffer across instances', async () => {
-    const store = new mod.CredentialStore();
-    await store.setBatteryBuffer(0);
-    await expect(new mod.CredentialStore().getBatteryBuffer()).resolves.toBe(0);
-
-    await store.setBatteryBuffer(45);
-    await expect(new mod.CredentialStore().getBatteryBuffer()).resolves.toBe(45);
   });
 
   it('persists Tesla tokens and lets updateTeslaTokens rotate them', async () => {
@@ -222,7 +207,7 @@ describe('CredentialStore - module surface', () => {
     // If keytar were reachable, save() would target the macOS keychain and no .enc file
     // would appear. Its presence proves the encrypted-file path was taken.
     const store = new mod.CredentialStore();
-    await store.setBatteryBuffer(30);
+    await store.setFranklinCredentials('user@example.com', 'hunter2', 'GW12345');
     expect(fs.existsSync(credPath())).toBe(true);
   });
 });

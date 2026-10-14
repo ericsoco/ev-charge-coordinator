@@ -10,6 +10,8 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { CommandContext } from '../../src/commands/context.js';
+import type { ResolvedEnergyConfig } from '../../src/utils/config.js';
+import type { EnergyConfig } from '../../src/utils/energy.js';
 import {
   chargeFromBattery,
   getBatterySoc,
@@ -20,12 +22,35 @@ import {
   stopEvCharging,
 } from '../../src/commands/vehicle.js';
 
+/** The config the handler runs against unless a test overrides the resolution. */
+function makeConfig(buffer = 20): EnergyConfig {
+  return {
+    batteryCapacityKwh: 13.5,
+    evBatteryKwh: 75,
+    bufferPercent: buffer,
+    chargeEfficiency: 0.9,
+    minChargeKwh: 1,
+  };
+}
+
+const ALL_FIELDS_MISSING: (keyof EnergyConfig)[] = [
+  'batteryCapacityKwh',
+  'evBatteryKwh',
+  'bufferPercent',
+  'chargeEfficiency',
+  'minChargeKwh',
+];
+
 /** Minimal fakes; only the methods the handlers actually call are present. */
 function makeContext(overrides: {
   franklin?: Record<string, unknown> | null;
   tesla?: Record<string, unknown> | null;
   buffer?: number;
   ask?: (q: string) => Promise<string>;
+  /** Replaces fields of the default complete-config resolution. */
+  energyConfig?: Partial<ResolvedEnergyConfig>;
+  askNumeric?: (q: string, opts?: { decimal?: boolean }) => Promise<string | null>;
+  interactive?: boolean;
 } = {}) {
   const out: string[] = [];
   const err: string[] = [];
@@ -59,14 +84,26 @@ function makeContext(overrides: {
           ...overrides.tesla,
         };
 
+  const cfg = makeConfig(overrides.buffer);
+  const resolved: ResolvedEnergyConfig = {
+    config: cfg,
+    missing: [],
+    invalid: [],
+    partial: cfg,
+    ...overrides.energyConfig,
+  };
+
   const ctx = {
     franklin,
     tesla,
-    store: {
-      getBatteryBuffer: async () => overrides.buffer ?? 20,
-      setBatteryBuffer: record('setBatteryBuffer'),
+    config: {
+      resolve: () => resolved,
+      setField: record('setField'),
+      save: record('save'),
     },
     ask: overrides.ask ?? (async () => 'n'),
+    askNumeric: overrides.askNumeric,
+    interactive: overrides.interactive ?? false,
     log: (m: string) => out.push(m),
     errorLog: (m: string) => err.push(m),
   } as unknown as CommandContext;
@@ -269,15 +306,124 @@ describe('chargeFromBattery', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/must be connected/);
   });
+
+  it('echoes hand-edit problems and touches no service when config is invalid', async () => {
+    const { ctx, calls, out } = makeContext({
+      energyConfig: {
+        config: null,
+        missing: [],
+        invalid: ['config.json: chargeEfficiency = 1.5 (must be in (0, 1])'],
+        partial: {},
+      },
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('invalid energy config');
+    expect(calls.setChargeLimit).toBeUndefined();
+    expect(out.join('\n')).toContain('chargeEfficiency = 1.5 (must be in (0, 1])');
+  });
+
+  it('fails with instructions when config is missing and no TTY is attached', async () => {
+    const { ctx, calls, out } = makeContext({
+      energyConfig: { config: null, missing: ALL_FIELDS_MISSING, invalid: [], partial: {} },
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('energy config incomplete');
+    expect(calls.setChargeLimit).toBeUndefined();
+    expect(out.join('\n')).toContain('Energy config incomplete');
+    expect(out.join('\n')).toContain('config --set-<field>');
+  });
+
+  it('prompts for missing values on first run, saves config.json, and proceeds', async () => {
+    const answers = ['13.5', '75', '20', '0.9', '1'];
+    const asked: string[] = [];
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => 90 },
+      energyConfig: { config: null, missing: ALL_FIELDS_MISSING, invalid: [], partial: {} },
+      interactive: true,
+      askNumeric: async (q) => {
+        asked.push(q);
+        return answers[asked.length - 1] ?? null;
+      },
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(true);
+    expect(asked).toHaveLength(5);
+    expect(asked[0]).toContain('battery capacity'); // schema order starts with the house pack
+    expect(calls.save[0][0]).toEqual(makeConfig());
+    expect(calls.setChargeLimit[0]).toEqual([66]); // same math as the complete-config path
+    expect(out.join('\n')).toContain('Energy config saved');
+  });
+
+  it('prompts only for the fields that are missing', async () => {
+    const asked: string[] = [];
+    const { ctx, calls } = makeContext({
+      energyConfig: {
+        config: null,
+        missing: ['chargeEfficiency', 'minChargeKwh'],
+        invalid: [],
+        partial: {
+          batteryCapacityKwh: 13.5,
+          evBatteryKwh: 75,
+          bufferPercent: 20,
+        },
+      },
+      interactive: true,
+      askNumeric: async (q) => {
+        asked.push(q);
+        return asked.length === 1 ? '0.9' : '1';
+      },
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(true);
+    expect(asked).toHaveLength(2);
+    expect(calls.save[0][0]).toEqual(makeConfig()); // the answered fields join the loaded ones
+  });
+
+  it('writes nothing when the first-run prompt is cancelled', async () => {
+    const { ctx, calls, out } = makeContext({
+      energyConfig: { config: null, missing: ALL_FIELDS_MISSING, invalid: [], partial: {} },
+      interactive: true,
+      askNumeric: async () => null,
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('energy config setup cancelled');
+    expect(calls.save).toBeUndefined();
+    expect(calls.setChargeLimit).toBeUndefined();
+    expect(out.join('\n')).toContain('Cancelled');
+  });
+
+  it('re-asks when an answer fails validation', async () => {
+    const answers = ['-5', '13.5', '75', '20', '0.9', '1'];
+    let prompts = 0;
+    const { ctx, calls, out } = makeContext({
+      energyConfig: { config: null, missing: ALL_FIELDS_MISSING, invalid: [], partial: {} },
+      interactive: true,
+      askNumeric: async () => answers[prompts++] ?? null,
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(true);
+    expect(prompts).toBe(6); // the out-of-range answer cost one extra prompt
+    expect(calls.save[0][0]).toEqual(makeConfig());
+    expect(out.join('\n')).toContain('batteryCapacityKwh = -5 (must be > 0)');
+  });
 });
 
 describe('buffer and charging controls', () => {
-  it('persists a valid buffer', async () => {
+  it('persists a valid buffer to config.json', async () => {
     const { ctx, calls } = makeContext();
     const result = await setBatteryBuffer(ctx, 30);
 
     expect(result.ok).toBe(true);
-    expect(calls.setBatteryBuffer[0]).toEqual([30]);
+    expect(calls.setField[0]).toEqual([{ bufferPercent: 30 }]);
   });
 
   it.each([-1, 101, Number.NaN])('rejects buffer %s', async (bad) => {
@@ -285,7 +431,7 @@ describe('buffer and charging controls', () => {
     const result = await setBatteryBuffer(ctx, bad);
 
     expect(result.ok).toBe(false);
-    expect(calls.setBatteryBuffer).toBeUndefined();
+    expect(calls.setField).toBeUndefined();
   });
 
   it('starts and stops charging', async () => {

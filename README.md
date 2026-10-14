@@ -55,6 +55,31 @@ npm run build
 
 ## Configuration
 
+### Energy config (`config.json`)
+
+`charge-from-battery` reads every energy setting from a single hand-editable
+JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
+`config`):
+
+```json
+{
+  "batteryCapacityKwh": 13.5,
+  "evBatteryKwh": 75,
+  "bufferPercent": 20,
+  "chargeEfficiency": 0.9,
+  "minChargeKwh": 1.0
+}
+```
+
+- **First run:** when fields are missing, `charge-from-battery` prompts for
+  them (only on a TTY) and writes the file; without a TTY it fails with the
+  list of missing fields and how to set them.
+- **Hand-editing:** the file is validated on every read; bad values are echoed
+  with the file path and the command fails instead of guessing a correction.
+- **Setters write here too:** `config --set-battery-kwh` / `--set-ev-kwh` /
+  `--set-efficiency` / `--set-min-kwh` and `set-battery-buffer` all update the
+  same file, so it stays the single source of truth.
+
 ### Tesla Fleet API Setup
 
 > **Registration is a separate step from signing in.** Authorizing the app in the
@@ -245,14 +270,18 @@ npm start config --clear-all
 | `start-ev-charging` | Start charging the EV |
 | `stop-ev-charging` | Stop charging the EV |
 | `charge-from-battery` | Set EV charge limit from the energy the solar battery can spare (kWh math) |
-| `set-battery-buffer <percent>` | Set the amount of charge to keep in the solar battery (0-100%) |
-| `config` | Show current configuration |
+| `set-battery-buffer <percent>` | Set the amount of charge to keep in the solar battery, 0-100% (written to `config.json`) |
+| `config` | Show current credentials and the energy config (with its file path) |
 | `config --clear-franklin` | Clear FranklinWH credentials |
 | `config --clear-tesla` | Clear Tesla credentials |
 | `config --clear-all` | Clear all stored credentials |
 | `config --tesla-region <na\|eu\|cn>` | Choose the Tesla Fleet API deployment |
 | `config --tesla-domain <domain>` | Set the domain that hosts the virtual key public key |
 | `config --show-public-key` | Print the virtual key public key Tesla reads |
+| `config --set-battery-kwh <n>` | Set house battery capacity in `config.json` |
+| `config --set-ev-kwh <n>` | Set EV battery capacity in `config.json` |
+| `config --set-efficiency <0-1>` | Set charge efficiency in `config.json` |
+| `config --set-min-kwh <n>` | Set minimum spare energy to charge from in `config.json` |
 | `pair-tesla-key` | Register the virtual key with Tesla and print the vehicle pairing link |
 
 ### Interactive Mode Commands

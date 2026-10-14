@@ -14,7 +14,6 @@ import { getConfigDir } from './credentials.js';
 import {
   ENERGY_CONFIG_FIELDS,
   energyConfigFieldProblem,
-  energyConfigProblems,
   validateEnergyConfig,
   type EnergyConfig,
 } from './energy.js';
@@ -39,13 +38,15 @@ export interface ResolvedEnergyConfig {
   missing: (keyof EnergyConfig)[];
   /** One message per invalid value / parse failure. */
   invalid: string[];
+  /** Fields that are present and valid, whatever else is wrong. */
+  partial: Partial<EnergyConfig>;
 }
 
 /** Read + validate the file. Never throws: problems come back structured for echoing. */
 export function resolveEnergyConfig(): ResolvedEnergyConfig {
   const file = energyConfigPath();
   if (!fs.existsSync(file)) {
-    return { config: null, missing: [...ENERGY_CONFIG_FIELDS], invalid: [] };
+    return { config: null, missing: [...ENERGY_CONFIG_FIELDS], invalid: [], partial: {} };
   }
 
   let raw: unknown;
@@ -56,6 +57,7 @@ export function resolveEnergyConfig(): ResolvedEnergyConfig {
       config: null,
       missing: [],
       invalid: [`${file} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`],
+      partial: {},
     };
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -63,6 +65,7 @@ export function resolveEnergyConfig(): ResolvedEnergyConfig {
       config: null,
       missing: [],
       invalid: [`${file} must contain a JSON object mapping field names to numbers`],
+      partial: {},
     };
   }
 
@@ -86,9 +89,9 @@ export function resolveEnergyConfig(): ResolvedEnergyConfig {
   }
 
   if (missing.length > 0 || invalid.length > 0) {
-    return { config: null, missing, invalid };
+    return { config: null, missing, invalid, partial: config };
   }
-  return { config: config as EnergyConfig, missing: [], invalid: [] };
+  return { config: config as EnergyConfig, missing: [], invalid: [], partial: config };
 }
 
 /**
@@ -122,7 +125,7 @@ export function saveEnergyConfig(config: EnergyConfig): void {
  */
 export function setEnergyConfigField(patch: Partial<EnergyConfig>): void {
   const file = energyConfigPath();
-  let current: Record<string, unknown> = {};
+  const current: Record<string, unknown> = {};
   if (fs.existsSync(file)) {
     let parsed: unknown;
     try {
