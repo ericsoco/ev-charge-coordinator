@@ -89,9 +89,16 @@ export async function prompt(question: string): Promise<string> {
  * Ask a numeric question. Only digit keystrokes are accepted (everything else
  * is swallowed before it can echo), and a cancel resolves as null so the
  * caller can distinguish "cancelled" from "entered something invalid".
+ *
+ * `decimal: true` also admits `.` so answers like `13.5` can be typed;
+ * format and range validation stay with the caller (a second `.` is rejected
+ * there, since parseFloat stops at it).
  */
-export function promptNumeric(question: string): Promise<string | null> {
-  return ask(question, { digitsOnly: true });
+export function promptNumeric(
+  question: string,
+  opts: { decimal?: boolean } = {}
+): Promise<string | null> {
+  return ask(question, { digitsOnly: true, decimal: opts.decimal === true });
 }
 
 /**
@@ -108,7 +115,7 @@ export function promptSecret(question: string): Promise<string> {
 
 function ask(
   question: string,
-  opts: { digitsOnly?: boolean; mask?: boolean }
+  opts: { digitsOnly?: boolean; decimal?: boolean; mask?: boolean }
 ): Promise<string | null> {
   const shared = replRl !== null;
   const rl = (replRl ?? createStandalone()) as PromptInterface;
@@ -209,7 +216,7 @@ function ask(
       };
     } else if (originalTtyWrite) {
       rl._ttyWrite = function (s?: string, key?: Key): void {
-        if (shouldDropKey(s, key)) return; // never echoed, never buffered
+        if (shouldDropKey(s, key, opts.decimal === true)) return; // never echoed, never buffered
         originalTtyWrite.call(this, s, key);
       };
     }
@@ -236,9 +243,10 @@ function createStandalone(): Interface {
 /**
  * Which keys a numeric sub-prompt swallows. Everything that is not a digit
  * (and not an editing key the answer needs: backspace, arrows, Enter, ESC)
- * is dropped before readline can echo or buffer it.
+ * is dropped before readline can echo or buffer it. `allowDecimal` additionally
+ * admits `.`; multiple dots are filtered at submit time by the caller's parse.
  */
-function shouldDropKey(s: string | undefined, key: Key | undefined): boolean {
+function shouldDropKey(s: string | undefined, key: Key | undefined, allowDecimal: boolean): boolean {
   if (typeof s !== 'string' || s.length === 0) return false;
   if (key && (key.ctrl || key.meta)) return false; // Ctrl+C, arrows (ESC-prefixed)
   if (key && key.name && key.name.length > 1) {
@@ -246,5 +254,5 @@ function shouldDropKey(s: string | undefined, key: Key | undefined): boolean {
     // which has no completion to offer here and would inject a literal tab.
     return key.name === 'tab';
   }
-  return !/^[0-9]+$/.test(s);
+  return allowDecimal ? !/^[0-9.]+$/.test(s) : !/^[0-9]+$/.test(s);
 }

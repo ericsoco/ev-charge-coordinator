@@ -180,6 +180,30 @@ describe('promptNumeric', () => {
     await p;
     expect(pendingQuestion()).toBeNull();
   });
+
+  it('drops the decimal point when decimal mode is off (digits only)', async () => {
+    const h = makeRepl();
+    const p = promptNumeric('N: ');
+    h.type('13.5\n');
+    await expect(p).resolves.toBe('135'); // '.' filtered before it could echo
+  });
+
+  it('admits decimal points when decimal mode is on', async () => {
+    const h = makeRepl();
+    const p = promptNumeric('N: ', { decimal: true });
+    h.type('13.5');
+    await delay(20);
+    h.type('\n');
+    await expect(p).resolves.toBe('13.5');
+    expect(h.written.join('')).toContain('13.5'); // the dot echoed, not swallowed
+  });
+
+  it('still drops letters in decimal mode', async () => {
+    const h = makeRepl();
+    const p = promptNumeric('N: ', { decimal: true });
+    h.type('0a.9\n');
+    await expect(p).resolves.toBe('0.9');
+  });
 });
 
 describe('promptSecret', () => {
