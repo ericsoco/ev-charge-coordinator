@@ -1,8 +1,9 @@
 /**
  * Vehicle and battery command handlers.
  *
- * `chargeFromBattery` delegates the limit math to `src/utils/energy.ts`
- * (pure, kWh-based); this file owns only I/O and user-facing reporting.
+ * `chargeFromBattery` resolves energy config from config.json (prompting for
+ * missing values on a first run) and delegates the limit math to
+ * `src/utils/energy.ts`; this file owns I/O and user-facing reporting.
  */
 
 import {
@@ -14,7 +15,12 @@ import {
   type CommandResult,
 } from './context.js';
 import * as paint from '../utils/color.js';
-import { computeChargeLimit, DEFAULT_ENERGY_CONFIG } from '../utils/energy.js';
+import { describeConfigProblems, energyConfigPath } from '../utils/config.js';
+import {
+  computeChargeLimit,
+  energyConfigFieldProblem,
+  type EnergyConfig,
+} from '../utils/energy.js';
 
 export async function getEvBatterySoc(ctx: CommandContext): Promise<CommandResult> {
   if (!ctx.tesla?.isAuthenticated()) {
@@ -119,13 +125,82 @@ export async function setBatteryBuffer(
     return { ok: false, error: message };
   }
   try {
-    await ctx.store.setBatteryBuffer(percent);
+    ctx.config.setField({ bufferPercent: percent });
     log(ctx, paint.success(`✓ Battery buffer set to ${percent}%`));
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
     log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
+  }
+}
+
+/** First-run questions in schema order. The hints are advice, not defaults. */
+const CONFIG_QUESTIONS: Record<keyof EnergyConfig, string> = {
+  batteryCapacityKwh: 'FranklinWH battery capacity in kWh (aPower 2 is 13.5): ',
+  evBatteryKwh: 'EV battery capacity in kWh (Model Y is about 75): ',
+  bufferPercent: 'Battery buffer to keep in reserve, percent (0-100): ',
+  chargeEfficiency: 'Charge efficiency, 0-1 (0.9 covers typical losses): ',
+  minChargeKwh: 'Minimum spare energy to bother charging, kWh (1 is typical): ',
+};
+
+type ConfigOutcome = { config: EnergyConfig } | { error: string };
+
+/**
+ * Config for one command run: echo-and-fail on invalid values (a hand-edit
+ * mistake should be fixed, not papered over), prompt for missing ones on a
+ * TTY and write config.json, echo-and-fail when there is no TTY.
+ */
+async function requireEnergyConfig(ctx: CommandContext): Promise<ConfigOutcome> {
+  const resolved = ctx.config.resolve();
+  if (resolved.config !== null) return { config: resolved.config };
+
+  if (resolved.invalid.length > 0) {
+    for (const line of describeConfigProblems(resolved)) log(ctx, paint.error(line));
+    return { error: 'invalid energy config' };
+  }
+
+  const problemLines = describeConfigProblems(resolved);
+  const askNumeric = ctx.askNumeric;
+  if (!ctx.interactive || askNumeric === undefined) {
+    for (const line of problemLines) log(ctx, paint.warning(line));
+    log(ctx, paint.info('Set values with config --set-<field> <value>, or edit the file directly.'));
+    return { error: 'energy config incomplete' };
+  }
+
+  for (const line of problemLines) log(ctx, paint.info(line));
+  const answers: Partial<EnergyConfig> = { ...resolved.partial };
+  for (const field of resolved.missing) {
+    const value = await askForConfigField(ctx, field, askNumeric);
+    if (value === null) {
+      log(ctx, paint.warning('Cancelled -- energy config not written.'));
+      return { error: 'energy config setup cancelled' };
+    }
+    answers[field] = value;
+  }
+
+  ctx.config.save(answers as EnergyConfig);
+  log(ctx, paint.success(`✓ Energy config saved to ${energyConfigPath()}`));
+  return { config: answers as EnergyConfig };
+}
+
+/** Ask for one config value until it parses and validates; null on cancel. */
+async function askForConfigField(
+  ctx: CommandContext,
+  field: keyof EnergyConfig,
+  askNumeric: NonNullable<CommandContext['askNumeric']>
+): Promise<number | null> {
+  for (;;) {
+    const raw = await askNumeric(CONFIG_QUESTIONS[field], { decimal: true });
+    if (raw === null) return null;
+    if (raw === '') {
+      log(ctx, paint.warning('Enter a number (ESC to cancel).'));
+      continue;
+    }
+    const value = Number(raw);
+    const problem = energyConfigFieldProblem(field, value);
+    if (problem === null) return value;
+    log(ctx, paint.warning(`${problem} -- try again (ESC to cancel).`));
   }
 }
 
@@ -146,6 +221,12 @@ export async function chargeFromBattery(
   }
 
   try {
+    // Config first: report a broken or missing config before touching any
+    // service (first-run prompts must not run after waking the vehicle).
+    const outcome = await requireEnergyConfig(ctx);
+    if ('error' in outcome) return { ok: false, error: outcome.error };
+    const cfg = outcome.config;
+
     log(ctx, paint.info('Getting solar battery state...'));
     const batterySoc = await ctx.franklin.getStateOfCharge();
     if (!Number.isFinite(batterySoc)) {
@@ -154,7 +235,6 @@ export async function chargeFromBattery(
       log(ctx, paint.warning(message));
       return { ok: false, error: message };
     }
-    const buffer = await ctx.store.getBatteryBuffer();
 
     log(ctx, paint.info('Getting EV state of charge...'));
     const evSoc = await ctx.tesla.getStateOfCharge();
@@ -164,12 +244,9 @@ export async function chargeFromBattery(
       return { ok: false, error: message };
     }
 
-    const limit = computeChargeLimit(evSoc, batterySoc, {
-      ...DEFAULT_ENERGY_CONFIG,
-      bufferPercent: buffer,
-    });
+    const limit = computeChargeLimit(evSoc, batterySoc, cfg);
 
-    log(ctx, paint.positive(`Solar Battery: ${batterySoc}% (buffer ${buffer}%)`));
+    log(ctx, paint.positive(`Solar Battery: ${batterySoc}% (buffer ${cfg.bufferPercent}%)`));
     log(
       ctx,
       paint.positive(
@@ -182,7 +259,7 @@ export async function chargeFromBattery(
       const message =
         `Not enough charge available ` +
         `(spare ${limit.batteryAvailableKwh.toFixed(1)} kWh is below the ` +
-        `${DEFAULT_ENERGY_CONFIG.minChargeKwh} kWh minimum)`;
+        `${cfg.minChargeKwh} kWh minimum)`;
       log(ctx, paint.warning(message));
       return { ok: false, error: 'not enough charge available' };
     }
@@ -244,7 +321,11 @@ export async function showStatus(ctx: CommandContext): Promise<CommandResult> {
       ctx.tesla?.isAuthenticated() ? paint.positive('✓ Connected') : paint.error('✗ Not connected')
     }`
   );
-  log(ctx, `Battery Buffer: ${await ctx.store.getBatteryBuffer()}%`);
+  const energy = ctx.config.resolve();
+  let buffer = '(unset)';
+  if (energy.config) buffer = `${energy.config.bufferPercent}%`;
+  else if (energy.invalid.length > 0) buffer = '(invalid -- see `config`)';
+  log(ctx, `Battery Buffer: ${buffer}`);
   log(ctx, '');
   return { ok: true };
 }

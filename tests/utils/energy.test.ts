@@ -4,14 +4,20 @@
  * computeChargeLimit with an explicit config.
  */
 import { describe, expect, it } from 'vitest';
-import {
-  computeChargeLimit,
-  DEFAULT_ENERGY_CONFIG,
-  type EnergyConfig,
-} from '../../src/utils/energy.js';
+import { computeChargeLimit, type EnergyConfig } from '../../src/utils/energy.js';
 
-/** 13.5 kWh house pack, 75 kWh EV, 20% buffer, 90% efficiency, 1 kWh minimum. */
-const CFG: EnergyConfig = { ...DEFAULT_ENERGY_CONFIG };
+/**
+ * 13.5 kWh house pack, 75 kWh EV, 20% buffer, 90% efficiency, 1 kWh minimum --
+ * kept literal on purpose: the runtime reads these from config.json, so the
+ * module itself must not carry defaults.
+ */
+const CFG: EnergyConfig = {
+  batteryCapacityKwh: 13.5,
+  evBatteryKwh: 75,
+  bufferPercent: 20,
+  chargeEfficiency: 0.9,
+  minChargeKwh: 1,
+};
 
 describe('computeChargeLimit - the case that motivated the rewrite', () => {
   it('turns a full 13.5 kWh house battery into a sane limit for a 75 kWh car', () => {

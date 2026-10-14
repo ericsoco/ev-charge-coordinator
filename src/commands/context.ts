@@ -7,14 +7,15 @@
  * limit to" and offered to start charging, the Commander path did neither, and
  * they disagreed about the not-enough-charge case.
  *
- * Services and the credential store arrive through CommandContext rather than
+ * Services and configuration arrive through CommandContext rather than
  * being imported, so a handler can be tested without a real keychain, a Python
  * proxy, or the network.
  */
 
 import type { FranklinWHService } from '../services/FranklinWHService.js';
 import type { TeslaService } from '../services/TeslaService.js';
-import type { CredentialStore } from '../utils/credentials.js';
+import type { ResolvedEnergyConfig } from '../utils/config.js';
+import type { EnergyConfig } from '../utils/energy.js';
 
 /** Outcome of a handler. The caller decides how to render it and what to exit with. */
 export interface CommandResult {
@@ -23,12 +24,29 @@ export interface CommandResult {
   error?: string;
 }
 
+/**
+ * config.json access, injected so handlers can be tested against a fixture
+ * file (or none) without a real config dir.
+ */
+export interface EnergyConfigStore {
+  /** Read + validate the file; never throws. */
+  resolve(): ResolvedEnergyConfig;
+  /** Merge fields into the file, validating what is present. */
+  setField(patch: Partial<EnergyConfig>): void;
+  /** Write a complete config (the first-run prompt flow). */
+  save(config: EnergyConfig): void;
+}
+
 export interface CommandContext {
   franklin: FranklinWHService | null;
   tesla: TeslaService | null;
-  store: CredentialStore;
+  config: EnergyConfigStore;
   /** Ask the user a question; injected so handlers are testable without a TTY. */
   ask: (question: string) => Promise<string>;
+  /** Numeric sub-prompt (digit/decimal filtered, null on cancel); absent without a TTY. */
+  askNumeric?: (question: string, opts?: { decimal?: boolean }) => Promise<string | null>;
+  /** True when a TTY is attached, so first-run config prompts may run. */
+  interactive: boolean;
   /** Output sinks, defaulting to the console; injected by tests. */
   log?: (message: string) => void;
   errorLog?: (message: string) => void;

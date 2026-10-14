@@ -64,9 +64,6 @@ interface StoredCredentials {
     domain?: string;
     callbackPort?: number;
   };
-  settings?: {
-    batteryBuffer: number;
-  };
 }
 
 let keytar: typeof import('keytar') | null = null;
@@ -316,22 +313,6 @@ export class CredentialStore {
   async clearTeslaCredentials(): Promise<void> {
     await this.initialize();
     delete this.credentials.tesla;
-    await this.save();
-  }
-
-  // Settings
-  async getBatteryBuffer(): Promise<number> {
-    await this.initialize();
-    return this.credentials.settings?.batteryBuffer ?? 20; // Default 20%
-  }
-
-  async setBatteryBuffer(buffer: number): Promise<void> {
-    await this.initialize();
-    if (!this.credentials.settings) {
-      this.credentials.settings = { batteryBuffer: buffer };
-    } else {
-      this.credentials.settings.batteryBuffer = buffer;
-    }
     await this.save();
   }
 

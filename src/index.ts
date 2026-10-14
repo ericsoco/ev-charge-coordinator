@@ -24,6 +24,15 @@ import {
 } from './services/tesla/VirtualKeyService.js';
 import { resolveRegion } from './services/tesla/endpoints.js';
 import { credentialStore } from './utils/credentials.js';
+import {
+  describeConfigProblems,
+  ENERGY_CONFIG_TEMPLATE,
+  energyConfigPath,
+  resolveEnergyConfig,
+  saveEnergyConfig,
+  setEnergyConfigField,
+} from './utils/config.js';
+import type { EnergyConfig } from './utils/energy.js';
 
 import {
   describeError,
@@ -809,7 +818,18 @@ program
  * handlers only ever see this object, so they are testable without them.
  */
 function currentContext(): CommandContext {
-  return { franklin: franklinService, tesla: teslaService, store: credentialStore, ask: prompt };
+  return {
+    franklin: franklinService,
+    tesla: teslaService,
+    config: {
+      resolve: resolveEnergyConfig,
+      setField: setEnergyConfigField,
+      save: saveEnergyConfig,
+    },
+    ask: prompt,
+    askNumeric: promptNumeric,
+    interactive: process.stdin.isTTY === true,
+  };
 }
 
 /**
@@ -1040,10 +1060,43 @@ program
   .option('--tesla-region <region>', 'Set the Tesla Fleet API deployment (na | eu | cn)')
   .option('--tesla-domain <domain>', 'Set the domain that hosts the virtual key public key')
   .option('--show-public-key', 'Print the virtual key public key that Tesla reads')
+  .option('--set-battery-kwh <n>', 'Set house battery capacity, kWh')
+  .option('--set-ev-kwh <n>', 'Set EV battery capacity, kWh')
+  .option('--set-efficiency <0-1>', 'Set charge efficiency (0-1)')
+  .option('--set-min-kwh <n>', 'Set minimum spare energy to charge from, kWh')
   .action(async (options) => {
     if (options.showPublicKey) {
       const service = new VirtualKeyService({ apiBaseUrl: resolveRegion().apiBaseUrl });
       console.log(await service.getPublicKeyPem());
+      return;
+    }
+    // Energy setters write to config.json, the single source of truth.
+    const energySetters: [option: string, field: keyof EnergyConfig, label: string][] = [
+      ['setBatteryKwh', 'batteryCapacityKwh', 'Battery capacity'],
+      ['setEvKwh', 'evBatteryKwh', 'EV capacity'],
+      ['setEfficiency', 'chargeEfficiency', 'Charge efficiency'],
+      ['setMinKwh', 'minChargeKwh', 'Minimum charge energy'],
+    ];
+    const setter = energySetters.find(([option]) => options[option] !== undefined);
+    if (setter) {
+      const [, field, label] = setter;
+      const raw: string = options[setter[0]];
+      const value = Number(raw);
+      if (!Number.isFinite(value)) {
+        console.error(paint.error(`${label} must be a number (got "${raw}")`));
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        const patch: Partial<EnergyConfig> = {};
+        patch[field] = value;
+        setEnergyConfigField(patch);
+        console.log(paint.positive(`✓ ${label} set to ${value}`));
+        console.log(paint.info(`  Saved to ${energyConfigPath()}`));
+      } catch (error) {
+        console.error(paint.error(describeError(error)));
+        process.exitCode = 1;
+      }
       return;
     }
     if (options.teslaDomain) {
@@ -1083,12 +1136,26 @@ program
       // Show current config
       const franklin = await credentialStore.getFranklinCredentials();
       const tesla = await credentialStore.getTeslaCredentials();
-      const buffer = await credentialStore.getBatteryBuffer();
-      
+      const energy = resolveEnergyConfig();
+
       console.log(paint.info('\n--- Configuration ---'));
       console.log(`FranklinWH: ${franklin ? `Configured (Gateway: ${franklin.gatewayId})` : 'Not configured'}`);
       console.log(`Tesla: ${tesla ? `Configured${tesla.vin ? ` (VIN: ${tesla.vin})` : ''}${tesla.region ? ` Region: ${tesla.region}` : ''}${tesla.domain ? ` Key domain: ${tesla.domain}` : ''}` : 'Not configured'}`);
-      console.log(`Battery Buffer: ${buffer}%`);
+      console.log(`Energy config: ${energyConfigPath()}`);
+      if (energy.config) {
+        console.log(`  Battery capacity: ${energy.config.batteryCapacityKwh} kWh`);
+        console.log(`  EV capacity: ${energy.config.evBatteryKwh} kWh`);
+        console.log(`  Battery Buffer: ${energy.config.bufferPercent}%`);
+        console.log(`  Charge efficiency: ${energy.config.chargeEfficiency}`);
+        console.log(`  Minimum charge energy: ${energy.config.minChargeKwh} kWh`);
+      } else if (energy.invalid.length > 0) {
+        // Hand-edit mistakes: echo every problem with the path.
+        for (const line of describeConfigProblems(energy)) console.log(paint.error(line));
+      } else {
+        console.log(paint.warning(`  Incomplete (missing: ${energy.missing.join(', ')})`));
+        console.log(paint.info('  Create it with:'));
+        console.log(ENERGY_CONFIG_TEMPLATE);
+      }
       console.log('');
     }
   });
