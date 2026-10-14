@@ -115,8 +115,9 @@ the real `~/.ev-charge-coordinator`).
      key-file permissions, tamper handling, buffer default, Tesla token rotation.
    - `tests/services/franklin-wh.service.test.ts` (16) - full `snake_case` -> camelCase DTO
      map, `/health`-gated `initialize()`, snake_case `/auth` body, guard errors, shutdown.
-   - `tests/characterization/legacy-charge-limit.test.ts` (8) - pins the Phase 4b percent rule
-     **and deletes itself as the signal that the rule is gone.**
+   - `tests/characterization/legacy-charge-limit.test.ts` (8) - pinned the Phase 4b percent rule
+     **and deleted itself as the signal that the rule is gone.** (Done: deleted in the
+     Phase 4 pass.)
    Each suite was mutation-tested: perturbing the formula, the buffer default, or the DTO map
    makes the suite fail, so it cannot pass vacuously.
 5. ✅ Scripts: `test`, `test:watch`, plus `typecheck` and a `check` gate
@@ -134,7 +135,8 @@ the real `~/.ev-charge-coordinator`).
   `no-unused-vars` to `warn` for `src/index.ts` only, with a comment ordering Phase 2 to remove
   the override. This is the mechanical proof that `exit` cannot stop the REPL (Phase 2 item).
 - `getStats()`/`getStateOfCharge()` return `undefined` when the proxy omits `battery_soc`,
-  which flows into `Math.max(0, batterySoc - buffer)` as `NaN`. Pinned; Phase 4 must handle it.
+  which flows into `Math.max(0, batterySoc - buffer)` as `NaN`. Pinned; handled in the
+  Phase 4 pass (`chargeFromBattery` rejects non-finite SoC input before computing).
 - `credentialStore` is a module singleton with a sticky `initialized` flag; tests must
   instantiate `new CredentialStore()` to get a clean load.
 
@@ -300,7 +302,7 @@ you happen to read.
 
 **Exit criteria:** ✅ every command's behavior is defined in exactly one place; ✅ `--help`
 unchanged; ✅ Phase 0 characterization tests still pass (repointed, not deleted — Phase 4b
-still deletes them).
+still deletes them; done in the Phase 4 pass).
 
 ---
 
@@ -605,13 +607,18 @@ wiring.
 
 **Depends on Phase 1.5** (shared handlers) so the percent math is deleted once, not twice.
 
+**Status: ⏳ partial.** 4a ✅ complete (before this phase). 4b's energy math ✅ complete
+on `feature/phase-4-energy-math`; items 4-7 (config surface / flags), the start-charging
+unification, and the VCP 403 are deferred — see **"Deferred from this pass"** below.
+
 ### 4a. Replace the password-prompt stub
 
-1. Delete `prompt` / `promptPassword` and the TODO at `index.ts:19-52`; use the
-   **already-installed** `inquirer` (`password` for secrets, `number` for percentages,
-   `confirm` for save-credentials, `search`/`select` for vehicle choice). `inquirer` is
-   currently in `dependencies` and referenced nowhere in `src/` except that TODO comment.
-2. Never echo secrets; check whether the FranklinWH `gateway_id` prompt should be masked too.
+**✅ complete before this pass — deviation:** secrets are masked by the hand-rolled
+`promptSecret` in `src/commands/prompt.ts` (single readline, `*` per keystroke, falls
+back to a loudly-warned unmasked prompt when masking is unavailable), and `inquirer` was
+dropped from `dependencies` instead of being used. The old stub/TODO at `index.ts:19-52`
+is gone. The FranklinWH `gateway_id` prompt stays visible on purpose — it is an
+identifier, not a secret.
 
 ### 4b. `charge-from-battery` → energy math, percent rule **deleted**
 
@@ -620,7 +627,7 @@ wiring.
 > % of a ~13.5 kWh house battery against a % of a ~75 kWh vehicle is dimensionally invalid and
 > can request ~6x more energy than the battery holds.
 
-1. **New pure module `src/utils/energy.ts`** (no I/O — this is the "business logic in
+1. ✅ **New pure module `src/utils/energy.ts`** (no I/O — this is the "business logic in
    JavaScript" that `prompts.md:6` asks to keep editable):
 
    ```ts
@@ -631,46 +638,94 @@ wiring.
      chargeEfficiency: number;     // onboard-charger / converter losses
      minChargeKwh: number;         // don't start below this
    }
-   export interface EnergyEstimate {
+   export interface EnergyChargeLimit {
      batteryAvailableKwh: number;
      evCurrentKwh: number;
      evTargetKwh: number;
      targetPercent: number;        // already clamped to Tesla's 50-100 window
-     limitedBy: 'battery' | 'ev-capacity' | 'tesla-minimum';
+     limitedBy: 'none' | 'battery' | 'ev-capacity' | 'tesla-minimum';
+     rawPercent: number;           // unclamped, to explain a tesla-minimum result
    }
    export function computeChargeLimit(
      evSoc: number, batterySoc: number, cfg: EnergyConfig
-   ): EnergyEstimate
+   ): EnergyChargeLimit
    ```
 
-2. **Math:**
+   **Deviation from the sketch above:** the result type is `EnergyChargeLimit`
+   (renamed), `limitedBy` gained `'none'` (the spec's three values leave no answer
+   for "nothing clamped it"), and `rawPercent` was added so the log line can show
+   what the math said before Tesla's floor applied. Config and SoC validation both
+   happen inside the module, throwing with a message that names every bad field.
+
+2. ✅ **Math:**
    `batteryAvailableKwh = batteryCapacityKwh x max(0, batterySoc - bufferPercent) / 100`
    then `evTargetKwh = min(evBatteryKwh, evCurrentKwh + batteryAvailableKwh x chargeEfficiency)`
    then `targetPercent = clamp(round(evTargetKwh / evBatteryKwh x 100), 50, 100)`.
-3. **Delete both percent call sites:** `index.ts:554-555`
-   (`availableCharge = batterySoc - buffer` and `Math.max(50, Math.min(100, availableCharge))`)
-   **and** its REPL twin at `index.ts:352-355`. Replace with one `computeChargeLimit` call
-   reporting the kWh breakdown
-   (`Battery available: 8.2 kWh - EV now: 30.0 kWh -> target 55%`). Abort with `limitedBy`
-   when `batteryAvailableKwh < minChargeKwh`.
+3. ✅ **Delete both percent call sites.** By this phase Phase 1.5 had already unified
+   them into the shared handler, so the deletion was one site: the inline rule in
+   `src/commands/vehicle.ts` (`chargeFromBattery`). Replaced with one
+   `computeChargeLimit` call reporting the kWh breakdown
+   (`Battery available: 9.4 kWh - EV now: 41.3 kWh -> target 66%`). Aborts with
+   `limitedBy: 'battery'` when `batteryAvailableKwh < minChargeKwh`; the error string
+   `not enough charge available` is unchanged for callers. Unreadable SoC input
+   (the proxy can omit `battery_soc`) fails cleanly instead of flowing `NaN` into
+   the limit.
 
-4. **Capacities are now required** (no percent fallback to lean on): first run of
-   `charge-from-battery` prompts for them via `inquirer` rather than silently defaulting, so a
-   wrong pack size can't silently under/over-charge. `config` displays derived values.
-   `StoredCredentials.settings` (`credentials.ts:32-34`) grows the new fields.
-5. **Config surface:** `config --set-battery-kwh <n>`, `--set-ev-kwh <n>`,
+4. ⏭️ **DEFERRED — config surface (see "Deferred from this pass" below).**
+   **Capacities are now required** (no percent fallback to lean on): first run of
+   `charge-from-battery` should prompt for them (via the existing prompt helpers, not
+   `inquirer`) rather than silently defaulting, so a wrong pack size can't silently
+   under/over-charge. `config` displays derived values. `StoredCredentials.settings`
+   (`credentials.ts:32-34`) was the planned home for the new fields — see the storage
+   question in the deferred notes before landing that.
+5. ⏭️ **DEFERRED — config surface (see "Deferred from this pass" below).**
+   **Config surface:** `config --set-battery-kwh <n>`, `--set-ev-kwh <n>`,
    `--set-efficiency <0-1>`, `--set-min-kwh <n>`.
-6. **Unify the start-charging behavior:** non-interactive `charge-from-battery` never starts
-   charging, but the REPL version prompts to (`index.ts:370-374`). Make it explicit via
-   `--start` / `--dry-run`, identical in both modes.
-7. `set-battery-buffer` — add `--get`.
-8. **Tests** (`src/utils/energy.test.ts`): empty / over-cap buffer, `bufferPercent` 0 and 100,
-   EV already above target, efficiency `1.0` and `0.5`, the 50 % floor, and the
-   13.5 kWh-battery -> 75 kWh-car case that motivated this change (assert a sane ~60-65 %
-   target, i.e. **not** the old nonsensical 80 %).
+6. ⏭️ **DEFERRED (see "Deferred from this pass" below).**
+   **Unify the start-charging behavior:** non-interactive `charge-from-battery` never starts
+   charging, but the REPL version prompts to. Make it explicit via
+   `--start` / `--dry-run`, identical in both modes (today it is the `offerToStart`
+   argument to the shared handler).
+7. ⏭️ **DEFERRED (see "Deferred from this pass" below).** `set-battery-buffer` — add `--get`.
+8. ✅ **Tests** (`tests/utils/energy.test.ts`, 22 cases): empty / over-cap buffer,
+   `bufferPercent` 0 and 100, EV already at/above target, efficiency `1.0` and `0.5`, the
+   50 % floor, minimum-spare abort on both sides of the boundary, config + SoC validation,
+   and the 13.5 kWh-battery -> 75 kWh-car case that motivated this change (asserts 63 %,
+   i.e. **not** the old nonsensical 80 %). `tests/commands/vehicle.test.ts` covers the
+   handler wiring: kWh breakdown log, both unreadable-SoC failures, the 50 % fallback
+   message, and the skip-write-when-full path.
 
-**Exit criteria:** passwords never echo; `charge-from-battery` produces a unit-correct,
-defensible limit and explains itself in kWh.
+**Exit criteria:** ✅ passwords never echo; ✅ `charge-from-battery` produces a
+unit-correct, defensible limit and explains itself in kWh.
+
+### Deferred from this pass — pick up next
+
+Scope decision for this pass was minimal energy math (`computeChargeLimit` + call-site
+swap). The following Phase 4 work is **not done** and is the next unit of work, in
+rough priority order:
+
+1. **Config surface for `DEFAULT_ENERGY_CONFIG`** (items 4-5). Open design questions to
+   settle before coding:
+   - **File vs. flags:** a config file users can edit directly vs. five more
+     `config --set-*` switches (cumbersome for this many values). Decide first.
+   - **Validate on write:** reject bad values when they are set, not later inside
+     `computeChargeLimit`. Today only the hardcoded defaults ever reach the validator.
+   - **Storage:** settings currently live in `StoredCredentials.settings` inside the
+     encrypted `credentials.enc` (that is where `batteryBuffer` lives), but energy
+     config is not a credential. Review `src/utils/credentials.ts` and the file layout
+     before choosing a home; keep the `ECC_CONFIG_DIR` test redirection in mind.
+   - Until this lands, pack capacities / efficiency / min-kwh are hardcoded defaults;
+     a wrong pack size cannot be corrected.
+2. **`--start` / `--dry-run` unification** (item 6) — replace the `offerToStart`
+   argument with explicit flags identical in both modes.
+3. **`set-battery-buffer --get`** (item 7).
+4. **Tesla Vehicle Command Protocol / 403** — `setChargeLimit` still answers HTTP 403
+   "Vehicle Command Protocol required" (§8 Risks), so the live success path of
+   `charge-from-battery` stays blocked regardless of the math. Signed commands cannot
+   be verified in this environment; budget a debug round-trip on the user side.
+5. **Breaking-change callout** — deleting the percent rule changes behavior for anyone
+   relying on `charge-from-battery`. No changelog exists yet and none should be created
+   for this pass; whoever creates `CHANGELOG.md` (Phase 5) records it as breaking.
 
 ---
 
@@ -709,7 +764,7 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 |---|---|
 | `charge-from-battery` semantics | **Energy math (kWh) only - percent comparison deleted** (user decision, this session) |
 | `start` / `exit` model | State-file-backed supervisor so `exit` works from a fresh process (today it structurally cannot) |
-| Hidden password input | `inquirer` - already a dependency, currently unused |
+| Hidden password input | Hand-rolled masked readline prompt (`src/commands/prompt.ts`); `inquirer` dropped from deps |
 | Virtual key path | Docs-confirmed only: EC keygen -> host public key -> `POST /api/1/partner_accounts` -> mobile pairing deep link. The client-assertion `objects/virtual_key` API is **unconfirmed** and off the table without verification |
 | Command-handler duplication | Extract `src/commands/` **before** Phase 4 (added as Phase 1.5) |
 | Test framework | `vitest`; live Tesla/Franklin calls gated behind `RUN_LIVE_TESTS=1` |
@@ -735,7 +790,8 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
   "Vehicle Command Protocol required" for the REST vehicle-commands endpoint
   (docs: `announcements#2023-10-09-rest-api-vehicle-commands-endpoint-deprecation-warning`),
   so `setChargeLimit` — and with it `charge-from-battery`'s success path — is dead until the
-  Vehicle Command Protocol (signed commands) is implemented. Fold into Phase 4b.**
+  Vehicle Command Protocol (signed commands) is implemented. **Still open: deferred from
+  the minimal Phase 4 pass — see Phase 4 "Deferred from this pass".**
 - **FranklinWH is write-capable** - `set_mode` is exposed by the proxy. `charge-from-battery`
   must stay **read-only** against the battery; never mutate operating mode without an explicit
   user command.
