@@ -112,7 +112,8 @@ the real `~/.ev-charge-coordinator`).
    file existed) to 0 errors.
 4. ✅ Characterization suites under `tests/` (36 tests, ~160 ms, no network, no Python):
    - `tests/utils/credentials.test.ts` (12) - encrypted round-trip, ciphertext-at-rest proof,
-     key-file permissions, tamper handling, buffer default, Tesla token rotation.
+     key-file permissions, tamper handling, buffer default (since removed with
+     `StoredCredentials.settings`), Tesla token rotation.
    - `tests/services/franklin-wh.service.test.ts` (16) - full `snake_case` -> camelCase DTO
      map, `/health`-gated `initialize()`, snake_case `/auth` body, guard errors, shutdown.
    - `tests/characterization/legacy-charge-limit.test.ts` (8) - pinned the Phase 4b percent rule
@@ -608,8 +609,9 @@ wiring.
 **Depends on Phase 1.5** (shared handlers) so the percent math is deleted once, not twice.
 
 **Status: ⏳ partial.** 4a ✅ complete (before this phase). 4b's energy math ✅ complete
-on `feature/phase-4-energy-math`; items 4-7 (config surface / flags), the start-charging
-unification, and the VCP 403 are deferred — see **"Deferred from this pass"** below.
+on `feature/phase-4-energy-math`; items 4-5 (JSON config surface + first-run prompts) ✅
+complete on `feature/phase-4b-config-surface`. Still deferred: items 6-7 (start-charging
+unification, `--get`) and the VCP 403 — see **"Deferred from this pass"** below.
 
 ### 4a. Replace the password-prompt stub
 
@@ -671,16 +673,19 @@ identifier, not a secret.
    (the proxy can omit `battery_soc`) fails cleanly instead of flowing `NaN` into
    the limit.
 
-4. ⏭️ **DEFERRED — config surface (see "Deferred from this pass" below).**
-   **Capacities are now required** (no percent fallback to lean on): first run of
-   `charge-from-battery` should prompt for them (via the existing prompt helpers, not
-   `inquirer`) rather than silently defaulting, so a wrong pack size can't silently
-   under/over-charge. `config` displays derived values. `StoredCredentials.settings`
-   (`credentials.ts:32-34`) was the planned home for the new fields — see the storage
-   question in the deferred notes before landing that.
-5. ⏭️ **DEFERRED — config surface (see "Deferred from this pass" below).**
-   **Config surface:** `config --set-battery-kwh <n>`, `--set-ev-kwh <n>`,
-   `--set-efficiency <0-1>`, `--set-min-kwh <n>`.
+4. ✅ **Capacities are now required** (no percent fallback to lean on): first run of
+   `charge-from-battery` prompts for missing values via the existing prompt helpers
+   (decimal-capable `promptNumeric`) when a TTY is attached, then writes `config.json`;
+   without a TTY it fails listing the missing fields and how to set them. `config`
+   displays the values plus the file path. **Deviation:** the planned
+   `StoredCredentials.settings` home was replaced by a hand-editable `config.json`
+   (single source of truth, validated on every read and on every write), and
+   `settings` itself was removed from `StoredCredentials` along with the old
+   battery-buffer accessors — no users existed to migrate.
+5. ✅ **Config surface:** `config --set-battery-kwh <n>`, `--set-ev-kwh <n>`,
+   `--set-efficiency <0-1>`, `--set-min-kwh <n>` all write `config.json`, as does
+   `set-battery-buffer`. `DEFAULT_ENERGY_CONFIG` is gone: `energy.ts` carries
+   validation only, never values. Hand-edit mistakes are echoed with the file path.
 6. ⏭️ **DEFERRED (see "Deferred from this pass" below).**
    **Unify the start-charging behavior:** non-interactive `charge-from-battery` never starts
    charging, but the REPL version prompts to. Make it explicit via
@@ -700,30 +705,17 @@ unit-correct, defensible limit and explains itself in kWh.
 
 ### Deferred from this pass — pick up next
 
-Scope decision for this pass was minimal energy math (`computeChargeLimit` + call-site
-swap). The following Phase 4 work is **not done** and is the next unit of work, in
-rough priority order:
+Items 4-5 (config surface + first-run prompts) landed on
+`feature/phase-4b-config-surface`. Still open, in rough priority order:
 
-1. **Config surface for `DEFAULT_ENERGY_CONFIG`** (items 4-5). Open design questions to
-   settle before coding:
-   - **File vs. flags:** a config file users can edit directly vs. five more
-     `config --set-*` switches (cumbersome for this many values). Decide first.
-   - **Validate on write:** reject bad values when they are set, not later inside
-     `computeChargeLimit`. Today only the hardcoded defaults ever reach the validator.
-   - **Storage:** settings currently live in `StoredCredentials.settings` inside the
-     encrypted `credentials.enc` (that is where `batteryBuffer` lives), but energy
-     config is not a credential. Review `src/utils/credentials.ts` and the file layout
-     before choosing a home; keep the `ECC_CONFIG_DIR` test redirection in mind.
-   - Until this lands, pack capacities / efficiency / min-kwh are hardcoded defaults;
-     a wrong pack size cannot be corrected.
-2. **`--start` / `--dry-run` unification** (item 6) — replace the `offerToStart`
+1. **`--start` / `--dry-run` unification** (item 6) — replace the `offerToStart`
    argument with explicit flags identical in both modes.
-3. **`set-battery-buffer --get`** (item 7).
-4. **Tesla Vehicle Command Protocol / 403** — `setChargeLimit` still answers HTTP 403
+2. **`set-battery-buffer --get`** (item 7).
+3. **Tesla Vehicle Command Protocol / 403** — `setChargeLimit` still answers HTTP 403
    "Vehicle Command Protocol required" (§8 Risks), so the live success path of
    `charge-from-battery` stays blocked regardless of the math. Signed commands cannot
    be verified in this environment; budget a debug round-trip on the user side.
-5. **Breaking-change callout** — deleting the percent rule changes behavior for anyone
+4. **Breaking-change callout** — deleting the percent rule changes behavior for anyone
    relying on `charge-from-battery`. No changelog exists yet and none should be created
    for this pass; whoever creates `CHANGELOG.md` (Phase 5) records it as breaking.
 
@@ -763,6 +755,7 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 | Decision | Choice |
 |---|---|
 | `charge-from-battery` semantics | **Energy math (kWh) only - percent comparison deleted** (user decision, this session) |
+| Energy config home | Hand-editable `config.json` in the config dir - single source of truth for all energy settings; validated on read and on write; `config --set-*` and `set-battery-buffer` write it; `StoredCredentials.settings` and `DEFAULT_ENERGY_CONFIG` removed (user decision) |
 | `start` / `exit` model | State-file-backed supervisor so `exit` works from a fresh process (today it structurally cannot) |
 | Hidden password input | Hand-rolled masked readline prompt (`src/commands/prompt.ts`); `inquirer` dropped from deps |
 | Virtual key path | Docs-confirmed only: EC keygen -> host public key -> `POST /api/1/partner_accounts` -> mobile pairing deep link. The client-assertion `objects/virtual_key` API is **unconfirmed** and off the table without verification |
