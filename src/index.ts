@@ -898,7 +898,7 @@ program
 
 program
   .command('charge-from-battery')
-  .description('Set EV charge limit based on solar battery SoC minus buffer')
+  .description('Set the EV charge limit from the energy the solar battery can spare (kWh math)')
   .action(async () => {
     // Short-circuit preserved: Franklin's failure exits before Tesla is asked
     // for anything, which is also what `||` did here.
