@@ -61,24 +61,50 @@ export const DEFAULT_ENERGY_CONFIG: EnergyConfig = {
   minChargeKwh: 1.0,
 };
 
-/** Throw on a misconfigured pack rather than clamping it into a wrong answer. */
-function validateConfig(cfg: EnergyConfig): void {
+/**
+ * Per-field validation shared by the config store (on load and on write) and
+ * by computeChargeLimit (defense for direct callers). Keys are in schema
+ * order -- the order the first-run flow prompts in.
+ */
+const FIELD_CHECKS: { [K in keyof EnergyConfig]: (value: number) => string | null } = {
+  batteryCapacityKwh: (v) => (v > 0 ? null : `batteryCapacityKwh = ${v} (must be > 0)`),
+  evBatteryKwh: (v) => (v > 0 ? null : `evBatteryKwh = ${v} (must be > 0)`),
+  bufferPercent: (v) =>
+    v >= 0 && v <= 100 ? null : `bufferPercent = ${v} (must be 0-100)`,
+  chargeEfficiency: (v) =>
+    v > 0 && v <= 1 ? null : `chargeEfficiency = ${v} (must be in (0, 1])`,
+  minChargeKwh: (v) => (v >= 0 ? null : `minChargeKwh = ${v} (must be >= 0)`),
+};
+
+/** Schema-ordered field names. */
+export const ENERGY_CONFIG_FIELDS = Object.keys(FIELD_CHECKS) as (keyof EnergyConfig)[];
+
+/**
+ * One problem message for one field's value (type and range), or null if it
+ * is fine. Accepts `unknown` so hand-edited JSON of the wrong shape is caught
+ * by the same path as out-of-range numbers.
+ */
+export function energyConfigFieldProblem(field: keyof EnergyConfig, value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    const shown = typeof value === 'number' ? String(value) : (JSON.stringify(value) ?? 'undefined');
+    return `${field} = ${shown} (must be a number)`;
+  }
+  return FIELD_CHECKS[field](value);
+}
+
+/** Every problem in a complete config: one message per bad field. */
+export function energyConfigProblems(cfg: EnergyConfig): string[] {
   const problems: string[] = [];
-  if (!(cfg.batteryCapacityKwh > 0)) {
-    problems.push(`batteryCapacityKwh = ${cfg.batteryCapacityKwh} (must be > 0)`);
+  for (const field of ENERGY_CONFIG_FIELDS) {
+    const problem = energyConfigFieldProblem(field, cfg[field]);
+    if (problem !== null) problems.push(problem);
   }
-  if (!(cfg.evBatteryKwh > 0)) {
-    problems.push(`evBatteryKwh = ${cfg.evBatteryKwh} (must be > 0)`);
-  }
-  if (!(cfg.bufferPercent >= 0) || cfg.bufferPercent > 100) {
-    problems.push(`bufferPercent = ${cfg.bufferPercent} (must be 0-100)`);
-  }
-  if (!(cfg.chargeEfficiency > 0) || cfg.chargeEfficiency > 1) {
-    problems.push(`chargeEfficiency = ${cfg.chargeEfficiency} (must be in (0, 1])`);
-  }
-  if (!(cfg.minChargeKwh >= 0)) {
-    problems.push(`minChargeKwh = ${cfg.minChargeKwh} (must be >= 0)`);
-  }
+  return problems;
+}
+
+/** Throw on a misconfigured pack rather than clamping it into a wrong answer. */
+export function validateEnergyConfig(cfg: EnergyConfig): void {
+  const problems = energyConfigProblems(cfg);
   if (problems.length > 0) {
     throw new Error(`Invalid energy config: ${problems.join('; ')}`);
   }
@@ -103,7 +129,7 @@ export function computeChargeLimit(
   batterySocPercent: number,
   cfg: EnergyConfig
 ): EnergyChargeLimit {
-  validateConfig(cfg);
+  validateEnergyConfig(cfg);
   validateSoC(evSocPercent, 'EV');
   validateSoC(batterySocPercent, 'Solar battery');
 
