@@ -5,8 +5,7 @@
  * Commander action and the `start` REPL switch. Before this existed the logic
  * lived twice, and the copies had already drifted -- the REPL printed "Setting EV
  * limit to" and offered to start charging, the Commander path did neither, and
- * they disagreed about the not-enough-charge case. Phase 4b replaces the percent
- * math, so a second copy would have meant the change was made twice.
+ * they disagreed about the not-enough-charge case.
  *
  * Services and the credential store arrive through CommandContext rather than
  * being imported, so a handler can be tested without a real keychain, a Python

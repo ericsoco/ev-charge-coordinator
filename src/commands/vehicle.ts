@@ -1,12 +1,8 @@
 /**
  * Vehicle and battery command handlers.
  *
- * The percent rule in chargeFromBattery is the one Phase 4b deletes, and it used
- * to exist twice -- once in the Commander action and once in the REPL switch.
- * tests/characterization/legacy-charge-limit.test.ts pins both the truth table
- * and the presence of the inline formula; its source guard now points here, so
- * it still fails if the expression stops being present and Phase 4b's signal
- * that the file should be deleted keeps working.
+ * `chargeFromBattery` delegates the limit math to `src/utils/energy.ts`
+ * (pure, kWh-based); this file owns only I/O and user-facing reporting.
  */
 
 import {
@@ -18,6 +14,7 @@ import {
   type CommandResult,
 } from './context.js';
 import * as paint from '../utils/color.js';
+import { computeChargeLimit, DEFAULT_ENERGY_CONFIG } from '../utils/energy.js';
 
 export async function getEvBatterySoc(ctx: CommandContext): Promise<CommandResult> {
   if (!ctx.tesla?.isAuthenticated()) {
@@ -133,17 +130,10 @@ export async function setBatteryBuffer(
 }
 
 /**
- * Set the EV's charge limit from what the solar battery can spare.
+ * Set the EV's charge limit from the energy the solar battery can spare.
  *
- * offerToStart is what the REPL passed and the Commander path did not. It is
- * now an explicit argument, so the difference is visible in one place instead of
- * being an accident of which copy you happen to read.
- *
- * NOTE (Phase 4b): this percent comparison is dimensionally invalid -- a battery
- * percentage minus a reserve percentage says nothing about the kWh available to
- * a car with a different pack size. It is kept exactly as-is so this refactor
- * stays behaviour-preserving; Phase 4b replaces it with energy math and deletes
- * tests/characterization/legacy-charge-limit.test.ts.
+ * offerToStart is true on the interactive path (the REPL), false for the
+ * one-shot command: after the limit is set, ask whether to begin charging now.
  */
 export async function chargeFromBattery(
   ctx: CommandContext,
@@ -158,23 +148,72 @@ export async function chargeFromBattery(
   try {
     log(ctx, paint.info('Getting solar battery state...'));
     const batterySoc = await ctx.franklin.getStateOfCharge();
+    if (!Number.isFinite(batterySoc)) {
+      // The proxy may omit battery_soc; refuse rather than compute with NaN.
+      const message = 'Solar battery SoC unavailable (proxy returned no battery_soc)';
+      log(ctx, paint.warning(message));
+      return { ok: false, error: message };
+    }
     const buffer = await ctx.store.getBatteryBuffer();
 
-    const availableCharge = Math.max(0, batterySoc - buffer);
-    const evLimit = Math.max(MIN_EV_CHARGE_LIMIT, Math.min(MAX_EV_CHARGE_LIMIT, availableCharge));
+    log(ctx, paint.info('Getting EV state of charge...'));
+    const evSoc = await ctx.tesla.getStateOfCharge();
+    if (!Number.isFinite(evSoc)) {
+      const message = 'EV SoC unavailable';
+      log(ctx, paint.warning(message));
+      return { ok: false, error: message };
+    }
 
-    log(ctx, paint.positive(`Solar Battery: ${batterySoc}%`));
-    log(ctx, paint.positive(`Buffer: ${buffer}%`));
-    log(ctx, paint.positive(`Available for EV: ${availableCharge}%`));
-    log(ctx, paint.positive(`Setting EV limit to: ${evLimit}%`));
+    const limit = computeChargeLimit(evSoc, batterySoc, {
+      ...DEFAULT_ENERGY_CONFIG,
+      bufferPercent: buffer,
+    });
 
-    if (evLimit <= MIN_EV_CHARGE_LIMIT) {
-      log(ctx, paint.warning(`Not enough charge available (minimum EV limit is ${MIN_EV_CHARGE_LIMIT}%)`));
+    log(ctx, paint.positive(`Solar Battery: ${batterySoc}% (buffer ${buffer}%)`));
+    log(
+      ctx,
+      paint.positive(
+        `Battery available: ${limit.batteryAvailableKwh.toFixed(1)} kWh - ` +
+          `EV now: ${limit.evCurrentKwh.toFixed(1)} kWh -> target ${limit.targetPercent}%`
+      )
+    );
+
+    if (limit.limitedBy === 'battery') {
+      const message =
+        `Not enough charge available ` +
+        `(spare ${limit.batteryAvailableKwh.toFixed(1)} kWh is below the ` +
+        `${DEFAULT_ENERGY_CONFIG.minChargeKwh} kWh minimum)`;
+      log(ctx, paint.warning(message));
       return { ok: false, error: 'not enough charge available' };
     }
 
-    await ctx.tesla.setChargeLimit(evLimit);
-    log(ctx, paint.success(`✓ EV charge limit set to ${evLimit}%`));
+    if (limit.targetPercent <= evSoc) {
+      // Rounding can put the target at or under the current SoC; asking Tesla
+      // to set it would gain nothing.
+      log(
+        ctx,
+        paint.info(
+          `EV already at or above the computed target ` +
+            `(${evSoc}% -> ${limit.targetPercent}%) - nothing to charge`
+        )
+      );
+      return { ok: true };
+    }
+
+    if (limit.limitedBy === 'tesla-minimum') {
+      log(
+        ctx,
+        paint.warning(
+          `Energy math says ${limit.rawPercent.toFixed(1)}%, below Tesla's ` +
+            `${MIN_EV_CHARGE_LIMIT}% minimum - setting ${MIN_EV_CHARGE_LIMIT}%`
+        )
+      );
+    } else if (limit.limitedBy === 'ev-capacity') {
+      log(ctx, paint.info(`Target limited by the EV pack capacity (${MAX_EV_CHARGE_LIMIT}%)`));
+    }
+
+    await ctx.tesla.setChargeLimit(limit.targetPercent);
+    log(ctx, paint.success(`✓ EV charge limit set to ${limit.targetPercent}%`));
 
     if (options.offerToStart) {
       const answer = await ctx.ask('Start charging now? (y/n): ');

@@ -131,26 +131,98 @@ describe('setEvChargeLimit', () => {
 
 describe('chargeFromBattery', () => {
   it('reports insufficient charge without issuing a command', async () => {
-    // 60 - 20 = 40, which is below Tesla's 50% floor.
-    const { ctx, calls, out } = makeContext({ buffer: 20 });
+    // 25% - 20% buffer = 0.675 kWh above the buffer, below the 1 kWh minimum.
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => 25 },
+      buffer: 20,
+    });
     const result = await chargeFromBattery(ctx, { offerToStart: false });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('not enough charge available');
     expect(calls.setChargeLimit).toBeUndefined();
-    expect(out.join('\n')).toContain('Available for EV: 40%');
     expect(out.join('\n')).toContain('Not enough charge available');
+    expect(out.join('\n')).toContain('Battery available: 0.7 kWh');
   });
 
-  it('sets the limit when there is enough charge', async () => {
-    const { ctx, calls } = makeContext({
+  it('sets the kWh-derived limit when there is enough charge', async () => {
+    // 90% - 20% buffer = 9.45 kWh spare, x0.9 = 8.505 kWh delivered onto
+    // 41.25 kWh (55% of 75) -> 49.755 kWh = 66.34% -> 66%.
+    const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
     });
     const result = await chargeFromBattery(ctx, { offerToStart: false });
 
     expect(result.ok).toBe(true);
-    expect(calls.setChargeLimit[0]).toEqual([70]);
+    expect(calls.setChargeLimit[0]).toEqual([66]);
+    expect(out.join('\n')).toContain(
+      'Battery available: 9.4 kWh - EV now: 41.3 kWh -> target 66%'
+    );
+  });
+
+  it('folds the EV SoC into the limit', async () => {
+    // EV at 80% (60 kWh) + 8.505 kWh -> 68.505 kWh = 91.34% -> 91%.
+    const { ctx, calls } = makeContext({
+      franklin: { getStateOfCharge: async () => 90 },
+      tesla: { getStateOfCharge: async () => 80 },
+      buffer: 20,
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit[0]).toEqual([91]);
+  });
+
+  it("falls back to Tesla's 50% floor and says why", async () => {
+    // 40% - 20% buffer = 2.7 kWh spare; EV at 20% lands at raw 23.2%.
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => 40 },
+      tesla: { getStateOfCharge: async () => 20 },
+      buffer: 20,
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit[0]).toEqual([50]);
+    expect(out.join('\n')).toContain("below Tesla's 50% minimum");
+  });
+
+  it('refuses to compute when the proxy omits battery_soc', async () => {
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => undefined as unknown as number },
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Solar battery SoC unavailable');
+    expect(calls.setChargeLimit).toBeUndefined();
+    expect(out.join('\n')).toContain('Solar battery SoC unavailable');
+  });
+
+  it('refuses to compute when the EV SoC is unreadable', async () => {
+    const { ctx, calls, out } = makeContext({
+      tesla: { getStateOfCharge: async () => undefined as unknown as number },
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('EV SoC unavailable');
+    expect(calls.setChargeLimit).toBeUndefined();
+    expect(out.join('\n')).toContain('EV SoC unavailable');
+  });
+
+  it('skips the write when the EV is already full', async () => {
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => 90 },
+      tesla: { getStateOfCharge: async () => 100 },
+      buffer: 20,
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit).toBeUndefined();
+    expect(out.join('\n')).toContain('already at or above the computed target');
   });
 
   // The only behavioural difference between the REPL and the one-shot path is now

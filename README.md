@@ -217,7 +217,7 @@ npm start start-ev-charging
 # Stop EV charging
 npm start stop-ev-charging
 
-# Set charge limit based on solar battery (minus buffer)
+# Set charge limit from the energy the solar battery can spare (kWh math)
 npm start charge-from-battery
 
 # Set battery buffer to 20%
@@ -244,7 +244,7 @@ npm start config --clear-all
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%) |
 | `start-ev-charging` | Start charging the EV |
 | `stop-ev-charging` | Stop charging the EV |
-| `charge-from-battery` | Set EV charge limit to available solar battery charge minus buffer |
+| `charge-from-battery` | Set EV charge limit from the energy the solar battery can spare (kWh math) |
 | `set-battery-buffer <percent>` | Set the amount of charge to keep in the solar battery (0-100%) |
 | `config` | Show current configuration |
 | `config --clear-franklin` | Clear FranklinWH credentials |
@@ -301,8 +301,9 @@ When running in interactive mode (`start`), the following commands are available
 ### Smart Charging Flow
 
 1. Read the current state of charge from your solar battery
-2. Subtract your configured buffer (energy you want to keep in reserve)
-3. Set the EV charge limit to the available percentage
+2. Convert the energy above your configured buffer (your reserve) into kWh
+3. Add that energy to the EV's current charge, accounting for charging
+   efficiency, and request the resulting percent limit (Tesla clamps to 50-100%)
 4. Optionally start charging immediately
 
 This ensures your EV only charges using excess energy from your solar battery system.
