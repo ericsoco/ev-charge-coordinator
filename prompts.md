@@ -1,3 +1,18 @@
+# 2026.Oct.10
+
+## Product Requirements
+
+### Vehicle charging behavior
+The goal is to use the home solar battery to both charge the EV battery and power the home, without drawing energy from the grid.
+This requires knowing the state of the home solar battery and the EV battery, and maintaining a buffer of energy in the home solar battery for use in the home.
+* The Tesla API allows setting a target SoC of anywhere from 50-100%. The Tesla API clamps the target to a minimum of 50%.
+* When evaluating state at the start of a planned charging session, the vehicle BSoC can be at any value from 0-100%.
+* If the amount of charge available in the solar battery is not enough to charge the vehicle to >= the 50% minimum, then the program will have to set a target lower than the 50% minimum and stop charging via the API once the vehicle BSoC reaches the target. We'll implement this in phases:
+    1. Just set-ev-charge-limit to the minimum value allowed by the Tesla API (50%).
+    2. Add the intelligence to poll the vehicle charging progress and stop charging at our calculated target.
+* Generally, we should express energy in kWh; Tesla and Franklin APIs use %, but to transfer energy between them, kWh is the compatible unit.
+
+
 # 2026.Mar.01
 
 Create a TypeScript / NodeJS application. The purpose of this application will be to enable me to charge my electric vehicle (EV) with as much energy as is stored in the battery connected to my home solar system. The application architecture should support charging any kind of EV, from any kind of battery, but to start let's make it work specifically with the kind of EV and battery I have: a Tesla Model Y and a FranklinWH aPower 2. Also, let's start with a command-line interface first; we can build a GUI later.
