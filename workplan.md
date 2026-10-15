@@ -719,6 +719,27 @@ Items 4-5 (config surface + first-run prompts) landed on
    relying on `charge-from-battery`. No changelog exists yet and none should be created
    for this pass; whoever creates `CHANGELOG.md` (Phase 5) records it as breaking.
 
+### Fix landed off-plan: REPL help drift (`config` / `pair-tesla-key`)
+
+Reported after the config-surface pass: both existed as Commander commands but were
+absent from the REPL's `help` **and** its dispatch switch, so typing them interactively
+printed "Unknown command" -- and the sync-guard only checked cases -> advertised, so the
+drift was invisible. Fixed on `fix/repl-config-pairing`:
+
+- Both actions extracted into shared runners (`runConfig`, `runPairTeslaKey`, modeled on
+  `runAuthenticate`); only the Commander wrappers turn failure into a process exit code,
+  so a REPL session cannot inherit one.
+- `parseCommandArgs` in `src/commands/repl.ts` gives the REPL flag parity with the
+  one-shot commands (Commander-style errors for unknown options / missing values), and
+  `REPL_COMMANDS` advertises both commands for `help` and completion.
+- The REPL line is now split into command token + inline flags; the busy-gate therefore
+  recognizes `config --set-x` instead of silently dropping it.
+- The sync-guard runs **both** directions: every case is advertised and every advertised
+  command has a case.
+- `start` reports the energy-config state between the service lines (valid / missing /
+  invalid, echoing every problem), non-fatal -- only `charge-from-battery` and
+  `set-battery-buffer` need the file.
+
 ---
 
 ## Phase 5 — Open-source packaging (~0.5 d)
