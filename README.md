@@ -290,6 +290,7 @@ When running in interactive mode (`start`), the following commands are available
 
 - `help` - Show available commands
 - `status` - Show current status of all systems
+- `authenticate` - Sign in to Tesla and store the credentials
 - `get-ev-bsoc` - Get EV battery state of charge
 - `get-battery-soc` - Get solar battery state of charge
 - `set-ev-charge-limit` - Set EV charge limit (prompts for value)
@@ -297,6 +298,10 @@ When running in interactive mode (`start`), the following commands are available
 - `stop-ev-charging` - Stop EV charging
 - `charge-from-battery` - Smart charging based on solar battery
 - `set-battery-buffer` - Set battery buffer percentage
+- `config` - Show or update configuration; accepts the same flags as the
+  one-shot command (e.g. `config --set-efficiency 0.9`)
+- `pair-tesla-key` - Register the virtual key with Tesla; accepts `--domain`,
+  `--vin`, `--check-only`, `--skip-registration`
 - `exit` - Exit the application
 
 ## How It Works
