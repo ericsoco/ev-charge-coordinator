@@ -132,3 +132,35 @@ describe('exit guidance in start --daemon', () => {
     expect(printed).toEqual([]);
   });
 });
+
+describe('energy config status at startup', () => {
+  it('reports the config state between the service lines and the exit check', () => {
+    const serviceLines = INDEX_SOURCE.indexOf('✓ FranklinWH service started successfully');
+    const configCheck = INDEX_SOURCE.indexOf('const energy = resolveEnergyConfig();');
+    const exitCheck = INDEX_SOURCE.indexOf('No services available. Exiting.');
+    expect(serviceLines).toBeGreaterThan(-1);
+    expect(configCheck).toBeGreaterThan(serviceLines);
+    expect(exitCheck).toBeGreaterThan(configCheck);
+  });
+
+  it('echoes every problem for an invalid config and stays non-fatal', () => {
+    const block = INDEX_SOURCE.slice(
+      INDEX_SOURCE.indexOf('const energy = resolveEnergyConfig();'),
+      INDEX_SOURCE.indexOf('No services available. Exiting.')
+    );
+    expect(block).toContain('Energy config invalid');
+    expect(block).toContain('describeConfigProblems(energy)');
+    // Only a total service failure may end the process; config never does.
+    expect(block).not.toContain('process.exitCode');
+    expect(block).not.toContain('return;');
+  });
+
+  it('mentions both ways to fix a missing config', () => {
+    const block = INDEX_SOURCE.slice(
+      INDEX_SOURCE.indexOf('const energy = resolveEnergyConfig();'),
+      INDEX_SOURCE.indexOf('No services available. Exiting.')
+    );
+    expect(block).toContain('Energy config missing at');
+    expect(block).toContain('charge-from-battery to be prompted');
+  });
+});
