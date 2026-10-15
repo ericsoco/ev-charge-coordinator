@@ -66,8 +66,7 @@ JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
   "batteryCapacityKwh": 13.5,
   "evBatteryKwh": 75,
   "bufferPercent": 20,
-  "chargeEfficiency": 0.9,
-  "minChargeKwh": 1.0
+  "chargeEfficiency": 0.9
 }
 ```
 
@@ -77,8 +76,11 @@ JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
 - **Hand-editing:** the file is validated on every read; bad values are echoed
   with the file path and the command fails instead of guessing a correction.
 - **Setters write here too:** `config --set-battery-kwh` / `--set-ev-kwh` /
-  `--set-efficiency` / `--set-min-kwh` and `set-battery-buffer` all update the
-  same file, so it stays the single source of truth.
+  `--set-efficiency` and `set-battery-buffer` all update the same file, so it
+  stays the single source of truth.
+- **Insufficient energy fails loudly:** if the solar battery's energy above the
+  buffer cannot raise the EV's charge limit, `charge-from-battery` fails with
+  the reason instead of setting a limit that would gain nothing.
 
 ### Tesla Fleet API Setup
 
@@ -281,7 +283,6 @@ npm start config --clear-all
 | `config --set-battery-kwh <n>` | Set house battery capacity in `config.json` |
 | `config --set-ev-kwh <n>` | Set EV battery capacity in `config.json` |
 | `config --set-efficiency <0-1>` | Set charge efficiency in `config.json` |
-| `config --set-min-kwh <n>` | Set minimum spare energy to charge from in `config.json` |
 | `pair-tesla-key` | Register the virtual key with Tesla and print the vehicle pairing link |
 
 ### Interactive Mode Commands

@@ -21,14 +21,13 @@ export interface EnergyConfig {
   bufferPercent: number;
   /** Fraction of house energy that reaches the car, in (0, 1]. */
   chargeEfficiency: number;
-  /** Abort when the spare house energy is below this, in kWh. */
-  minChargeKwh: number;
 }
 
 /**
- * Why the target is what it is: nothing constrained it (`none`), the house
- * spare ran out (`battery`), the EV pack would overfill (`ev-capacity`), or
- * the kWh math landed below Tesla's 50% floor (`tesla-minimum`).
+ * Why the target is what it is: nothing constrained it (`none`), the available
+ * house energy cannot raise the target above the EV's current charge
+ * (`battery`), the EV pack would overfill (`ev-capacity`), or the kWh math
+ * landed below Tesla's 50% floor (`tesla-minimum`).
  */
 export type EnergyLimitedBy = 'none' | 'battery' | 'ev-capacity' | 'tesla-minimum';
 
@@ -60,7 +59,6 @@ const FIELD_CHECKS: { [K in keyof EnergyConfig]: (value: number) => string | nul
     v >= 0 && v <= 100 ? null : `bufferPercent = ${v} (must be 0-100)`,
   chargeEfficiency: (v) =>
     v > 0 && v <= 1 ? null : `chargeEfficiency = ${v} (must be in (0, 1])`,
-  minChargeKwh: (v) => (v >= 0 ? null : `minChargeKwh = ${v} (must be >= 0)`),
 };
 
 /** Schema-ordered field names. */
@@ -128,20 +126,22 @@ export function computeChargeLimit(
     evCurrentKwh + batteryAvailableKwh * cfg.chargeEfficiency
   );
   const rawPercent = (evTargetKwh / cfg.evBatteryKwh) * 100;
+  const targetPercent = Math.min(
+    MAX_EV_CHARGE_LIMIT,
+    Math.max(MIN_EV_CHARGE_LIMIT, Math.round(rawPercent))
+  );
 
+  // `battery` is the insufficient-energy case: the limit the math produces
+  // does not exceed where the EV already is. rawPercent <= evSoc also catches
+  // zero-gain rounding-up (e.g. EV at 99.6% with no spare).
   let limitedBy: EnergyLimitedBy = 'none';
-  if (batteryAvailableKwh < cfg.minChargeKwh) {
+  if (targetPercent <= evSocPercent || rawPercent <= evSocPercent) {
     limitedBy = 'battery';
   } else if (rawPercent >= MAX_EV_CHARGE_LIMIT) {
     limitedBy = 'ev-capacity';
   } else if (rawPercent < MIN_EV_CHARGE_LIMIT) {
     limitedBy = 'tesla-minimum';
   }
-
-  const targetPercent = Math.min(
-    MAX_EV_CHARGE_LIMIT,
-    Math.max(MIN_EV_CHARGE_LIMIT, Math.round(rawPercent))
-  );
 
   return { batteryAvailableKwh, evCurrentKwh, evTargetKwh, targetPercent, limitedBy, rawPercent };
 }

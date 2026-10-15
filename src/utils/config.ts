@@ -23,8 +23,7 @@ export const ENERGY_CONFIG_TEMPLATE = `{
   "batteryCapacityKwh": 13.5,
   "evBatteryKwh": 75,
   "bufferPercent": 20,
-  "chargeEfficiency": 0.9,
-  "minChargeKwh": 1.0
+  "chargeEfficiency": 0.9
 }`;
 
 export function energyConfigPath(): string {

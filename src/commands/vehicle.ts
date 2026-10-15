@@ -141,7 +141,6 @@ const CONFIG_QUESTIONS: Record<keyof EnergyConfig, string> = {
   evBatteryKwh: 'EV battery capacity in kWh (Model Y is about 75): ',
   bufferPercent: 'Battery buffer to keep in reserve, percent (0-100): ',
   chargeEfficiency: 'Charge efficiency, 0-1 (0.9 covers typical losses): ',
-  minChargeKwh: 'Minimum spare energy to bother charging, kWh (1 is typical): ',
 };
 
 type ConfigOutcome = { config: EnergyConfig } | { error: string };
@@ -256,25 +255,18 @@ export async function chargeFromBattery(
     );
 
     if (limit.limitedBy === 'battery') {
+      // Insufficient energy: name the reason and the numbers behind it. The
+      // kWh breakdown above is the evidence for this line.
       const message =
-        `Not enough charge available ` +
-        `(spare ${limit.batteryAvailableKwh.toFixed(1)} kWh is below the ` +
-        `${cfg.minChargeKwh} kWh minimum)`;
+        evSoc >= MAX_EV_CHARGE_LIMIT
+          ? 'Cannot charge: the EV is already fully charged'
+          : limit.batteryAvailableKwh <= 0
+            ? `Not enough energy to charge: the solar battery has no energy above its ${cfg.bufferPercent}% buffer`
+            : `Not enough energy to charge: the solar battery's ` +
+              `${limit.batteryAvailableKwh.toFixed(1)} kWh above its ${cfg.bufferPercent}% buffer ` +
+              `cannot raise the EV charge limit above its current ${evSoc}%`;
       log(ctx, paint.warning(message));
-      return { ok: false, error: 'not enough charge available' };
-    }
-
-    if (limit.targetPercent <= evSoc) {
-      // Rounding can put the target at or under the current SoC; asking Tesla
-      // to set it would gain nothing.
-      log(
-        ctx,
-        paint.info(
-          `EV already at or above the computed target ` +
-            `(${evSoc}% -> ${limit.targetPercent}%) - nothing to charge`
-        )
-      );
-      return { ok: true };
+      return { ok: false, error: message };
     }
 
     if (limit.limitedBy === 'tesla-minimum') {

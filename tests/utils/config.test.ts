@@ -22,7 +22,6 @@ const FULL: EnergyConfig = {
   evBatteryKwh: 75,
   bufferPercent: 20,
   chargeEfficiency: 0.9,
-  minChargeKwh: 1,
 };
 
 function cfgPath(): string {
@@ -61,7 +60,6 @@ describe('resolveEnergyConfig - reading the hand-edited file', () => {
       'evBatteryKwh',
       'bufferPercent',
       'chargeEfficiency',
-      'minChargeKwh',
     ]);
   });
 
@@ -81,7 +79,7 @@ describe('resolveEnergyConfig - reading the hand-edited file', () => {
     const resolved = mod.resolveEnergyConfig();
 
     expect(resolved.config).toBeNull();
-    expect(resolved.missing).toEqual(['evBatteryKwh', 'chargeEfficiency', 'minChargeKwh']);
+    expect(resolved.missing).toEqual(['evBatteryKwh', 'chargeEfficiency']);
     expect(resolved.invalid).toEqual([]);
   });
 
@@ -143,13 +141,13 @@ describe('describeConfigProblems - the lines the CLI echoes', () => {
   });
 
   it('names every invalid value and the file', () => {
-    writeRaw(JSON.stringify({ ...FULL, chargeEfficiency: 0, minChargeKwh: -1 }));
+    writeRaw(JSON.stringify({ ...FULL, evBatteryKwh: -1, chargeEfficiency: 0 }));
 
     const lines = mod.describeConfigProblems(mod.resolveEnergyConfig());
 
     expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain('chargeEfficiency = 0');
-    expect(lines[1]).toContain('minChargeKwh = -1');
+    expect(lines[0]).toContain('evBatteryKwh = -1');
+    expect(lines[1]).toContain('chargeEfficiency = 0');
     expect(lines[2]).toBe(`Fix ${cfgPath()} and try again.`);
   });
 
@@ -188,7 +186,6 @@ describe('setEnergyConfigField - the config --set-* flags write here', () => {
       'batteryCapacityKwh',
       'evBatteryKwh',
       'chargeEfficiency',
-      'minChargeKwh',
     ]);
     expect(JSON.parse(fs.readFileSync(cfgPath(), 'utf8'))).toEqual({ bufferPercent: 25 });
   });
@@ -213,26 +210,37 @@ describe('setEnergyConfigField - the config --set-* flags write here', () => {
   it('blocks the write when an existing value in the file is already invalid', () => {
     writeRaw(JSON.stringify({ ...FULL, chargeEfficiency: 9 }));
 
-    expect(() => mod.setEnergyConfigField({ minChargeKwh: 2 })).toThrow(
+    expect(() => mod.setEnergyConfigField({ bufferPercent: 30 })).toThrow(
       /chargeEfficiency = 9/
     );
-    expect(JSON.parse(fs.readFileSync(cfgPath(), 'utf8')).minChargeKwh).toBe(1);
+    expect(JSON.parse(fs.readFileSync(cfgPath(), 'utf8')).bufferPercent).toBe(20);
   });
 
   it('refuses to clobber a file that does not parse', () => {
     writeRaw('{ oops');
 
-    expect(() => mod.setEnergyConfigField({ minChargeKwh: 2 })).toThrow(/Fix the JSON first/);
+    expect(() => mod.setEnergyConfigField({ chargeEfficiency: 0.8 })).toThrow(/Fix the JSON first/);
     expect(fs.readFileSync(cfgPath(), 'utf8')).toBe('{ oops');
   });
 
-  it('drops unknown keys on write', () => {
-    writeRaw(JSON.stringify({ ...FULL, note: 'hand-written' }));
+  it('drops unknown keys on write, including a legacy minChargeKwh', () => {
+    writeRaw(JSON.stringify({ ...FULL, note: 'hand-written', minChargeKwh: 1 }));
 
-    mod.setEnergyConfigField({ minChargeKwh: 2 });
+    mod.setEnergyConfigField({ bufferPercent: 30 });
 
     const written = JSON.parse(fs.readFileSync(cfgPath(), 'utf8'));
-    expect(written).toEqual({ ...FULL, minChargeKwh: 2 });
+    expect(written).toEqual({ ...FULL, bufferPercent: 30 });
     expect(written).not.toHaveProperty('note');
+    expect(written).not.toHaveProperty('minChargeKwh');
+  });
+
+  it('ignores a leftover minChargeKwh on read (old-schema files stay usable)', () => {
+    writeRaw(JSON.stringify({ ...FULL, minChargeKwh: 1 }));
+
+    const resolved = mod.resolveEnergyConfig();
+
+    expect(resolved.config).toEqual(FULL);
+    expect(resolved.missing).toEqual([]);
+    expect(resolved.invalid).toEqual([]);
   });
 });

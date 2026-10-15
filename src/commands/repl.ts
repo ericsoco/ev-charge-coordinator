@@ -48,7 +48,7 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
  * flags exactly. Value flags consume the next token; boolean flags stand alone.
  */
 const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  config: ['tesla-region', 'tesla-domain', 'set-battery-kwh', 'set-ev-kwh', 'set-efficiency', 'set-min-kwh'],
+  config: ['tesla-region', 'tesla-domain', 'set-battery-kwh', 'set-ev-kwh', 'set-efficiency'],
   'pair-tesla-key': ['domain', 'vin'],
 };
 

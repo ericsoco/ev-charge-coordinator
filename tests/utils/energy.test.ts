@@ -7,16 +7,15 @@ import { describe, expect, it } from 'vitest';
 import { computeChargeLimit, type EnergyConfig } from '../../src/utils/energy.js';
 
 /**
- * 13.5 kWh house pack, 75 kWh EV, 20% buffer, 90% efficiency, 1 kWh minimum --
- * kept literal on purpose: the runtime reads these from config.json, so the
- * module itself must not carry defaults.
+ * 13.5 kWh house pack, 75 kWh EV, 20% buffer, 90% efficiency -- kept literal on
+ * purpose: the runtime reads these from config.json, so the module itself must
+ * not carry defaults.
  */
 const CFG: EnergyConfig = {
   batteryCapacityKwh: 13.5,
   evBatteryKwh: 75,
   bufferPercent: 20,
   chargeEfficiency: 0.9,
-  minChargeKwh: 1,
 };
 
 describe('computeChargeLimit - the case that motivated the rewrite', () => {
@@ -86,38 +85,62 @@ describe('computeChargeLimit - Tesla 50% floor', () => {
   });
 });
 
-describe('computeChargeLimit - EV capacity ceiling and already-charged EVs', () => {
-  it('clamps to 100% and reports ev-capacity when the pack would overfill', () => {
+describe('computeChargeLimit - insufficient energy (limitedBy battery)', () => {
+  it('flags a full EV: nothing can raise the target', () => {
     const limit = computeChargeLimit(100, 90, CFG);
 
     expect(limit.evTargetKwh).toBe(75);
     expect(limit.targetPercent).toBe(100);
-    expect(limit.limitedBy).toBe('ev-capacity');
-  });
-
-  it('can round below the current SoC when the spare is tiny, which the handler reads as nothing to gain', () => {
-    // minCharge 0 lets a 0.0675 kWh spare through; rounding puts the target
-    // (54%) under the EV's current 54.4%. chargeFromBattery skips the write.
-    const limit = computeChargeLimit(54.4, 20.5, { ...CFG, minChargeKwh: 0 });
-
-    expect(limit.limitedBy).toBe('none');
-    expect(limit.targetPercent).toBe(54);
-    expect(limit.targetPercent).toBeLessThan(54.4);
-  });
-});
-
-describe('computeChargeLimit - minimum-spare abort', () => {
-  it('reports battery-limited just below the minimum spare', () => {
-    const limit = computeChargeLimit(50, 21, CFG); // 0.135 kWh above buffer
-
-    expect(limit.batteryAvailableKwh).toBeCloseTo(0.135, 3);
+    // The handler words this as "the EV is already fully charged".
     expect(limit.limitedBy).toBe('battery');
   });
 
-  it('proceeds just above the minimum spare', () => {
-    const limit = computeChargeLimit(50, 28, CFG); // 1.08 kWh above buffer
+  it('flags zero spare (battery sitting at the buffer)', () => {
+    const limit = computeChargeLimit(60, 20, CFG);
 
-    expect(limit.batteryAvailableKwh).toBeCloseTo(1.08, 3);
+    expect(limit.batteryAvailableKwh).toBe(0);
+    expect(limit.targetPercent).toBe(60);
+    expect(limit.limitedBy).toBe('battery');
+  });
+
+  it('flags a spare that rounding eats', () => {
+    // A 0.0675 kWh spare moves the raw target to 54.48%, which rounds to 54% --
+    // under the EV's current 54.4%. Setting that limit would gain nothing.
+    const limit = computeChargeLimit(54.4, 20.5, CFG);
+
+    expect(limit.limitedBy).toBe('battery');
+    expect(limit.targetPercent).toBe(54);
+    expect(limit.targetPercent).toBeLessThan(54.4);
+  });
+
+  it('flags a zero-gain rounding-up edge (EV at 99.6%, no spare)', () => {
+    // round() would say 100%, but the spare is empty -- nothing to transfer.
+    const limit = computeChargeLimit(99.6, 20, CFG);
+
+    expect(limit.rawPercent).toBeCloseTo(99.6, 3);
+    expect(limit.limitedBy).toBe('battery');
+  });
+});
+
+describe('computeChargeLimit - ev-capacity ceiling', () => {
+  it('clamps to 100% when spare would overfill a car that is not full', () => {
+    const limit = computeChargeLimit(95, 90, CFG);
+
+    expect(limit.evTargetKwh).toBe(75);
+    expect(limit.targetPercent).toBe(100);
+    expect(limit.limitedBy).toBe('ev-capacity');
+    expect(limit.targetPercent).toBeGreaterThan(95); // still actionable
+  });
+});
+
+describe('computeChargeLimit - no arbitrary minimum threshold', () => {
+  it('proceeds on a spare far below the removed 1 kWh minimum when it moves the target', () => {
+    // 0.27 kWh above the buffer: this used to abort at the minChargeKwh
+    // threshold; now the only question is whether the target rises.
+    const limit = computeChargeLimit(50.4, 22, CFG);
+
+    expect(limit.batteryAvailableKwh).toBeCloseTo(0.27, 3);
+    expect(limit.targetPercent).toBe(51);
     expect(limit.limitedBy).toBe('none');
   });
 });
@@ -130,7 +153,6 @@ describe('computeChargeLimit - config validation happens at the boundary', () =>
     ['efficiency above 1', { chargeEfficiency: 1.5 }],
     ['negative buffer', { bufferPercent: -1 }],
     ['buffer above 100', { bufferPercent: 101 }],
-    ['negative minimum', { minChargeKwh: -1 }],
   ])('rejects %s', (_label, patch) => {
     expect(() => computeChargeLimit(50, 50, { ...CFG, ...patch })).toThrow(/Invalid energy config/);
   });
