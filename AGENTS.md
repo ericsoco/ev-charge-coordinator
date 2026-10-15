@@ -44,7 +44,7 @@ Do not push the branch to remote; keep it local and let user check and land chan
 1. Implement `BatteryService` or `EVService` interface
 2. Add service to CLI commands in `src/index.ts`
 
-## Handling state
+## Handling state within the application
 Prefer stateless architectures / implementations whenever possible.
 When business logic seems to require storing state, verify the approach with the human developer
 with clear reasoning and a detailed description of the proposed approach.
@@ -53,3 +53,7 @@ with clear reasoning and a detailed description of the proposed approach.
 Keep inline comments succinct.
 Do not clutter inline comments with information about previous implementations;
 this historical information can be left in the workplan if valuable.
+
+## Development
+Timestamp every final response, whether Plan or Act mode.
+Update workplan.md after every Act response to ensure other agents can pick up where you left off.
