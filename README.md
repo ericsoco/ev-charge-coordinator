@@ -300,10 +300,14 @@ When running in interactive mode (`start`), the following commands are available
 - `charge-from-battery` - Smart charging based on solar battery
 - `set-battery-buffer` - Set battery buffer percentage
 - `config` - Show or update configuration; accepts the same flags as the
-  one-shot command (e.g. `config --set-efficiency 0.9`)
+  one-shot command (e.g. `config --set-efficiency 0.9`); `config --help`
+  prints the flag list
 - `pair-tesla-key` - Register the virtual key with Tesla; accepts `--domain`,
-  `--vin`, `--check-only`, `--skip-registration`
+  `--vin`, `--check-only`, `--skip-registration`; `--help` prints the flag list
 - `exit` - Exit the application
+
+`help <command>` inside the REPL prints that command's help, matching the
+one-shot `node dist/index.js help <command>`.
 
 ## How It Works
 

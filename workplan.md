@@ -752,6 +752,9 @@ drift was invisible. Fixed on `fix/repl-config-pairing`:
 - `start` reports the energy-config state between the service lines (valid / missing /
   invalid, echoing every problem), non-fatal -- only `charge-from-battery` and
   `set-battery-buffer` need the file.
+- `--help` / `-h` work on the flag-taking REPL commands (`config`, `pair-tesla-key`),
+  rendered from the Commander definitions via `helpInformation()` so the descriptions
+  cannot drift; `help <command>` routes to the same renderer, matching the CLI.
 
 ---
 

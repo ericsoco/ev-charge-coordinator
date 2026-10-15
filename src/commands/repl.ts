@@ -53,8 +53,8 @@ const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
 };
 
 const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  config: ['clear-franklin', 'clear-tesla', 'clear-all', 'show-public-key'],
-  'pair-tesla-key': ['check-only', 'skip-registration'],
+  config: ['clear-franklin', 'clear-tesla', 'clear-all', 'show-public-key', 'help'],
+  'pair-tesla-key': ['check-only', 'skip-registration', 'help'],
 };
 
 export interface ParsedArgs {
@@ -71,8 +71,9 @@ function camelCase(kebab: string): string {
 /**
  * Turn the tokens after a REPL command into Commander-shaped options, matching
  * the one-shot behavior: unknown options and stray positional tokens are
- * errors, and a value flag missing its value is an error too (no silent
- * fallback -- the REPL must not run a different command than the CLI would).
+ * errors, a value flag missing its value is an error too (no silent fallback
+ * -- the REPL must not run a different command than the CLI would), and
+ * `--help` / `-h` parse as a boolean the dispatch turns into the command's help.
  */
 export function parseCommandArgs(name: string, tokens: string[]): ParsedArgs {
   const valueFlags = new Set(VALUE_FLAGS[name] ?? []);
@@ -81,6 +82,11 @@ export function parseCommandArgs(name: string, tokens: string[]): ParsedArgs {
 
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
+    if (token === '-h') {
+      // Commander's short help flag; `--help` rides through the boolean table.
+      options.help = true;
+      continue;
+    }
     if (!token.startsWith('--')) {
       return { options: {}, error: `error: unknown argument '${token}'` };
     }

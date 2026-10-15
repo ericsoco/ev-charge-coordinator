@@ -133,6 +133,19 @@ describe('index.ts wiring', () => {
     expect(INDEX_SOURCE).toContain('const [first, ...rest] = input.trim().split(/\\s+/)');
     expect(INDEX_SOURCE).toContain('await dispatchCommand(cmd, rest)');
   });
+
+  it('turns --help into the command help, before anything runs', () => {
+    expect(INDEX_SOURCE).toContain('if (options.help)');
+    expect(INDEX_SOURCE).toContain('printCommandHelp');
+    // Rendered from Commander's own definition, so descriptions cannot drift.
+    expect(INDEX_SOURCE).toContain('command.helpInformation()');
+    expect(INDEX_SOURCE).toContain("printCommandHelp('config')");
+    expect(INDEX_SOURCE).toContain("printCommandHelp('pair-tesla-key')");
+  });
+
+  it('routes `help <command>` to the same renderer', () => {
+    expect(INDEX_SOURCE).toContain('if (topic !== undefined && printCommandHelp(topic)) break;');
+  });
 });
 
 describe('parseCommandArgs - REPL inline flags match Commander', () => {
@@ -171,6 +184,22 @@ describe('parseCommandArgs - REPL inline flags match Commander', () => {
   it('keeps value case (only the command name is lowercased)', () => {
     expect(parseCommandArgs('config', ['--tesla-region', 'NA'])).toEqual({
       options: { teslaRegion: 'NA' },
+      error: null,
+    });
+  });
+
+  it('accepts --help and -h as booleans, alongside other flags', () => {
+    expect(parseCommandArgs('config', ['--help'])).toEqual({
+      options: { help: true },
+      error: null,
+    });
+    expect(parseCommandArgs('pair-tesla-key', ['-h'])).toEqual({
+      options: { help: true },
+      error: null,
+    });
+    // Commander prints help and ignores the rest; the parse reflects that.
+    expect(parseCommandArgs('config', ['--help', '--set-efficiency', '0.9'])).toEqual({
+      options: { help: true, setEfficiency: '0.9' },
       error: null,
     });
   });

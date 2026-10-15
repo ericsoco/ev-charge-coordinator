@@ -655,9 +655,14 @@ program
     const dispatchCommand = async (cmd: string, args: string[]): Promise<void> => {
       
       switch (cmd) {
-        case 'help':
+        case 'help': {
+          // `help <command>` matches the CLI's `help <command>`; unknown or
+          // bare `help` falls through to the general list.
+          const topic = args[0];
+          if (topic !== undefined && printCommandHelp(topic)) break;
           console.log(renderHelp());
           break;
+        }
           
         case 'authenticate':
           // Same helper the standalone command uses, so the REPL and
@@ -733,6 +738,11 @@ program
             console.log(paint.warning(error));
             break;
           }
+          // --help wins over the other flags, exactly like Commander.
+          if (options.help) {
+            printCommandHelp('config');
+            break;
+          }
           await runConfig(options);
           break;
         }
@@ -741,6 +751,10 @@ program
           const { options, error } = parseCommandArgs('pair-tesla-key', args);
           if (error) {
             console.log(paint.warning(error));
+            break;
+          }
+          if (options.help) {
+            printCommandHelp('pair-tesla-key');
             break;
           }
           await runPairTeslaKey(options);
@@ -1094,6 +1108,19 @@ program
       process.exitCode = 1;
     }
   });
+
+/**
+ * Print a subcommand's help from its Commander definition, so the REPL shows
+ * exactly what `node dist/index.js <command> --help` prints and the option
+ * descriptions live in one place. helpInformation() renders without exiting,
+ * unlike Commander's own --help option. Returns false for unknown names.
+ */
+function printCommandHelp(name: string): boolean {
+  const command = program.commands.find((candidate) => candidate.name() === name);
+  if (!command) return false;
+  console.log(command.helpInformation());
+  return true;
+}
 
 /** Options of the `config` command; the REPL builds the same shape from flags. */
 interface ConfigOptions {
