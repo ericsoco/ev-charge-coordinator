@@ -638,7 +638,6 @@ identifier, not a secret.
      evBatteryKwh: number;         // Model Y usable
      bufferPercent: number;        // existing setting, 0-100
      chargeEfficiency: number;     // onboard-charger / converter losses
-     minChargeKwh: number;         // don't start below this
    }
    export interface EnergyChargeLimit {
      batteryAvailableKwh: number;
@@ -658,6 +657,8 @@ identifier, not a secret.
    for "nothing clamped it"), and `rawPercent` was added so the log line can show
    what the math said before Tesla's floor applied. Config and SoC validation both
    happen inside the module, throwing with a message that names every bad field.
+   **`minChargeKwh` (in the original sketch) was later removed entirely** — see
+   item 3.
 
 2. ✅ **Math:**
    `batteryAvailableKwh = batteryCapacityKwh x max(0, batterySoc - bufferPercent) / 100`
@@ -667,11 +668,20 @@ identifier, not a secret.
    them into the shared handler, so the deletion was one site: the inline rule in
    `src/commands/vehicle.ts` (`chargeFromBattery`). Replaced with one
    `computeChargeLimit` call reporting the kWh breakdown
-   (`Battery available: 9.4 kWh - EV now: 41.3 kWh -> target 66%`). Aborts with
-   `limitedBy: 'battery'` when `batteryAvailableKwh < minChargeKwh`; the error string
-   `not enough charge available` is unchanged for callers. Unreadable SoC input
-   (the proxy can omit `battery_soc`) fails cleanly instead of flowing `NaN` into
-   the limit.
+   (`Battery available: 9.4 kWh - EV now: 41.3 kWh -> target 66%`). Unreadable SoC
+   input (the proxy can omit `battery_soc`) fails cleanly instead of flowing `NaN`
+   into the limit.
+   **Insufficient energy fails with the reason (user decision, superseding the
+   original `minChargeKwh` threshold):** the threshold was removed from the config
+   and the math; `limitedBy: 'battery'` now means "the limit the math produces does
+   not exceed the EV's current SoC" (checked before `ev-capacity`, so a full EV is
+   also `battery`). `chargeFromBattery` fails with the numbers behind it —
+   `Not enough energy to charge: the solar battery has no energy above its 20% buffer`
+   / `... 0.3 kWh above its 20% buffer cannot raise the EV charge limit above its
+   current 55%` / `Cannot charge: the EV is already fully charged` — instead of the
+   old `not enough charge available` string or the former `ok: true` skip. A
+   tiny-but-actionable spare (e.g. 0.27 kWh moving the target 50.4% -> 51%) now
+   proceeds; there is no minimum.
 
 4. ✅ **Capacities are now required** (no percent fallback to lean on): first run of
    `charge-from-battery` prompts for missing values via the existing prompt helpers
@@ -683,18 +693,21 @@ identifier, not a secret.
    `settings` itself was removed from `StoredCredentials` along with the old
    battery-buffer accessors — no users existed to migrate.
 5. ✅ **Config surface:** `config --set-battery-kwh <n>`, `--set-ev-kwh <n>`,
-   `--set-efficiency <0-1>`, `--set-min-kwh <n>` all write `config.json`, as does
+   `--set-efficiency <0-1>` all write `config.json`, as does
    `set-battery-buffer`. `DEFAULT_ENERGY_CONFIG` is gone: `energy.ts` carries
    validation only, never values. Hand-edit mistakes are echoed with the file path.
+   (`--set-min-kwh` was removed with `minChargeKwh`; existing files carrying the
+   key still load and the key is dropped on the next write.)
 6. ⏭️ **DEFERRED (see "Deferred from this pass" below).**
    **Unify the start-charging behavior:** non-interactive `charge-from-battery` never starts
    charging, but the REPL version prompts to. Make it explicit via
    `--start` / `--dry-run`, identical in both modes (today it is the `offerToStart`
    argument to the shared handler).
 7. ⏭️ **DEFERRED (see "Deferred from this pass" below).** `set-battery-buffer` — add `--get`.
-8. ✅ **Tests** (`tests/utils/energy.test.ts`, 22 cases): empty / over-cap buffer,
-   `bufferPercent` 0 and 100, EV already at/above target, efficiency `1.0` and `0.5`, the
-   50 % floor, minimum-spare abort on both sides of the boundary, config + SoC validation,
+8. ✅ **Tests** (`tests/utils/energy.test.ts`, 23 cases): empty / over-cap buffer,
+   `bufferPercent` 0 and 100, insufficient energy (zero spare, rounding-eaten spare,
+   zero-gain rounding-up, full EV), efficiency `1.0` and `0.5`, the
+   50 % floor, config + SoC validation, the no-minimum-threshold behavior flip,
    and the 13.5 kWh-battery -> 75 kWh-car case that motivated this change (asserts 63 %,
    i.e. **not** the old nonsensical 80 %). `tests/commands/vehicle.test.ts` covers the
    handler wiring: kWh breakdown log, both unreadable-SoC failures, the 50 % fallback

@@ -29,7 +29,6 @@ function makeConfig(buffer = 20): EnergyConfig {
     evBatteryKwh: 75,
     bufferPercent: buffer,
     chargeEfficiency: 0.9,
-    minChargeKwh: 1,
   };
 }
 
@@ -38,7 +37,6 @@ const ALL_FIELDS_MISSING: (keyof EnergyConfig)[] = [
   'evBatteryKwh',
   'bufferPercent',
   'chargeEfficiency',
-  'minChargeKwh',
 ];
 
 /** Minimal fakes; only the methods the handlers actually call are present. */
@@ -167,19 +165,36 @@ describe('setEvChargeLimit', () => {
 });
 
 describe('chargeFromBattery', () => {
-  it('reports insufficient charge without issuing a command', async () => {
-    // 25% - 20% buffer = 0.675 kWh above the buffer, below the 1 kWh minimum.
+  it('fails with the reason when the battery sits at its buffer (no spare)', async () => {
     const { ctx, calls, out } = makeContext({
-      franklin: { getStateOfCharge: async () => 25 },
+      franklin: { getStateOfCharge: async () => 20 },
       buffer: 20,
     });
     const result = await chargeFromBattery(ctx, { offerToStart: false });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toBe('not enough charge available');
+    expect(result.error).toBe(
+      'Not enough energy to charge: the solar battery has no energy above its 20% buffer'
+    );
     expect(calls.setChargeLimit).toBeUndefined();
-    expect(out.join('\n')).toContain('Not enough charge available');
-    expect(out.join('\n')).toContain('Battery available: 0.7 kWh');
+    expect(out.join('\n')).toContain('Not enough energy to charge');
+    expect(out.join('\n')).toContain('Battery available: 0.0 kWh');
+  });
+
+  it('fails when the spare cannot raise the rounded limit', async () => {
+    // 0.27 kWh spare moves the raw target to 55.32%, which rounds to 55% --
+    // exactly where the EV already is.
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => 22 },
+      tesla: { getStateOfCharge: async () => 55 },
+      buffer: 20,
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('cannot raise the EV charge limit above its current 55%');
+    expect(calls.setChargeLimit).toBeUndefined();
+    expect(out.join('\n')).toContain('Battery available: 0.3 kWh');
   });
 
   it('sets the kWh-derived limit when there is enough charge', async () => {
@@ -196,6 +211,20 @@ describe('chargeFromBattery', () => {
     expect(out.join('\n')).toContain(
       'Battery available: 9.4 kWh - EV now: 41.3 kWh -> target 66%'
     );
+  });
+
+  it('proceeds on a tiny spare that moves the target (no minimum threshold)', async () => {
+    // 0.27 kWh above the buffer used to abort at the minChargeKwh threshold;
+    // now only the target moving matters: 50.4% -> 51%.
+    const { ctx, calls } = makeContext({
+      franklin: { getStateOfCharge: async () => 22 },
+      tesla: { getStateOfCharge: async () => 50.4 },
+      buffer: 20,
+    });
+    const result = await chargeFromBattery(ctx, { offerToStart: false });
+
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit[0]).toEqual([51]);
   });
 
   it('folds the EV SoC into the limit', async () => {
@@ -249,7 +278,7 @@ describe('chargeFromBattery', () => {
     expect(out.join('\n')).toContain('EV SoC unavailable');
   });
 
-  it('skips the write when the EV is already full', async () => {
+  it('fails when the EV is already full, rather than writing a no-op limit', async () => {
     const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
       tesla: { getStateOfCharge: async () => 100 },
@@ -257,9 +286,10 @@ describe('chargeFromBattery', () => {
     });
     const result = await chargeFromBattery(ctx, { offerToStart: false });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Cannot charge: the EV is already fully charged');
     expect(calls.setChargeLimit).toBeUndefined();
-    expect(out.join('\n')).toContain('already at or above the computed target');
+    expect(out.join('\n')).toContain('the EV is already fully charged');
   });
 
   // The only behavioural difference between the REPL and the one-shot path is now
@@ -338,7 +368,7 @@ describe('chargeFromBattery', () => {
   });
 
   it('prompts for missing values on first run, saves config.json, and proceeds', async () => {
-    const answers = ['13.5', '75', '20', '0.9', '1'];
+    const answers = ['13.5', '75', '20', '0.9'];
     const asked: string[] = [];
     const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
@@ -352,7 +382,7 @@ describe('chargeFromBattery', () => {
     const result = await chargeFromBattery(ctx, { offerToStart: false });
 
     expect(result.ok).toBe(true);
-    expect(asked).toHaveLength(5);
+    expect(asked).toHaveLength(4);
     expect(asked[0]).toContain('battery capacity'); // schema order starts with the house pack
     expect(calls.save[0][0]).toEqual(makeConfig());
     expect(calls.setChargeLimit[0]).toEqual([66]); // same math as the complete-config path
@@ -364,7 +394,7 @@ describe('chargeFromBattery', () => {
     const { ctx, calls } = makeContext({
       energyConfig: {
         config: null,
-        missing: ['chargeEfficiency', 'minChargeKwh'],
+        missing: ['chargeEfficiency'],
         invalid: [],
         partial: {
           batteryCapacityKwh: 13.5,
@@ -375,14 +405,14 @@ describe('chargeFromBattery', () => {
       interactive: true,
       askNumeric: async (q) => {
         asked.push(q);
-        return asked.length === 1 ? '0.9' : '1';
+        return '0.9';
       },
     });
     const result = await chargeFromBattery(ctx, { offerToStart: false });
 
     expect(result.ok).toBe(true);
-    expect(asked).toHaveLength(2);
-    expect(calls.save[0][0]).toEqual(makeConfig()); // the answered fields join the loaded ones
+    expect(asked).toHaveLength(1);
+    expect(calls.save[0][0]).toEqual(makeConfig()); // the answered field joins the loaded ones
   });
 
   it('writes nothing when the first-run prompt is cancelled', async () => {
@@ -401,7 +431,7 @@ describe('chargeFromBattery', () => {
   });
 
   it('re-asks when an answer fails validation', async () => {
-    const answers = ['-5', '13.5', '75', '20', '0.9', '1'];
+    const answers = ['-5', '13.5', '75', '20', '0.9'];
     let prompts = 0;
     const { ctx, calls, out } = makeContext({
       energyConfig: { config: null, missing: ALL_FIELDS_MISSING, invalid: [], partial: {} },
@@ -411,7 +441,7 @@ describe('chargeFromBattery', () => {
     const result = await chargeFromBattery(ctx, { offerToStart: false });
 
     expect(result.ok).toBe(true);
-    expect(prompts).toBe(6); // the out-of-range answer cost one extra prompt
+    expect(prompts).toBe(5); // the out-of-range answer cost one extra prompt
     expect(calls.save[0][0]).toEqual(makeConfig());
     expect(out.join('\n')).toContain('batteryCapacityKwh = -5 (must be > 0)');
   });

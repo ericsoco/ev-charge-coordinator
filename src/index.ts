@@ -1106,7 +1106,6 @@ interface ConfigOptions {
   setBatteryKwh?: string;
   setEvKwh?: string;
   setEfficiency?: string;
-  setMinKwh?: string;
   [key: string]: unknown;
 }
 
@@ -1126,7 +1125,6 @@ async function runConfig(options: ConfigOptions): Promise<boolean> {
     ['setBatteryKwh', 'batteryCapacityKwh', 'Battery capacity'],
     ['setEvKwh', 'evBatteryKwh', 'EV capacity'],
     ['setEfficiency', 'chargeEfficiency', 'Charge efficiency'],
-    ['setMinKwh', 'minChargeKwh', 'Minimum charge energy'],
   ];
   const setter = energySetters.find(([option]) => options[option] !== undefined);
   if (setter) {
@@ -1207,7 +1205,6 @@ async function runConfig(options: ConfigOptions): Promise<boolean> {
     console.log(`  EV capacity: ${energy.config.evBatteryKwh} kWh`);
     console.log(`  Battery Buffer: ${energy.config.bufferPercent}%`);
     console.log(`  Charge efficiency: ${energy.config.chargeEfficiency}`);
-    console.log(`  Minimum charge energy: ${energy.config.minChargeKwh} kWh`);
   } else if (energy.invalid.length > 0) {
     // Hand-edit mistakes: echo every problem with the path.
     for (const line of describeConfigProblems(energy)) console.log(paint.error(line));
@@ -1232,7 +1229,6 @@ program
   .option('--set-battery-kwh <n>', 'Set house battery capacity, kWh')
   .option('--set-ev-kwh <n>', 'Set EV battery capacity, kWh')
   .option('--set-efficiency <0-1>', 'Set charge efficiency (0-1)')
-  .option('--set-min-kwh <n>', 'Set minimum spare energy to charge from, kWh')
   .action(async (options) => {
     // exitCode stays here so a REPL session cannot inherit it.
     if (!(await runConfig(options))) process.exitCode = 1;
