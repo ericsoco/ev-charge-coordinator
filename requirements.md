@@ -1,8 +1,14 @@
-# 2026.Oct.10
+# 2026.Oct.14: Product Requirements update
 
-## Product Requirements
+## Vehicle charging trigger
+Detect a charger plugged in event when the vehicle is at home, adjacent to the solar battery.
+At this point, trigger the logic to determine if and how much the vehicle should charge,
+and automatically begin charging.
 
-### Vehicle charging behavior
+
+# 2026.Oct.10: Product Requirements update
+
+## Vehicle charging behavior
 The goal is to use the home solar battery to both charge the EV battery and power the home, without drawing energy from the grid.
 This requires knowing the state of the home solar battery and the EV battery, and maintaining a buffer of energy in the home solar battery for use in the home.
 * The Tesla API allows setting a target SoC of anywhere from 50-100%. The Tesla API clamps the target to a minimum of 50%.
@@ -13,7 +19,7 @@ This requires knowing the state of the home solar battery and the EV battery, an
 * Generally, we should express energy in kWh; Tesla and Franklin APIs use %, but to transfer energy between them, kWh is the compatible unit.
 
 
-# 2026.Mar.01
+# 2026.Mar.01: initial prompt
 
 Create a TypeScript / NodeJS application. The purpose of this application will be to enable me to charge my electric vehicle (EV) with as much energy as is stored in the battery connected to my home solar system. The application architecture should support charging any kind of EV, from any kind of battery, but to start let's make it work specifically with the kind of EV and battery I have: a Tesla Model Y and a FranklinWH aPower 2. Also, let's start with a command-line interface first; we can build a GUI later.
 
