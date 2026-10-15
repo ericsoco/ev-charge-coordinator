@@ -42,7 +42,7 @@ import {
   type CommandResult,
 } from './commands/context.js';
 import { pendingQuestion, prompt, promptNumeric, promptSecret, setReplReadline } from './commands/prompt.js';
-import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, renderHelp } from './commands/repl.js';
+import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from './commands/repl.js';
 import * as paint from './utils/color.js';
 import {
   chargeFromBattery,
@@ -512,6 +512,26 @@ program
       reportDebugDetails(options.debug, franklin.cause);
     }
 
+    // Energy config status, reported like the services above. Non-fatal: only
+    // charge-from-battery and set-battery-buffer need it, so a session without
+    // it is still worth having.
+    const energy = resolveEnergyConfig();
+    if (energy.config) {
+      console.log(paint.positive(`✓ Energy config ready (${energyConfigPath()})`));
+    } else if (energy.invalid.length > 0) {
+      console.log(paint.error(`✗ Energy config invalid (${energyConfigPath()}):`));
+      for (const problem of describeConfigProblems(energy)) {
+        console.log(paint.error(`  ${problem}`));
+      }
+    } else {
+      console.log(
+        paint.warning(
+          `✗ Energy config missing at ${energyConfigPath()} - run \`config\` for the template,` +
+            ' or charge-from-battery to be prompted'
+        )
+      );
+    }
+
     if (!franklin.ok && !tesla.ok) {
       console.log(paint.error('\nNo services available. Exiting.'));
       process.exitCode = 1;
@@ -592,7 +612,11 @@ program
     let closed = false;
 
     const handleCommand = async (input: string): Promise<void> => {
-      const cmd = input.trim().toLowerCase();
+      // First token is the command; the rest are its inline flags (config,
+      // pair-tesla-key). Values keep their case -- only the command name is
+      // lowercased.
+      const [first, ...rest] = input.trim().split(/\s+/);
+      const cmd = (first ?? '').toLowerCase();
 
       if (blocker && !LOCAL_WHILE_BUSY.has(cmd)) {
         if (isReplCommand(cmd)) {
@@ -607,7 +631,7 @@ program
       // Blank prompt while busy: typing must not render a stale `ev-charge> `.
       rl.setPrompt('');
       try {
-        await dispatchCommand(cmd);
+        await dispatchCommand(cmd, rest);
       } finally {
         if (!LOCAL_WHILE_BUSY.has(cmd)) blocker = false;
         // Clamp at zero: a stray extra decrement must not drive the counter
@@ -628,7 +652,7 @@ program
       }
     };
 
-    const dispatchCommand = async (cmd: string): Promise<void> => {
+    const dispatchCommand = async (cmd: string, args: string[]): Promise<void> => {
       
       switch (cmd) {
         case 'help':
@@ -700,6 +724,26 @@ program
             break;
           }
           await setBatteryBuffer(currentContext(), buffer);
+          break;
+        }
+
+        case 'config': {
+          const { options, error } = parseCommandArgs('config', args);
+          if (error) {
+            console.log(paint.warning(error));
+            break;
+          }
+          await runConfig(options);
+          break;
+        }
+
+        case 'pair-tesla-key': {
+          const { options, error } = parseCommandArgs('pair-tesla-key', args);
+          if (error) {
+            console.log(paint.warning(error));
+            break;
+          }
+          await runPairTeslaKey(options);
           break;
         }
           
@@ -1051,6 +1095,131 @@ program
     }
   });
 
+/** Options of the `config` command; the REPL builds the same shape from flags. */
+interface ConfigOptions {
+  showPublicKey?: boolean;
+  clearFranklin?: boolean;
+  clearTesla?: boolean;
+  clearAll?: boolean;
+  teslaRegion?: string;
+  teslaDomain?: string;
+  setBatteryKwh?: string;
+  setEvKwh?: string;
+  setEfficiency?: string;
+  setMinKwh?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The `config` command, shared by the Commander action and the REPL dispatch
+ * (modeled on runAuthenticate). Returns success; only the Commander wrapper
+ * turns failure into a process exit code.
+ */
+async function runConfig(options: ConfigOptions): Promise<boolean> {
+  if (options.showPublicKey) {
+    const service = new VirtualKeyService({ apiBaseUrl: resolveRegion().apiBaseUrl });
+    console.log(await service.getPublicKeyPem());
+    return true;
+  }
+  // Energy setters write to config.json, the single source of truth.
+  const energySetters: [option: string, field: keyof EnergyConfig, label: string][] = [
+    ['setBatteryKwh', 'batteryCapacityKwh', 'Battery capacity'],
+    ['setEvKwh', 'evBatteryKwh', 'EV capacity'],
+    ['setEfficiency', 'chargeEfficiency', 'Charge efficiency'],
+    ['setMinKwh', 'minChargeKwh', 'Minimum charge energy'],
+  ];
+  const setter = energySetters.find(([option]) => options[option] !== undefined);
+  if (setter) {
+    const [, field, label] = setter;
+    const raw = options[setter[0]] as string;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      console.error(paint.error(`${label} must be a number (got "${raw}")`));
+      return false;
+    }
+    try {
+      const patch: Partial<EnergyConfig> = {};
+      patch[field] = value;
+      setEnergyConfigField(patch);
+      console.log(paint.positive(`✓ ${label} set to ${value}`));
+      console.log(paint.info(`  Saved to ${energyConfigPath()}`));
+      return true;
+    } catch (error) {
+      console.error(paint.error(describeError(error)));
+      return false;
+    }
+  }
+  if (options.teslaDomain) {
+    // Validated the same way pair-tesla-key validates it, so a bad domain is
+    // rejected here rather than after the key has been published to it.
+    try {
+      const domain = normalizeDomain(options.teslaDomain);
+      await credentialStore.setTeslaCredentials({ domain });
+      console.log(paint.positive(`✓ Tesla key domain set to ${domain}`));
+      console.log(paint.info('  Run pair-tesla-key to register it with Tesla.'));
+      return true;
+    } catch (error) {
+      console.error(paint.error(describeError(error)));
+      return false;
+    }
+  }
+  if (options.teslaRegion) {
+    // Validated through resolveRegion so a typo fails here instead of surfacing
+    // later as an HTTP 421 "incorrect region" from Tesla.
+    try {
+      const { region, coverage } = resolveRegion(options.teslaRegion);
+      await credentialStore.setTeslaCredentials({ region });
+      console.log(paint.positive(`✓ Tesla region set to ${region} (${coverage})`));
+      console.log(paint.info('  Re-run the pairing step if this moves you to a different deployment.'));
+      return true;
+    } catch (error) {
+      console.error(paint.error(describeError(error)));
+      return false;
+    }
+  }
+  if (options.clearFranklin) {
+    await credentialStore.clearFranklinCredentials();
+    console.log(paint.positive('✓ FranklinWH credentials cleared'));
+    return true;
+  }
+  if (options.clearTesla) {
+    await credentialStore.clearTeslaCredentials();
+    console.log(paint.positive('✓ Tesla credentials cleared'));
+    return true;
+  }
+  if (options.clearAll) {
+    await credentialStore.clearAll();
+    console.log(paint.positive('✓ All credentials cleared'));
+    return true;
+  }
+
+  // Show current config
+  const franklin = await credentialStore.getFranklinCredentials();
+  const tesla = await credentialStore.getTeslaCredentials();
+  const energy = resolveEnergyConfig();
+
+  console.log(paint.info('\n--- Configuration ---'));
+  console.log(`FranklinWH: ${franklin ? `Configured (Gateway: ${franklin.gatewayId})` : 'Not configured'}`);
+  console.log(`Tesla: ${tesla ? `Configured${tesla.vin ? ` (VIN: ${tesla.vin})` : ''}${tesla.region ? ` Region: ${tesla.region}` : ''}${tesla.domain ? ` Key domain: ${tesla.domain}` : ''}` : 'Not configured'}`);
+  console.log(`Energy config: ${energyConfigPath()}`);
+  if (energy.config) {
+    console.log(`  Battery capacity: ${energy.config.batteryCapacityKwh} kWh`);
+    console.log(`  EV capacity: ${energy.config.evBatteryKwh} kWh`);
+    console.log(`  Battery Buffer: ${energy.config.bufferPercent}%`);
+    console.log(`  Charge efficiency: ${energy.config.chargeEfficiency}`);
+    console.log(`  Minimum charge energy: ${energy.config.minChargeKwh} kWh`);
+  } else if (energy.invalid.length > 0) {
+    // Hand-edit mistakes: echo every problem with the path.
+    for (const line of describeConfigProblems(energy)) console.log(paint.error(line));
+  } else {
+    console.log(paint.warning(`  Incomplete (missing: ${energy.missing.join(', ')})`));
+    console.log(paint.info('  Create it with:'));
+    console.log(ENERGY_CONFIG_TEMPLATE);
+  }
+  console.log('');
+  return true;
+}
+
 program
   .command('config')
   .description('Show or update configuration')
@@ -1065,100 +1234,106 @@ program
   .option('--set-efficiency <0-1>', 'Set charge efficiency (0-1)')
   .option('--set-min-kwh <n>', 'Set minimum spare energy to charge from, kWh')
   .action(async (options) => {
-    if (options.showPublicKey) {
-      const service = new VirtualKeyService({ apiBaseUrl: resolveRegion().apiBaseUrl });
-      console.log(await service.getPublicKeyPem());
-      return;
-    }
-    // Energy setters write to config.json, the single source of truth.
-    const energySetters: [option: string, field: keyof EnergyConfig, label: string][] = [
-      ['setBatteryKwh', 'batteryCapacityKwh', 'Battery capacity'],
-      ['setEvKwh', 'evBatteryKwh', 'EV capacity'],
-      ['setEfficiency', 'chargeEfficiency', 'Charge efficiency'],
-      ['setMinKwh', 'minChargeKwh', 'Minimum charge energy'],
-    ];
-    const setter = energySetters.find(([option]) => options[option] !== undefined);
-    if (setter) {
-      const [, field, label] = setter;
-      const raw: string = options[setter[0]];
-      const value = Number(raw);
-      if (!Number.isFinite(value)) {
-        console.error(paint.error(`${label} must be a number (got "${raw}")`));
-        process.exitCode = 1;
-        return;
-      }
-      try {
-        const patch: Partial<EnergyConfig> = {};
-        patch[field] = value;
-        setEnergyConfigField(patch);
-        console.log(paint.positive(`✓ ${label} set to ${value}`));
-        console.log(paint.info(`  Saved to ${energyConfigPath()}`));
-      } catch (error) {
-        console.error(paint.error(describeError(error)));
-        process.exitCode = 1;
-      }
-      return;
-    }
-    if (options.teslaDomain) {
-      // Validated the same way pair-tesla-key validates it, so a bad domain is
-      // rejected here rather than after the key has been published to it.
-      try {
-        const domain = normalizeDomain(options.teslaDomain);
-        await credentialStore.setTeslaCredentials({ domain });
-        console.log(paint.positive(`✓ Tesla key domain set to ${domain}`));
-        console.log(paint.info('  Run pair-tesla-key to register it with Tesla.'));
-      } catch (error) {
-        console.error(paint.error(describeError(error)));
-        process.exitCode = 1;
-      }
-    } else if (options.teslaRegion) {
-      // Validated through resolveRegion so a typo fails here instead of surfacing
-      // later as an HTTP 421 "incorrect region" from Tesla.
-      try {
-        const { region, coverage } = resolveRegion(options.teslaRegion);
-        await credentialStore.setTeslaCredentials({ region });
-        console.log(paint.positive(`✓ Tesla region set to ${region} (${coverage})`));
-        console.log(paint.info('  Re-run the pairing step if this moves you to a different deployment.'));
-      } catch (error) {
-        console.error(paint.error(describeError(error)));
-        process.exitCode = 1;
-      }
-    } else if (options.clearFranklin) {
-      await credentialStore.clearFranklinCredentials();
-      console.log(paint.positive('✓ FranklinWH credentials cleared'));
-    } else if (options.clearTesla) {
-      await credentialStore.clearTeslaCredentials();
-      console.log(paint.positive('✓ Tesla credentials cleared'));
-    } else if (options.clearAll) {
-      await credentialStore.clearAll();
-      console.log(paint.positive('✓ All credentials cleared'));
-    } else {
-      // Show current config
-      const franklin = await credentialStore.getFranklinCredentials();
-      const tesla = await credentialStore.getTeslaCredentials();
-      const energy = resolveEnergyConfig();
-
-      console.log(paint.info('\n--- Configuration ---'));
-      console.log(`FranklinWH: ${franklin ? `Configured (Gateway: ${franklin.gatewayId})` : 'Not configured'}`);
-      console.log(`Tesla: ${tesla ? `Configured${tesla.vin ? ` (VIN: ${tesla.vin})` : ''}${tesla.region ? ` Region: ${tesla.region}` : ''}${tesla.domain ? ` Key domain: ${tesla.domain}` : ''}` : 'Not configured'}`);
-      console.log(`Energy config: ${energyConfigPath()}`);
-      if (energy.config) {
-        console.log(`  Battery capacity: ${energy.config.batteryCapacityKwh} kWh`);
-        console.log(`  EV capacity: ${energy.config.evBatteryKwh} kWh`);
-        console.log(`  Battery Buffer: ${energy.config.bufferPercent}%`);
-        console.log(`  Charge efficiency: ${energy.config.chargeEfficiency}`);
-        console.log(`  Minimum charge energy: ${energy.config.minChargeKwh} kWh`);
-      } else if (energy.invalid.length > 0) {
-        // Hand-edit mistakes: echo every problem with the path.
-        for (const line of describeConfigProblems(energy)) console.log(paint.error(line));
-      } else {
-        console.log(paint.warning(`  Incomplete (missing: ${energy.missing.join(', ')})`));
-        console.log(paint.info('  Create it with:'));
-        console.log(ENERGY_CONFIG_TEMPLATE);
-      }
-      console.log('');
-    }
+    // exitCode stays here so a REPL session cannot inherit it.
+    if (!(await runConfig(options))) process.exitCode = 1;
   });
+
+/** Options of the `pair-tesla-key` command; the REPL builds the same shape from flags. */
+interface PairTeslaKeyOptions {
+  domain?: string;
+  vin?: string;
+  checkOnly?: boolean;
+  skipRegistration?: boolean;
+  [key: string]: unknown;
+}
+
+/**
+ * The `pair-tesla-key` command, shared by the Commander action and the REPL
+ * dispatch (modeled on runAuthenticate). Returns success; only the Commander
+ * wrapper turns failure into a process exit code.
+ */
+async function runPairTeslaKey(options: PairTeslaKeyOptions): Promise<boolean> {
+  const stored = await credentialStore.getTeslaCredentials();
+  const regionInfo = resolveRegion(stored?.region);
+
+  // A plain axios instance, separate from TeslaService's: the hosted-key probe
+  // deliberately fetches a third-party URL and must not carry a Tesla bearer
+  // token, and TeslaService's client attaches one to every request.
+  const virtualKeys = new VirtualKeyService({
+    apiBaseUrl: regionInfo.apiBaseUrl,
+    http: axios.create({ timeout: 30000 }),
+  });
+
+  const domainInput = options.domain ?? stored?.domain;
+  if (!domainInput) {
+    console.error(
+      paint.error(
+        'No domain configured. Pass --domain <domain> or save one with:\n' +
+          '  node dist/index.js config --tesla-domain <domain>'
+      )
+    );
+    return false;
+  }
+
+  let domain: string;
+  try {
+    // Validated up front so a typo fails before any key material is touched.
+    domain = normalizeDomain(domainInput);
+  } catch (error) {
+    console.error(paint.error(describeError(error)));
+    return false;
+  }
+
+  const vin = options.vin ?? stored?.vin;
+
+  if (options.checkOnly) {
+    await reportKeyState(virtualKeys, domain, { verifyWithTesla: true, credentials: stored });
+    return true;
+  }
+
+  // Step 1: the key must exist locally before anything is published or sent.
+  const instructions = await virtualKeys.getHostingInstructions(domain);
+  console.log(paint.info('\n--- Step 1 of 3: host the public key ---'));
+  console.log(paint.info(`\nKey pair: ${virtualKeys.privateKeyPath} (keep this file; it signs every command)`));
+  console.log(paint.info(`Public key: ${virtualKeys.publicKeyPath}`));
+  console.log(paint.positive(`\nServe this file at exactly:\n  ${instructions.url}`));
+  console.log(paint.info('\nIt must be the PEM itself, over HTTPS, with no redirect and no HTML page in front.'));
+  if (process.stdin.isTTY) {
+    console.log(`\nPublic key contents:\n${instructions.publicKeyPem.trim()}`);
+  }
+
+  // Step 2: check what Tesla would actually fetch. Registering is not a consumable
+  // -- POST /api/1/partner_accounts can be called repeatedly -- but if Tesla
+  // ends up holding a key whose private half is not on this machine, the
+  // pairing appears to succeed and every later command is rejected, so it is
+  // much cheaper to notice a bad URL here.
+  console.log(paint.info('\n--- Step 2 of 3: verify the published key ---'));
+  const hosted = await virtualKeys.checkHostedPublicKey(domain);
+  if (!hosted.matchesLocalKey) {
+    console.error(paint.error(`\n✗ ${hosted.error ?? 'The published key could not be verified.'}`));
+    // The preview earns its own line only when the server actually answered
+    // with a body; on a transport failure it just repeats the reason above.
+    if (hosted.bodyPreview && hosted.reachable === false && hosted.status !== undefined) {
+      console.error(paint.error(`  Got instead: ${hosted.bodyPreview}`));
+    }
+    if (hosted.status !== undefined) {
+      console.error(paint.error(`  HTTP status: ${hosted.status}`));
+    }
+    console.error(paint.info('\nFix the hosting above and re-run. Nothing has been sent to Tesla yet.'));
+    return false;
+  }
+  console.log(paint.positive(`✓ ${hosted.url} serves the matching public key`));
+
+  if (options.skipRegistration) {
+    console.log(paint.info('\nSkipping Tesla registration (--skip-registration).'));
+    await printPairingLinkIfReady(virtualKeys, domain, vin);
+    return true;
+  }
+
+  await registerDomainWithTesla(virtualKeys, domain, stored);
+  await printPairingLinkIfReady(virtualKeys, domain, vin);
+  return true;
+}
 
 program
   .command('pair-tesla-key')
@@ -1168,88 +1343,8 @@ program
   .option('--check-only', 'Only report the current key/registration state; change nothing')
   .option('--skip-registration', 'Do not call Tesla; only verify the hosted key and print the link')
   .action(async (options) => {
-    const stored = await credentialStore.getTeslaCredentials();
-    const regionInfo = resolveRegion(stored?.region);
-
-    // A plain axios instance, separate from TeslaService's: the hosted-key probe
-    // deliberately fetches a third-party URL and must not carry a Tesla bearer
-    // token, and TeslaService's client attaches one to every request.
-    const virtualKeys = new VirtualKeyService({
-      apiBaseUrl: regionInfo.apiBaseUrl,
-      http: axios.create({ timeout: 30000 }),
-    });
-
-    const domainInput = options.domain ?? stored?.domain;
-    if (!domainInput) {
-      console.error(
-        paint.error(
-          'No domain configured. Pass --domain <domain> or save one with:\n' +
-            '  node dist/index.js config --tesla-domain <domain>'
-        )
-      );
-      process.exitCode = 1;
-      return;
-    }
-
-    let domain: string;
-    try {
-      // Validated up front so a typo fails before any key material is touched.
-      domain = normalizeDomain(domainInput);
-    } catch (error) {
-      console.error(paint.error(describeError(error)));
-      process.exitCode = 1;
-      return;
-    }
-
-    const vin = options.vin ?? stored?.vin;
-
-    if (options.checkOnly) {
-      await reportKeyState(virtualKeys, domain, { verifyWithTesla: true, credentials: stored });
-      return;
-    }
-
-    // Step 1: the key must exist locally before anything is published or sent.
-    const instructions = await virtualKeys.getHostingInstructions(domain);
-    console.log(paint.info('\n--- Step 1 of 3: host the public key ---'));
-    console.log(paint.info(`\nKey pair: ${virtualKeys.privateKeyPath} (keep this file; it signs every command)`));
-    console.log(paint.info(`Public key: ${virtualKeys.publicKeyPath}`));
-    console.log(paint.positive(`\nServe this file at exactly:\n  ${instructions.url}`));
-    console.log(paint.info('\nIt must be the PEM itself, over HTTPS, with no redirect and no HTML page in front.'));
-    if (process.stdin.isTTY) {
-      console.log(`\nPublic key contents:\n${instructions.publicKeyPem.trim()}`);
-    }
-
-    // Step 2: check what Tesla would actually fetch. Registering is not a consumable
-    // -- POST /api/1/partner_accounts can be called repeatedly -- but if Tesla
-    // ends up holding a key whose private half is not on this machine, the
-    // pairing appears to succeed and every later command is rejected, so it is
-    // much cheaper to notice a bad URL here.
-    console.log(paint.info('\n--- Step 2 of 3: verify the published key ---'));
-    const hosted = await virtualKeys.checkHostedPublicKey(domain);
-    if (!hosted.matchesLocalKey) {
-      console.error(paint.error(`\n✗ ${hosted.error ?? 'The published key could not be verified.'}`));
-      // The preview earns its own line only when the server actually answered
-      // with a body; on a transport failure it just repeats the reason above.
-      if (hosted.bodyPreview && hosted.reachable === false && hosted.status !== undefined) {
-        console.error(paint.error(`  Got instead: ${hosted.bodyPreview}`));
-      }
-      if (hosted.status !== undefined) {
-        console.error(paint.error(`  HTTP status: ${hosted.status}`));
-      }
-      console.error(paint.info('\nFix the hosting above and re-run. Nothing has been sent to Tesla yet.'));
-      process.exitCode = 1;
-      return;
-    }
-    console.log(paint.positive(`✓ ${hosted.url} serves the matching public key`));
-
-    if (options.skipRegistration) {
-      console.log(paint.info('\nSkipping Tesla registration (--skip-registration).'));
-      await printPairingLinkIfReady(virtualKeys, domain, vin);
-      return;
-    }
-
-    await registerDomainWithTesla(virtualKeys, domain, stored);
-    await printPairingLinkIfReady(virtualKeys, domain, vin);
+    // exitCode stays here so a REPL session cannot inherit it.
+    if (!(await runPairTeslaKey(options))) process.exitCode = 1;
   });
 
 /**

@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { REPL_COMMANDS, completeCommand, isReplCommand, LOCAL_WHILE_BUSY, renderHelp } from '../../src/commands/repl.js';
+import { REPL_COMMANDS, completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from '../../src/commands/repl.js';
 
 const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
 
@@ -111,5 +111,92 @@ describe('index.ts wiring', () => {
     for (const command of cases) {
       expect(advertised.has(command) || aliases.has(command)).toBe(true);
     }
+    // And the reverse, which is how `config` and `pair-tesla-key` went missing
+    // from help while still being real Commander commands: every advertised
+    // command must actually run in the REPL.
+    for (const name of names) {
+      expect(cases).toContain(name);
+    }
+  });
+
+  it('routes config and pair-tesla-key through the shared runners', () => {
+    expect(INDEX_SOURCE).toContain("case 'config':");
+    expect(INDEX_SOURCE).toContain("case 'pair-tesla-key':");
+    expect(INDEX_SOURCE).toContain('await runConfig(options)');
+    expect(INDEX_SOURCE).toContain('await runPairTeslaKey(options)');
+    // The Commander wrappers stay the only place failure becomes an exit code.
+    expect(INDEX_SOURCE).toContain('if (!(await runConfig(options))) process.exitCode = 1;');
+    expect(INDEX_SOURCE).toContain('if (!(await runPairTeslaKey(options))) process.exitCode = 1;');
+  });
+
+  it('splits the command token from its inline flags', () => {
+    expect(INDEX_SOURCE).toContain('const [first, ...rest] = input.trim().split(/\\s+/)');
+    expect(INDEX_SOURCE).toContain('await dispatchCommand(cmd, rest)');
+  });
+});
+
+describe('parseCommandArgs - REPL inline flags match Commander', () => {
+  it('returns empty options for no tokens', () => {
+    expect(parseCommandArgs('config', [])).toEqual({ options: {}, error: null });
+  });
+
+  it('maps value flags to camelCase options', () => {
+    expect(parseCommandArgs('config', ['--set-efficiency', '0.9'])).toEqual({
+      options: { setEfficiency: '0.9' },
+      error: null,
+    });
+    expect(parseCommandArgs('config', ['--tesla-domain', 'example.com'])).toEqual({
+      options: { teslaDomain: 'example.com' },
+      error: null,
+    });
+  });
+
+  it('accepts boolean flags', () => {
+    expect(parseCommandArgs('config', ['--clear-tesla'])).toEqual({
+      options: { clearTesla: true },
+      error: null,
+    });
+    expect(parseCommandArgs('pair-tesla-key', ['--check-only'])).toEqual({
+      options: { checkOnly: true },
+      error: null,
+    });
+  });
+
+  it('mixes value and boolean flags in any order', () => {
+    expect(
+      parseCommandArgs('pair-tesla-key', ['--domain', 'example.com', '--skip-registration'])
+    ).toEqual({ options: { domain: 'example.com', skipRegistration: true }, error: null });
+  });
+
+  it('keeps value case (only the command name is lowercased)', () => {
+    expect(parseCommandArgs('config', ['--tesla-region', 'NA'])).toEqual({
+      options: { teslaRegion: 'NA' },
+      error: null,
+    });
+  });
+
+  it('rejects unknown options with a Commander-style message', () => {
+    expect(parseCommandArgs('config', ['--nope'])).toEqual({
+      options: {},
+      error: "error: unknown option '--nope'",
+    });
+  });
+
+  it('rejects stray positional arguments', () => {
+    expect(parseCommandArgs('config', ['extra'])).toEqual({
+      options: {},
+      error: "error: unknown argument 'extra'",
+    });
+  });
+
+  it('rejects a value flag missing its value', () => {
+    expect(parseCommandArgs('pair-tesla-key', ['--domain'])).toEqual({
+      options: {},
+      error: "error: option '--domain <value>' argument missing",
+    });
+    expect(parseCommandArgs('pair-tesla-key', ['--domain', '--check-only'])).toEqual({
+      options: {},
+      error: "error: option '--domain <value>' argument missing",
+    });
   });
 });

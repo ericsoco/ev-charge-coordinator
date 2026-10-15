@@ -1,10 +1,11 @@
 /**
  * Interactive-shell command metadata.
  *
- * One source for what `help` prints and what tab completion offers. The names
- * mirror the dispatch switch in index.ts's `start` action (a switch cannot be
- * enumerated at runtime without indirection that would obscure it), so a new
- * REPL command must be added both here and there.
+ * One source for what `help` prints, what tab completion offers, and how the
+ * dispatch switch parses inline flags. The names mirror the dispatch switch in
+ * index.ts's `start` action (a switch cannot be enumerated at runtime without
+ * indirection that would obscure it), so a new REPL command must be added both
+ * here and there.
  */
 
 import { info } from '../utils/color.js';
@@ -30,12 +31,77 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
   { name: 'stop-ev-charging', description: 'Stop charging the EV' },
   {
     name: 'charge-from-battery',
-    description: 'Set the EV charge limit based on solar battery SoC',
+    description: 'Set the EV charge limit from the energy the solar battery can spare (kWh math)',
   },
   { name: 'set-battery-buffer', description: 'Set the amount of charge to keep in the solar battery' },
+  { name: 'config', description: 'Show or update configuration' },
+  {
+    name: 'pair-tesla-key',
+    description: "Register this application's virtual key with Tesla and print the vehicle pairing link",
+  },
   { name: 'status', description: 'Show current status of all systems' },
   { name: 'exit', description: 'Exit the application' },
 ];
+
+/**
+ * Flag tables for commands that take inline arguments, mirroring Commander's
+ * flags exactly. Value flags consume the next token; boolean flags stand alone.
+ */
+const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  config: ['tesla-region', 'tesla-domain', 'set-battery-kwh', 'set-ev-kwh', 'set-efficiency', 'set-min-kwh'],
+  'pair-tesla-key': ['domain', 'vin'],
+};
+
+const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  config: ['clear-franklin', 'clear-tesla', 'clear-all', 'show-public-key'],
+  'pair-tesla-key': ['check-only', 'skip-registration'],
+};
+
+export interface ParsedArgs {
+  /** Commander-shaped options: --kebab-case mapped to camelCase keys. */
+  options: Record<string, string | boolean>;
+  /** Commander-style error text, or null when the tokens are valid. */
+  error: string | null;
+}
+
+function camelCase(kebab: string): string {
+  return kebab.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
+}
+
+/**
+ * Turn the tokens after a REPL command into Commander-shaped options, matching
+ * the one-shot behavior: unknown options and stray positional tokens are
+ * errors, and a value flag missing its value is an error too (no silent
+ * fallback -- the REPL must not run a different command than the CLI would).
+ */
+export function parseCommandArgs(name: string, tokens: string[]): ParsedArgs {
+  const valueFlags = new Set(VALUE_FLAGS[name] ?? []);
+  const booleanFlags = new Set(BOOLEAN_FLAGS[name] ?? []);
+  const options: Record<string, string | boolean> = {};
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (!token.startsWith('--')) {
+      return { options: {}, error: `error: unknown argument '${token}'` };
+    }
+    const flag = token.slice(2);
+    if (valueFlags.has(flag)) {
+      const value = tokens[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        return { options: {}, error: `error: option '--${flag} <value>' argument missing` };
+      }
+      options[camelCase(flag)] = value;
+      i += 1;
+      continue;
+    }
+    if (booleanFlags.has(flag)) {
+      options[camelCase(flag)] = true;
+      continue;
+    }
+    return { options: {}, error: `error: unknown option '--${flag}'` };
+  }
+  return { options, error: null };
+}
 
 /** The body of the REPL's `help` command. One Info color for the whole block. */
 export function renderHelp(): string {
