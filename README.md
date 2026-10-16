@@ -205,6 +205,34 @@ request and a configured telemetry server. To confirm afterwards, run a command;
 vehicle that rejects the key answers
 `your public key has not been paired with the vehicle`.
 
+### Signed commands (Vehicle Command Proxy)
+
+Vehicles built from 2021 reject plain-REST commands with HTTP 403
+("Vehicle Command Protocol required"): every command must be signed with the
+enrolled virtual key. The CLI drives Tesla's official
+[`tesla-http-proxy`](https://github.com/teslamotors/vehicle-command) to do the
+signing — it exposes the identical Fleet API REST paths on a local TLS port and
+forwards signed requests upstream with your OAuth token.
+
+**Install the proxy** (needs [Go](https://go.dev/dl/)):
+
+```bash
+git clone https://github.com/teslamotors/vehicle-command
+(cd vehicle-command && go build -o ~/go/bin/tesla-http-proxy ./cmd/tesla-http-proxy)
+```
+
+Or set `ECC_TESLA_PROXY_BIN` to the binary's location. Then:
+
+- `start` launches the proxy (status line: `✓ Tesla command proxy: pid …, port 4443`),
+  and `exit` stops it. A one-shot `charge-from-battery` starts it on demand.
+- TLS material is generated once into the config directory (`tesla-proxy/`,
+  owner-only) — the proxy refuses to run without TLS, and its TLS key must differ
+  from the command key.
+- The command key is your existing `private-key.pem` from `pair-tesla-key`. That
+  pairing tap is what enrolls the key **in the vehicle**; without it, a command
+  fails with `your public key has not been paired with the vehicle` — re-run
+  `pair-tesla-key` and tap the fresh link in the Tesla app.
+
 ### FranklinWH Setup
 
 1. You need your FranklinWH account credentials (email/password)
