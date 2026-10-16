@@ -23,6 +23,11 @@ import {
   VirtualKeyStore,
 } from './services/tesla/VirtualKeyService.js';
 import { resolveRegion } from './services/tesla/endpoints.js';
+import {
+  spawnedTeslaProxyPid,
+  startTeslaProxy,
+  stopTeslaProxy,
+} from './services/TeslaCommandProxy.js';
 import { credentialStore } from './utils/credentials.js';
 import {
   describeConfigProblems,
@@ -338,7 +343,13 @@ async function initializeTesla(): Promise<ServiceStart> {
     console.log(paint.info('Using stored Tesla credentials...'));
     teslaService = new TeslaService({
       region: stored.region,
-      callbackPort: stored.callbackPort
+      callbackPort: stored.callbackPort,
+      // Vehicle commands route through the signed-command sidecar, which this
+      // resolver lazy-spawns (and records) the first time a command is sent.
+      commandProxy: async () => {
+        const handle = await startTeslaProxy();
+        return { port: handle.port, caPem: handle.certPem };
+      },
     });
     try {
       await teslaService.initialize({
@@ -528,6 +539,26 @@ program
         paint.warning(
           `✗ Energy config missing at ${energyConfigPath()} - run \`config\` for the template,` +
             ' or charge-from-battery to be prompted'
+        )
+      );
+    }
+
+    // Signed-command sidecar: without it, Tesla rejects every vehicle command
+    // with HTTP 403 (Vehicle Command Protocol required). Non-fatal, like the
+    // service lines above -- reads work without it, charging commands do not.
+    try {
+      const handle = await startTeslaProxy();
+      console.log(
+        paint.positive(
+          handle.spawnedPid
+            ? `✓ Tesla command proxy: pid ${handle.spawnedPid}, port ${handle.port} (started here)`
+            : `✓ Tesla command proxy: port ${handle.port} (already running, reused)`
+        )
+      );
+    } catch (error) {
+      console.log(
+        paint.error(
+          `✗ Tesla command proxy not started. Error: ${error instanceof Error ? error.message : String(error)}`
         )
       );
     }
@@ -806,6 +837,12 @@ program
       if (teslaService) {
         await teslaService.disconnect();
       }
+      // Same ownership rule as the Franklin proxy: a sidecar this session
+      // started stops with it; one it attached to keeps running for others.
+      if (spawnedTeslaProxyPid() !== null) {
+        await stopTeslaProxy();
+        console.log(paint.info('  Tesla command proxy stopped.'));
+      }
 
       console.log(paint.info('Goodbye!'));
       process.exit(0);
@@ -823,6 +860,10 @@ program
     // while reporting success.
     if (teslaService) {
       await teslaService.disconnect();
+    }
+
+    if (await stopTeslaProxy()) {
+      console.log(paint.positive('✓ Tesla command proxy stopped'));
     }
 
     const state = readRuntimeState();

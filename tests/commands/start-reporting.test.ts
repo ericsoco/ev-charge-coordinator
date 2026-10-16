@@ -164,3 +164,25 @@ describe('energy config status at startup', () => {
     expect(block).toContain('charge-from-battery to be prompted');
   });
 });
+
+describe('Tesla command proxy (signed commands) wiring', () => {
+  it('reports it during start, non-fatally, after the energy-config line', () => {
+    const configCheck = INDEX_SOURCE.indexOf('const energy = resolveEnergyConfig();');
+    const proxyLine = INDEX_SOURCE.indexOf('Tesla command proxy: pid');
+    const noServices = INDEX_SOURCE.indexOf('No services available. Exiting.');
+    expect(configCheck).toBeGreaterThan(-1);
+    expect(proxyLine).toBeGreaterThan(configCheck);
+    expect(noServices).toBeGreaterThan(proxyLine);
+    // A missing binary or key is reported, never fatal to the session.
+    expect(INDEX_SOURCE).toContain('Tesla command proxy not started');
+  });
+
+  it('routes vehicle commands through the resolver and stops the proxy', () => {
+    expect(INDEX_SOURCE).toContain('commandProxy: async () => {');
+    expect(INDEX_SOURCE).toContain('startTeslaProxy()');
+    // `exit` (cross-process) stops whatever is recorded...
+    expect(INDEX_SOURCE).toContain('if (await stopTeslaProxy())');
+    // ...while REPL close stops only what this session started.
+    expect(INDEX_SOURCE).toContain('spawnedTeslaProxyPid() !== null');
+  });
+});

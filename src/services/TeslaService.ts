@@ -12,6 +12,7 @@
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as http from 'http';
+import * as https from 'https';
 import type { EVService, EVCredentials, EVStatus, EVBatteryStats, TeslaTokens } from '../types/ev.js';
 import { credentialStore } from '../utils/credentials.js';
 import * as paint from '../utils/color.js';
@@ -106,6 +107,19 @@ export interface TeslaServiceConfig {
    * the extra parameters.
    */
   pkce?: boolean;
+  /**
+   * Resolve the local signed-command proxy (tesla-http-proxy) before sending a
+   * vehicle command. Production passes the TeslaCommandProxy starter, so a
+   * one-shot command lazy-spawns the sidecar; absent (tests), commands go out
+   * on the plain Fleet client exactly as before.
+   */
+  commandProxy?: () => Promise<TeslaCommandProxyRoute | null>;
+}
+
+/** Where the signed-command sidecar listens and the PEM that signs its TLS. */
+export interface TeslaCommandProxyRoute {
+  port: number;
+  caPem: string;
 }
 
 export class TeslaService implements EVService {
@@ -118,6 +132,9 @@ export class TeslaService implements EVService {
   private regionInfo: TeslaRegionInfo;
   private readonly callbackPort: number;
   private readonly pkceEnabled: boolean;
+  private readonly commandProxy?: TeslaServiceConfig['commandProxy'];
+  /** Cached signed-command client, keyed by the proxy port it targets. */
+  private commandRoute: { port: number; client: AxiosInstance } | null = null;
   /** Single-use values held only for the duration of one authorize round trip. */
   private pendingNonce?: string;
   private pendingPkce?: PkcePair;
@@ -130,17 +147,28 @@ export class TeslaService implements EVService {
     this.regionInfo = resolveRegion(config.region);
     this.callbackPort = config.callbackPort ?? DEFAULT_CALLBACK_PORT;
     this.pkceEnabled = config.pkce ?? process.env.ECC_TESLA_PKCE !== '0';
+    this.commandProxy = config.commandProxy;
+    this.client = this.createClient(this.regionInfo.apiBaseUrl);
+  }
 
-    this.client = axios.create({
-      baseURL: this.regionInfo.apiBaseUrl,
+  /**
+   * A Fleet-API-shaped client carrying the full interceptor chain (auth,
+   * refresh, error wrapping). The main client targets the region host; a
+   * vehicle-command call targets the local signed-command proxy instead,
+   * which serves identical REST paths and needs the same behavior.
+   */
+  private createClient(baseURL: string, httpsAgent?: https.Agent): AxiosInstance {
+    const client = axios.create({
+      baseURL,
       timeout: 30000,
       headers: {
         'Content-Type': 'application/json'
-      }
+      },
+      ...(httpsAgent ? { httpsAgent } : {}),
     });
 
     // Add request interceptor to include auth token
-    this.client.interceptors.request.use(async (config) => {
+    client.interceptors.request.use(async (config) => {
       if (this.tokens?.accessToken) {
         // Check if token is expired
         if (this.tokens.expiresAt && Date.now() >= this.tokens.expiresAt - 60000) {
@@ -152,7 +180,7 @@ export class TeslaService implements EVService {
     });
 
     // Add response interceptor for token refresh on 401
-    this.client.interceptors.response.use(
+    client.interceptors.response.use(
       (response) => response,
       async (error: AxiosError) => {
         const config = error.config as (typeof error.config & { _eccRetried?: boolean }) | undefined;
@@ -166,7 +194,9 @@ export class TeslaService implements EVService {
             if (config) {
               config._eccRetried = true;
               config.headers.Authorization = `Bearer ${this.tokens!.accessToken}`;
-              return this.client.request(config);
+              // Retried on the same client it was issued from, so a proxy
+              // command 401 retries against the proxy, never the Fleet host.
+              return client.request(config);
             }
           } catch (refreshError) {
             // Refresh failed, will need to re-authenticate. The reason is logged
@@ -188,6 +218,7 @@ export class TeslaService implements EVService {
           : error;
       }
     );
+    return client;
   }
 
   /** The resolved region name, e.g. "na". */
@@ -686,6 +717,52 @@ export class TeslaService implements EVService {
     return status.battery.chargeLimit;
   }
 
+  /**
+   * Send a vehicle command through the signed-command proxy when one is
+   * configured. Tesla's REST command endpoints reject unsigned commands with
+   * HTTP 403 ("Vehicle Command Protocol required"); tesla-http-proxy signs
+   * them with the enrolled virtual key and forwards to Fleet API. Without a
+   * configured resolver (tests), the plain Fleet client is used as before.
+   */
+  private async postVehicleCommand(endpoint: string, body: object): Promise<void> {
+    const client = await this.vehicleCommandClient();
+    try {
+      await client.post(`/api/1/vehicles/${this.vin}${endpoint}`, body);
+    } catch (error) {
+      const code = (error as { cause?: { code?: string } }).cause?.code;
+      if (code === 'ECONNREFUSED' || code === 'ENOTFOUND') {
+        throw new Error(
+          'Tesla command proxy is not reachable. Run `start`, or check its output ' +
+            'for why the proxy is not running.',
+          { cause: error }
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** The client for vehicle commands: the local proxy when configured, else the Fleet client. */
+  private async vehicleCommandClient(): Promise<AxiosInstance> {
+    if (!this.commandProxy) return this.client;
+    const route = await this.commandProxy();
+    if (!route) {
+      throw new Error(
+        'Tesla command proxy unavailable. Vehicle commands need the signed-command ' +
+          'sidecar: run `start`, and install tesla-http-proxy if its status line says it is missing.'
+      );
+    }
+    if (this.commandRoute?.port !== route.port) {
+      this.commandRoute = {
+        port: route.port,
+        client: this.createClient(
+          `https://127.0.0.1:${route.port}`,
+          new https.Agent({ ca: [route.caPem] })
+        ),
+      };
+    }
+    return this.commandRoute.client;
+  }
+
   async setChargeLimit(percent: number): Promise<void> {
     if (!this.vin) {
       throw new Error('No VIN configured');
@@ -698,9 +775,7 @@ export class TeslaService implements EVService {
 
     await this.wakeUp();
     
-    await this.client.post(`/api/1/vehicles/${this.vin}/command/set_charge_limit`, {
-      percent
-    });
+    await this.postVehicleCommand('/command/set_charge_limit', { percent });
   }
 
   async startCharging(): Promise<void> {
@@ -709,7 +784,7 @@ export class TeslaService implements EVService {
     }
 
     await this.wakeUp();
-    await this.client.post(`/api/1/vehicles/${this.vin}/command/charge_start`);
+    await this.postVehicleCommand('/command/charge_start', {});
   }
 
   async stopCharging(): Promise<void> {
@@ -718,7 +793,7 @@ export class TeslaService implements EVService {
     }
 
     await this.wakeUp();
-    await this.client.post(`/api/1/vehicles/${this.vin}/command/charge_stop`);
+    await this.postVehicleCommand('/command/charge_stop', {});
   }
 
   async disconnect(): Promise<void> {
