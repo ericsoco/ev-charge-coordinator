@@ -724,13 +724,48 @@ Items 4-5 (config surface + first-run prompts) landed on
 1. **`--start` / `--dry-run` unification** (item 6) — replace the `offerToStart`
    argument with explicit flags identical in both modes.
 2. **`set-battery-buffer --get`** (item 7).
-3. **Tesla Vehicle Command Protocol / 403** — `setChargeLimit` still answers HTTP 403
-   "Vehicle Command Protocol required" (§8 Risks), so the live success path of
-   `charge-from-battery` stays blocked regardless of the math. Signed commands cannot
-   be verified in this environment; budget a debug round-trip on the user side.
-4. **Breaking-change callout** — deleting the percent rule changes behavior for anyone
+3. **Breaking-change callout** — deleting the percent rule changes behavior for anyone
    relying on `charge-from-battery`. No changelog exists yet and none should be created
    for this pass; whoever creates `CHANGELOG.md` (Phase 5) records it as breaking.
+
+(The former item on Tesla Vehicle Command Protocol / 403 is **resolved** — see the
+section below.)
+
+### Landed: Tesla Vehicle Command Protocol (signed commands)
+
+The 403 blocker is fixed on `feature/phase-4-vcp-commands`: Tesla's official
+`tesla-http-proxy` (teslamotors/vehicle-command) now runs as a managed sidecar and
+every vehicle command is signed with the enrolled virtual key.
+
+- **`src/services/TeslaCommandProxy.ts`** — finds the binary (`ECC_TESLA_PROXY_BIN`
+  or PATH + ~/go/bin), generates TLS material once into `tesla-proxy/` (openssl, SAN
+  localhost; LibreSSL lacks `-addext` so a config file is used), requires the
+  `pair-tesla-key` private key, spawns `-host localhost -port 4443`, waits for a TLS
+  handshake signed by its own cert, records `tesla-proxy.json`, and stops via the
+  same `terminateProcess` escalation as the Franklin proxy. Prerequisite order:
+  attach -> binary -> command key -> TLS, so each failure names one fix.
+- **`TeslaService`** — `commandProxy` resolver in the config; `setChargeLimit` /
+  `startCharging` / `stopCharging` route through a per-port cached client at
+  `https://127.0.0.1:4443` with the proxy cert as the trust anchor; `wake_up`,
+  `vehicle_data`, tokens stay on the direct Fleet client. `createClient` is shared,
+  so auth/refresh/error-wrapping behave identically on both; 401 retries stay on
+  the client that issued them. A refused proxy connection maps to run-start
+  guidance; no resolver configured (tests) keeps the legacy direct path.
+- **Lifecycle** — `start` reports `✓ Tesla command proxy: pid …, port 4443`
+  (non-fatal), `exit` stops it cross-process, REPL close stops only what that
+  session spawned; one-shot commands lazy-spawn it through the resolver.
+- **Tests** — `tests/services/tesla-command-proxy.test.ts` (binary discovery, real
+  openssl TLS pair + a live handshake proving the cert works as its own CA, real
+  boot/attach/stop of the installed binary with a throwaway key, both guidance
+  paths) and `tests/services/tesla-command-routing.test.ts` (command vs direct
+  routing, CA pinning, resolver-null and legacy fallbacks, ECONNREFUSED mapping).
+- **Live status (2026-10-15):** `start`/`exit` cycle verified against the real
+  machine; an idempotent `set_charge_limit(current)` reached the vehicle through
+  the proxy and was rejected with `412: your public key has not been paired with
+  the vehicle` — the remaining step is a **user action**: re-run
+  `pair-tesla-key` and tap the fresh `tesla.com/_ak` link in the Tesla app to
+  enroll the key in the car's command keychain, then the same command succeeds.
+  The rejection is surfaced by the existing 412 mapper with that exact remedy.
 
 ### Fix landed off-plan: REPL help drift (`config` / `pair-tesla-key`)
 
@@ -819,9 +854,12 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
   Phase 1. **⚠️ Confirmed materialized (inter-phase REPL session): Tesla now answers HTTP 403
   "Vehicle Command Protocol required" for the REST vehicle-commands endpoint
   (docs: `announcements#2023-10-09-rest-api-vehicle-commands-endpoint-deprecation-warning`),
-  so `setChargeLimit` — and with it `charge-from-battery`'s success path — is dead until the
-  Vehicle Command Protocol (signed commands) is implemented. **Still open: deferred from
-  the minimal Phase 4 pass — see Phase 4 "Deferred from this pass".**
+  so `setChargeLimit` — and with it `charge-from-battery`'s success path — was dead until the
+  Vehicle Command Protocol (signed commands) is implemented. **✅ Resolved on
+  `feature/phase-4-vcp-commands`: commands route through a managed `tesla-http-proxy`
+  sidecar (see Phase 4 "Landed: Tesla Vehicle Command Protocol"). The only remaining
+  prerequisite is the user tapping a fresh pairing link to enroll the key in the
+  vehicle; until then commands fail with the 412 mapper's exact remedy.**
 - **FranklinWH is write-capable** - `set_mode` is exposed by the proxy. `charge-from-battery`
   must stay **read-only** against the battery; never mutate operating mode without an explicit
   user command.
