@@ -26,6 +26,10 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
     name: 'get-battery-soc',
     description: 'Get the current battery state of charge from the solar battery',
   },
+  {
+    name: 'get-charging-state',
+    description: 'Get the current charging state from the EV',
+  },
   { name: 'set-ev-charge-limit', description: "Set the EV's charge limit" },
   { name: 'start-ev-charging', description: 'Start charging the EV' },
   { name: 'stop-ev-charging', description: 'Stop charging the EV' },

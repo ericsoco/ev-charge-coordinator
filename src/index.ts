@@ -52,6 +52,7 @@ import * as paint from './utils/color.js';
 import {
   chargeFromBattery,
   getBatterySoc,
+  getChargingState,
   getEvBatterySoc,
   setBatteryBuffer,
   setEvChargeLimit,
@@ -717,6 +718,10 @@ program
           await getBatterySoc(currentContext());
           break;
 
+        case 'get-charging-state':
+          await getChargingState(currentContext());
+          break;
+
         case 'set-ev-charge-limit': {
           const limitStr = await promptNumeric('Enter charge limit (50-100%, ESC to cancel): ');
           if (limitStr === null) {
@@ -982,6 +987,14 @@ program
       // but today it also stops one an earlier `start` owns.
       await franklinService!.disconnect();
     }
+  });
+
+program
+  .command('get-charging-state')
+  .description('Get the current charging state from the EV (charge_state)')
+  .action(async () => {
+    requireService('Tesla', await initializeTesla());
+    await runCommand(getChargingState);
   });
 
 program

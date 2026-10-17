@@ -44,7 +44,7 @@ describe('renderHelp', () => {
 describe('completeCommand', () => {
   it('offers the commands with the typed prefix', () => {
     expect(completeCommand('get-')).toEqual([
-      ['get-ev-bsoc', 'get-battery-soc'],
+      ['get-ev-bsoc', 'get-battery-soc', 'get-charging-state'],
       'get-',
     ]);
     expect(completeCommand('status')).toEqual([['status'], 'status']);
