@@ -94,6 +94,85 @@ function readStatusFrom(error: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * Reasons a Fleet REST command reports as `result:false` that mean the
+ * requested end state already holds — a no-op, not a failure.
+ */
+const BENIGN_COMMAND_REASONS = new Set(['requested', 'is_charging', 'not_charging']);
+
+/** Extra guidance for the failure reasons the Fleet docs enumerate. */
+function rejectedReasonHint(reason: string): string {
+  switch (reason) {
+    case 'disconnected':
+      return 'the vehicle is not connected to a charger';
+    case 'no_power':
+      return 'the connected charger provides no power';
+    case 'complete':
+      return 'charging has already completed';
+    case 'already_stopped':
+      return 'charging is already stopped';
+    default:
+      return '';
+  }
+}
+
+/** Extra guidance when a command was accepted but charging never started. */
+function notChargingHint(chargingState: string): string {
+  switch (chargingState) {
+    case 'Disconnected':
+      return 'plug in the vehicle';
+    case 'NoPower':
+      return 'the connected charger provides no power';
+    case 'Complete':
+      return 'charging already completed (battery at the charge limit)';
+    case 'Stopped':
+    case 'Idle':
+      return 'check whether the charge limit is at or below the current battery level';
+    default:
+      return '';
+  }
+}
+
+/**
+ * Fail a vehicle command whose *response body* says it did not happen.
+ *
+ * HTTP status alone is not evidence of success: tesla-http-proxy reports an
+ * action the car refused as **HTTP 200** with an error envelope
+ * (`{response:null, error:"car could not execute command: …"}` — the proxy's
+ * nominal-error path), and the Fleet REST fallback uses
+ * `{response:{result:false, reason:"disconnected"}}`. Both were previously
+ * treated as success, so `charge_start` on an unplugged car printed
+ * "✓ EV charging started". A response with no evidence of failure is accepted
+ * (forward-compatible with envelope variants).
+ */
+export function assertVehicleCommandAccepted(data: unknown): void {
+  const body = data as
+    | {
+        response?: { result?: unknown; reason?: unknown } | null;
+        error?: unknown;
+        error_description?: unknown;
+      }
+    | null
+    | undefined;
+
+  const response = body?.response;
+  if (response && response.result === false) {
+    const reason =
+      typeof response.reason === 'string' && response.reason ? response.reason : 'unknown reason';
+    if (BENIGN_COMMAND_REASONS.has(reason)) return; // end state already holds
+    const hint = rejectedReasonHint(reason);
+    throw new Error(`Vehicle rejected the command: ${reason}${hint ? ` (${hint})` : ''}`);
+  }
+
+  if (typeof body?.error === 'string' && body.error.length > 0) {
+    const detail =
+      typeof body.error_description === 'string' && body.error_description
+        ? ` (${body.error_description})`
+        : '';
+    throw new Error(`Vehicle rejected the command: ${body.error}${detail}`);
+  }
+}
+
 export interface TeslaServiceConfig {
   /** Tesla deployment region; selects the API base URL and token audience. */
   region?: string;
@@ -107,6 +186,12 @@ export interface TeslaServiceConfig {
    * the extra parameters.
    */
   pkce?: boolean;
+  /**
+   * How long startCharging/stopCharging poll `charge_state` to confirm the
+   * vehicle actually reached the requested state, and the poll interval.
+   * Overridable so tests do not sleep for real seconds.
+   */
+  chargingConfirm?: { windowMs?: number; intervalMs?: number };
   /**
    * Resolve the local signed-command proxy (tesla-http-proxy) before sending a
    * vehicle command. Production passes the TeslaCommandProxy starter, so a
@@ -133,6 +218,9 @@ export class TeslaService implements EVService {
   private readonly callbackPort: number;
   private readonly pkceEnabled: boolean;
   private readonly commandProxy?: TeslaServiceConfig['commandProxy'];
+  /** Poll window/interval for charging-state confirmation; see chargingConfirm. */
+  private readonly confirmWindowMs: number;
+  private readonly confirmIntervalMs: number;
   /** Cached signed-command client, keyed by the proxy port it targets. */
   private commandRoute: { port: number; client: AxiosInstance } | null = null;
   /** Single-use values held only for the duration of one authorize round trip. */
@@ -148,6 +236,8 @@ export class TeslaService implements EVService {
     this.callbackPort = config.callbackPort ?? DEFAULT_CALLBACK_PORT;
     this.pkceEnabled = config.pkce ?? process.env.ECC_TESLA_PKCE !== '0';
     this.commandProxy = config.commandProxy;
+    this.confirmWindowMs = config.chargingConfirm?.windowMs ?? 12_000;
+    this.confirmIntervalMs = config.chargingConfirm?.intervalMs ?? 3_000;
     this.client = this.createClient(this.regionInfo.apiBaseUrl);
   }
 
@@ -727,7 +817,8 @@ export class TeslaService implements EVService {
   private async postVehicleCommand(endpoint: string, body: object): Promise<void> {
     const client = await this.vehicleCommandClient();
     try {
-      await client.post(`/api/1/vehicles/${this.vin}${endpoint}`, body);
+      const response = await client.post(`/api/1/vehicles/${this.vin}${endpoint}`, body);
+      assertVehicleCommandAccepted(response.data);
     } catch (error) {
       const code = (error as { cause?: { code?: string } }).cause?.code;
       if (code === 'ECONNREFUSED' || code === 'ENOTFOUND') {
@@ -763,6 +854,47 @@ export class TeslaService implements EVService {
     return this.commandRoute.client;
   }
 
+  /**
+   * Confirm the vehicle reached the requested charging state.
+   *
+   * "Command accepted" is not "charging happened": the car can accept
+   * charge_start while unplugged (and the proxy reports refused actions as
+   * HTTP 200 with an error body). Poll `charge_state` — the car is awake from
+   * wakeUp() — until the state matches or the window expires, then fail with
+   * the observed state and its likely meaning.
+   */
+  private async confirmChargingState(wantCharging: boolean): Promise<void> {
+    const deadline = Date.now() + this.confirmWindowMs;
+    let observed = 'unknown';
+    for (;;) {
+      let status;
+      try {
+        status = await this.getStatus();
+      } catch (error) {
+        throw new Error(
+          `the vehicle accepted the command but its charging state could not be read: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      }
+      observed = status.battery.chargingState || 'unknown';
+      if (status.battery.isCharging === wantCharging) return;
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, this.confirmIntervalMs));
+    }
+
+    if (wantCharging) {
+      const hint = notChargingHint(observed);
+      throw new Error(
+        `the vehicle accepted the command but is not charging (state: ${observed})` +
+          (hint ? ` - ${hint}` : '')
+      );
+    }
+    throw new Error(
+      `the vehicle accepted the command but still reports charging (state: ${observed})`
+    );
+  }
+
   async setChargeLimit(percent: number): Promise<void> {
     if (!this.vin) {
       throw new Error('No VIN configured');
@@ -785,6 +917,7 @@ export class TeslaService implements EVService {
 
     await this.wakeUp();
     await this.postVehicleCommand('/command/charge_start', {});
+    await this.confirmChargingState(true);
   }
 
   async stopCharging(): Promise<void> {
@@ -794,6 +927,7 @@ export class TeslaService implements EVService {
 
     await this.wakeUp();
     await this.postVehicleCommand('/command/charge_stop', {});
+    await this.confirmChargingState(false);
   }
 
   async disconnect(): Promise<void> {

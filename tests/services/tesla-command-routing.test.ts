@@ -8,7 +8,11 @@
  */
 import { AxiosError, type AxiosInstance } from 'axios';
 import { describe, expect, it } from 'vitest';
-import { TeslaService } from '../../src/services/TeslaService.js';
+import {
+  assertVehicleCommandAccepted,
+  TeslaService,
+  type TeslaServiceConfig,
+} from '../../src/services/TeslaService.js';
 
 const VIN = '5YJTESTVIN00000000';
 const FAKE_CA_PEM = '-----BEGIN CERTIFICATE-----\nTESTCA\n-----END CERTIFICATE-----';
@@ -17,13 +21,48 @@ interface Recorded {
   base: string | undefined;
   url: string | undefined;
   data: unknown;
+  params: unknown;
 }
 
-function recordOn(client: AxiosInstance, into: Recorded[]): void {
+/** Recorded requests that were the narrow charge_state read (confirmation/getStatus). */
+function chargeStateReads(recorded: Recorded[]): Recorded[] {
+  return recorded.filter(
+    (entry) => (entry.params as { endpoints?: unknown } | undefined)?.endpoints === 'charge_state'
+  );
+}
+
+function recordOn(
+  client: AxiosInstance,
+  into: Recorded[],
+  chargingStates: string[] = []
+): void {
+  let chargeReads = 0;
   client.defaults.adapter = async (config) => {
-    into.push({ base: config.baseURL, url: config.url, data: config.data });
-    // wakeUp polls vehicle_data until state is online; answering anything else
-    // makes it sleep-and-retry ten times before failing.
+    into.push({ base: config.baseURL, url: config.url, data: config.data, params: config.params });
+    // The narrow charge_state read (post-command confirmation) asks via the
+    // endpoints param and gets a charging_state from the sequence; everything
+    // else is answered as a wake-up poll (state online), which wakeUp accepts.
+    if ((config.params as { endpoints?: unknown } | undefined)?.endpoints === 'charge_state') {
+      const index = Math.min(chargeReads++, Math.max(chargingStates.length - 1, 0));
+      return {
+        status: 200,
+        data: {
+          response: {
+            charge_state: {
+              battery_level: 50,
+              charge_limit_soc: 80,
+              charging_state: chargingStates[index] ?? 'Stopped',
+              charge_rate: 30,
+              minutes_to_full_charge: 45,
+              battery_range: 200,
+            },
+          },
+        },
+        statusText: 'OK',
+        headers: {},
+        config,
+      };
+    }
     return {
       status: 200,
       data: { result: true, response: { state: 'online' } },
@@ -36,11 +75,16 @@ function recordOn(client: AxiosInstance, into: Recorded[]): void {
 
 /** A service with tokens, a VIN, and a resolver pointing at a fake proxy port. */
 async function withProxyRoute(
-  route: { port: number; caPem: string } | null = { port: 4443, caPem: FAKE_CA_PEM }
+  route: { port: number; caPem: string } | null = { port: 4443, caPem: FAKE_CA_PEM },
+  serviceConfig: Partial<TeslaServiceConfig> = {},
+  mainChargingStates: string[] = []
 ): Promise<{ service: TeslaService; main: Recorded[]; commands: Recorded[] }> {
   const service = new TeslaService({
     region: 'na',
+    // Tiny window/interval so state-confirmation failures fail fast in tests.
+    chargingConfirm: { windowMs: 250, intervalMs: 10 },
     commandProxy: async () => route,
+    ...serviceConfig,
   });
   await service.initialize({
     clientId: 'cid',
@@ -53,7 +97,7 @@ async function withProxyRoute(
 
   const main: Recorded[] = [];
   const commands: Recorded[] = [];
-  recordOn((service as unknown as { client: AxiosInstance }).client, main);
+  recordOn((service as unknown as { client: AxiosInstance }).client, main, mainChargingStates);
 
   // Build the proxy client through the real path (createClient + https.Agent
   // with the route's CA), then stub its adapter for recording. Skipped when
@@ -99,7 +143,7 @@ describe('vehicle command routing', () => {
   });
 
   it('routes charge_start and charge_stop the same way', async () => {
-    const { service, commands } = await withProxyRoute();
+    const { service, commands } = await withProxyRoute(undefined, {}, ['Charging', 'Stopped']);
 
     await service.startCharging();
     await service.stopCharging();
@@ -149,5 +193,117 @@ describe('vehicle command routing', () => {
     };
 
     await expect(service.setChargeLimit(60)).rejects.toThrow(/not reachable.*start/is);
+  });
+});
+
+describe('vehicle command response envelopes', () => {
+  it('accepts the success envelope and bodies with no failure evidence', () => {
+    expect(() => assertVehicleCommandAccepted({ response: { result: true, reason: '' } })).not.toThrow();
+    expect(() => assertVehicleCommandAccepted({})).not.toThrow();
+    expect(() => assertVehicleCommandAccepted(undefined)).not.toThrow();
+  });
+
+  it('accepts "already in that state" reasons as no-ops', () => {
+    for (const reason of ['requested', 'is_charging', 'not_charging']) {
+      expect(() => assertVehicleCommandAccepted({ response: { result: false, reason } })).not.toThrow();
+    }
+  });
+
+  it('fails on a Fleet REST refusal, naming the reason and its meaning', () => {
+    expect(() => assertVehicleCommandAccepted({ response: { result: false, reason: 'disconnected' } }))
+      .toThrow(/Vehicle rejected the command: disconnected \(the vehicle is not connected to a charger\)/);
+  });
+
+  it('fails on the proxy nominal-error envelope that arrives as HTTP 200', () => {
+    // Literal body shape tesla-http-proxy returns for an action the car
+    // refused (e.g. charge_start while unplugged) -- nominally HTTP 200.
+    const body = {
+      response: null,
+      error: 'car could not execute command: charging not allowed',
+      error_description: '',
+      txid: '00000000-0000-0000-0000-000000000000',
+    };
+    expect(() => assertVehicleCommandAccepted(body)).toThrow(
+      /Vehicle rejected the command: car could not execute command: charging not allowed/
+    );
+  });
+});
+
+describe('charging-state confirmation', () => {
+  it('startCharging resolves once charge_state reports Charging', async () => {
+    const { service, main } = await withProxyRoute(undefined, {}, ['Charging']);
+
+    await service.startCharging();
+
+    expect(chargeStateReads(main)).toHaveLength(1);
+  });
+
+  it('startCharging polls through a transitional state until Charging', async () => {
+    const { service, main } = await withProxyRoute(undefined, {}, ['Starting', 'Charging']);
+
+    await service.startCharging();
+
+    expect(chargeStateReads(main)).toHaveLength(2);
+  });
+
+  it('startCharging fails with the observed state when the car never charges', async () => {
+    const { service } = await withProxyRoute(undefined, {}, ['Disconnected']);
+
+    await expect(service.startCharging()).rejects.toThrow(
+      /is not charging \(state: Disconnected\) - plug in the vehicle/
+    );
+  });
+
+  it('startCharging explains a charger that provides no power', async () => {
+    const { service } = await withProxyRoute(undefined, {}, ['NoPower']);
+
+    await expect(service.startCharging()).rejects.toThrow(
+      /NoPower\) - the connected charger provides no power/
+    );
+  });
+
+  it('startCharging explains a charge limit at or below the battery level', async () => {
+    const { service } = await withProxyRoute(undefined, {}, ['Stopped']);
+
+    await expect(service.startCharging()).rejects.toThrow(
+      /Stopped\) - check whether the charge limit is at or below the current battery level/
+    );
+  });
+
+  it('stopCharging resolves once charge_state leaves Charging', async () => {
+    const { service, main } = await withProxyRoute(undefined, {}, ['Stopped']);
+
+    await service.stopCharging();
+
+    expect(chargeStateReads(main)).toHaveLength(1);
+  });
+
+  it('stopCharging fails while the car still reports charging', async () => {
+    const { service } = await withProxyRoute(undefined, {}, ['Charging']);
+
+    await expect(service.stopCharging()).rejects.toThrow(
+      /still reports charging \(state: Charging\)/
+    );
+  });
+
+  it('fails from the response envelope before any state polling', async () => {
+    const { service, main } = await withProxyRoute(undefined, {}, ['Charging']);
+    const proxyClient = (service as unknown as { commandRoute: { client: AxiosInstance } })
+      .commandRoute.client;
+    proxyClient.defaults.adapter = async (config) => ({
+      status: 200, // the proxy's nominal-error path is nominally HTTP 200
+      data: {
+        response: null,
+        error: 'car could not execute command: vehicle error',
+        error_description: '',
+        txid: '00000000-0000-0000-0000-000000000000',
+      },
+      statusText: 'OK',
+      headers: {},
+      config,
+    });
+
+    await expect(service.startCharging()).rejects.toThrow(/car could not execute command: vehicle error/);
+    expect(chargeStateReads(main)).toHaveLength(0);
   });
 });
