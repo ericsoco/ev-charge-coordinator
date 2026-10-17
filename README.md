@@ -1,23 +1,20 @@
 # EV Charge Coordinator
 
-Coordinate electric vehicle (EV) charging with home solar battery storage. This application allows you to charge your EV using the energy stored in your home battery system, helping you maximize the use of solar-generated power.
+Coordinate electric vehicle (EV) charging with home solar battery storage. This application allows you to charge your EV using the energy stored in your home battery system, to charge your car with sunlight 🌞 instead of from the grid 💸
 
-## Features
-
-- **Multi-system support**: Designed to support any EV and home battery system (currently implements Tesla and FranklinWH)
-- **Solar battery integration**: Read state of charge from your home battery
-- **EV control**: Get battery status, set charge limits, and start/stop charging
-- **Smart charging**: Automatically set EV charge limit based on available solar battery energy
-- **Battery buffer**: Configure a reserve amount to keep in your home battery
+- **Modular**: Designed to support any EV and home battery system; see below for currently supported vehicles + battery storage
+- **Multimodal**: One-shot and interactive CLI. Coming soon: desktop and mobile UX.
+- **Inspect + command**: Get vehicle and battery state of charge, set charge limit, start/stop charging
+- **Smart charging**: Automatically set EV charge limit based on available solar battery energy, with a configurable battery reserve buffer
 - **Secure credentials**: Credentials stored securely using system keychain or encrypted file storage
 
 ## Supported Systems
 
 ### Electric Vehicles
-- **Tesla** (Model S, 3, X, Y) via Tesla Fleet API
+- **Tesla** (Model S, 3, X, Y) via Tesla Fleet API (using [Vehicle Command Proxy](https://developer.tesla.com/docs/fleet-api/endpoints/vehicle-commands))
 
 ### Home Battery Systems
-- **FranklinWH aPower** via Python proxy to FranklinWH API
+- **FranklinWH aPower** via [Python proxy](https://github.com/richo/franklinwh-python/) to FranklinWH API (thanks @richo!)
 
 ## Prerequisites
 
@@ -78,9 +75,6 @@ JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
 - **Setters write here too:** `config --set-battery-kwh` / `--set-ev-kwh` /
   `--set-buffer` / `--set-efficiency` all update the same file, so it
   stays the single source of truth.
-- **Insufficient energy fails loudly:** if the solar battery's energy above the
-  buffer cannot raise the EV's charge limit, `charge-from-battery` fails with
-  the reason instead of setting a limit that would gain nothing.
 
 ### Tesla Fleet API Setup
 
@@ -250,11 +244,12 @@ Start the interactive CLI:
 
 ```bash
 npm start start
-# or after building:
+# ...which aliases...
 node dist/index.js start
 ```
 
 This launches an interactive session where you can run commands.
+Type `help` to list available commands, and `<command> -help` to list available flags for a given command.
 
 ### Individual Commands
 
@@ -287,12 +282,13 @@ npm start charge-from-battery --start
 npm start charge-from-battery --dry-run
 
 # Set the battery buffer reserve to 20%
+# See CLI Reference below for full config functionality
 npm start config --set-buffer 20
 
 # View configuration
 npm start config
 
-# Clear stored credentials
+# Clear stored third-party credentials
 npm start config --clear-all
 ```
 
@@ -311,7 +307,7 @@ npm start config --clear-all
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%) |
 | `start-ev-charging` | Start charging the EV |
 | `stop-ev-charging` | Stop charging the EV |
-| `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is prompted `Start charging now? (y/n)` after the limit is set (a non-TTY run never prompts and never starts); `--start` starts charging without prompting (verified), echoing that charging is starting without a confirmation line; `--dry-run` prints the computed limit without sending anything |
+| `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is prompted `Start charging now? (y/n)` after the limit is set (a non-TTY run never prompts and never starts); `--start` starts charging without prompting; `--dry-run` calculates and prints BSoC and the computed charge target, without issuing any commands |
 | `config` | Show current credentials and the energy config (with its file path) |
 | `config --clear-franklin` | Clear FranklinWH credentials |
 | `config --clear-tesla` | Clear Tesla credentials |
