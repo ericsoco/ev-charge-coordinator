@@ -908,6 +908,90 @@ docs: license year/holder, repo URLs, README rewrite, CI workflow
 
 ---
 
+## 2026-10-17 — charging results are verified; `get-charging-state`; wake inventory
+
+### Fix landed: charging commands verify their results (false-success bug)
+
+- **Root cause:** `TeslaService.postVehicleCommand` ignored the response *body*.
+  `tesla-http-proxy` reports a refused action as **HTTP 200** with
+  `{response:null, error:"car could not execute command: …", error_description:"", txid:"…"}`
+  (its nominal-error path); the Fleet REST fallback uses
+  `{response:{result:false, reason:"disconnected"}}`. Axios treated both as
+  success, so `start-ev-charging` on an unplugged car printed `✓ EV charging started`.
+- **Layer 1 — envelope check:** `postVehicleCommand` now calls
+  `assertVehicleCommandAccepted(response.data)`: fails on `result:false` (with a
+  per-reason hint: disconnected → not connected to a charger; no_power; complete;
+  already_stopped) and on any non-empty `error` field; benign "already in that
+  state" reasons (`requested`, `is_charging`, `not_charging`) are accepted; a
+  body with no failure evidence is accepted (forward-compatible). The literal
+  200-with-error-body envelope is pinned as a regression test.
+- **Layer 2 — post-condition confirmation:** `startCharging`/`stopCharging` now
+  poll `charge_state` after the command (the car is awake from `wakeUp()`) every
+  3 s for up to 12 s (`chargingConfirm` config; shrunk to 250 ms/10 ms in tests)
+  until `Charging` (start) / not-charging (stop). Otherwise they fail naming the
+  observed state: `Disconnected` → "plug in the vehicle", `NoPower` → charger
+  provides no power, `Stopped`/`Idle` → check charge limit vs current level,
+  `Complete` → charging already completed; a mid-poll read failure surfaces the
+  read error. This distinguishes "accepted" from "actually charging" for firmware
+  that answers start-while-unplugged with plain success.
+- Earlier Q&A recorded: the ~90 s latency was always the honest `wakeUp()`
+  (deep sleep + poll + 429 backoff) — the bug was only body-ignored acceptance;
+  instant false success after a restart was the car still awake from the prior
+  wake (nothing caches results — the proxy caches only its crypto session); and
+  `--debug` only adds tracebacks to service-startup failures, while command
+  errors print `✗ Error:` regardless — the 200 sailed through with no error
+  detected at all.
+- Handler UX: `start-ev-charging`, `stop-ev-charging`, and `charge-from-battery`
+  log "(waking the vehicle if needed; asleep cars take up to a minute)…" before
+  the command, so the pause reads as intent rather than a hang.
+
+### Command record: `get-charging-state` (one-shot + REPL)
+
+- Handler `getChargingState` in `src/commands/vehicle.ts`, reusing `getStatus()`
+  (already the narrow `vehicle_data?endpoints=charge_state` read). Prints
+  `Charging state: …`, `Battery: X% (charge limit Y%)`, and charge rate +
+  minutes-to-full when charging.
+- **No wake** (documented in the handler docstring and README): an asleep car
+  returns the standard HTTP 408 via `describeError`. The read-side wake gap
+  stays open pending the phantom-drain decision (see inventory below).
+- Wired through `REPL_COMMANDS` + dispatch case + Commander
+  (`requireService('Tesla', …)` + `runCommand`) + README (CLI table and
+  interactive list). Tab-completion expectation updated; the one-shot
+  `requireService` call-site count guard is now 8.
+
+### Where wake happens (inventory, verified against this commit)
+
+| Call site | Wakes? | Asleep-car behavior |
+|---|---|---|
+| `TeslaService.wakeUp()` (definition) | — | the only wake implementation: wake_up POST + poll + 429 backoff |
+| `setChargeLimit` (→ `set-ev-charge-limit`, `charge-from-battery`) | yes | waits (up to ~3 min), then honest failure |
+| `startCharging` (→ `start-ev-charging`, offer path) | yes | same |
+| `stopCharging` (→ `stop-ev-charging`) | yes | same |
+| `getStatus` (→ `get-charging-state`, post-command confirmation polls, status/offer paths) | **no** | HTTP 408 `vehicle unavailable` |
+| `getStateOfCharge` (→ `get-ev-bsoc`, `charge-from-battery` EV read) | **no** | HTTP 408 |
+| `getChargeLimit` | **no** | HTTP 408 |
+
+- `charge-from-battery` therefore dies at its EV-read step (408) before ever
+  reaching `setChargeLimit` on an asleep car. No wake changes in this pass, per
+  instruction; this table is input for the phantom-drain TODO decision.
+
+### Test/debt notes
+
+- New coverage: 4 envelope tests, 8 state-confirmation tests, 4
+  `getChargingState` handler tests; routing-test adapter now answers the narrow
+  `charge_state` read with a scripted `charging_state` sequence. Gate:
+  `npm run check` green — 333 passed / 2 skipped.
+- The real-process `startTeslaProxy` test was failing for an environmental
+  reason: an orphaned `tesla-http-proxy` from the 2026-10-16 live session still
+  held port 4443 while its state file had been cleaned, so the test's spawn died
+  on the occupied port (silent exit). Killed the orphan; if it recurs run
+  `lsof -ti tcp:4443 | xargs kill` before the proxy test.
+- Still open for live verification (non-destructive): `get-charging-state`
+  awake vs asleep (instant 408 demo of the wake gap), and `start-ev-charging`
+  while unplugged must now fail loudly instead of printing a false ✓.
+
+---
+
 ## 10. Acceptance Checklist
 
 Traced back to `prompts.md`:
