@@ -590,12 +590,13 @@ echoed and never buffered (backspace + `25` → `✓ Battery buffer set to 25%`)
 `Cancelled.` on its own line; every subsequent command dispatched normally (bug 4 fixed);
 clean shutdown each time. Buffer restored to 20% afterwards.
 
-**Not live-verified:** the redraw branch after `help`-mid-free-text-question — reaching it
-requires a successful `setChargeLimit`, and Tesla now returns **HTTP 403 "Vehicle Command
-Protocol required"** for it (REST `vehicle_commands` deprecation). Pinned by a source
-guard instead. ⚠️ **This 403 blocks `charge-from-battery`'s success path entirely and must
-be solved as part of Phase 4b** (Vehicle Command Protocol / signed commands), independent
-of the energy-math refactor.
+**Resolved (2026-10-16, `feature/phase-4-vcp-commands`):** the 403 that blocked the
+redraw branch — and `charge-from-battery`'s success path — was Tesla's Vehicle Command
+Protocol requirement; commands now route through a managed `tesla-http-proxy` sidecar
+(see **"Landed: Tesla Vehicle Command Protocol (signed commands)"** below), and a
+signed `set_charge_limit` was accepted by the physical vehicle. The redraw branch
+remains pinned by its source guard; it can now be exercised live with a successful
+command.
 
 **Tests:** `tests/commands/prompt.test.ts` — 15 cases driving a real terminal-mode
 readline over PassThrough streams (digit filtering, backspace, ESC, close-during-question,
@@ -610,8 +611,10 @@ wiring.
 
 **Status: ⏳ partial.** 4a ✅ complete (before this phase). 4b's energy math ✅ complete
 on `feature/phase-4-energy-math`; items 4-5 (JSON config surface + first-run prompts) ✅
-complete on `feature/phase-4b-config-surface`. Still deferred: items 6-7 (start-charging
-unification, `--get`) and the VCP 403 — see **"Deferred from this pass"** below.
+complete on `feature/phase-4b-config-surface`; the Tesla VCP/403 blocker ✅ resolved on
+`feature/phase-4-vcp-commands` (live-verified against the physical vehicle). Still
+deferred: items 6-7 (start-charging unification, `--get`) — see **"Deferred from this
+pass"** below.
 
 ### 4a. Replace the password-prompt stub
 
@@ -759,13 +762,19 @@ every vehicle command is signed with the enrolled virtual key.
   boot/attach/stop of the installed binary with a throwaway key, both guidance
   paths) and `tests/services/tesla-command-routing.test.ts` (command vs direct
   routing, CA pinning, resolver-null and legacy fallbacks, ECONNREFUSED mapping).
-- **Live status (2026-10-15):** `start`/`exit` cycle verified against the real
-  machine; an idempotent `set_charge_limit(current)` reached the vehicle through
-  the proxy and was rejected with `412: your public key has not been paired with
-  the vehicle` — the remaining step is a **user action**: re-run
-  `pair-tesla-key` and tap the fresh `tesla.com/_ak` link in the Tesla app to
-  enroll the key in the car's command keychain, then the same command succeeds.
-  The rejection is surfaced by the existing 412 mapper with that exact remedy.
+- **Live status (2026-10-16):** ✅ **verified end-to-end against the physical
+  vehicle.** `start`/`exit` cycle works against the real machine; before key
+  enrollment an idempotent `set_charge_limit(current)` reached the vehicle
+  through the proxy and was rejected with `412: your public key has not been
+  paired with the vehicle` (surfaced by the existing 412 mapper with that
+  exact remedy). Diagnosis via `pair-tesla-key --check-only` showed the whole
+  app-side chain green (local = hosted = Tesla-registered key), isolating the
+  gap to the vehicle keychain; after the user tapped the `_ak` link in the
+  Tesla app, the same idempotent command printed
+  `OK: signed command accepted by the vehicle`. Note: re-running
+  `pair-tesla-key` only re-prints the link — the tap is the enrollment — and
+  if the app claims the key already exists, remove it from the vehicle's key
+  list first, then re-tap.
 
 ### Fix landed off-plan: REPL help drift (`config` / `pair-tesla-key`)
 
@@ -857,9 +866,9 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
   so `setChargeLimit` — and with it `charge-from-battery`'s success path — was dead until the
   Vehicle Command Protocol (signed commands) is implemented. **✅ Resolved on
   `feature/phase-4-vcp-commands`: commands route through a managed `tesla-http-proxy`
-  sidecar (see Phase 4 "Landed: Tesla Vehicle Command Protocol"). The only remaining
-  prerequisite is the user tapping a fresh pairing link to enroll the key in the
-  vehicle; until then commands fail with the 412 mapper's exact remedy.**
+  sidecar (see Phase 4 "Landed: Tesla Vehicle Command Protocol"), and the signed
+  `set_charge_limit` was accepted by the physical vehicle on 2026-10-16 after the
+  user enrolled the key with the `_ak` pairing tap.**
 - **FranklinWH is write-capable** - `set_mode` is exposed by the proxy. `charge-from-battery`
   must stay **read-only** against the battery; never mutate operating mode without an explicit
   user command.
