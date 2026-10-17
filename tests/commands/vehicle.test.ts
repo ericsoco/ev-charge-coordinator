@@ -15,6 +15,7 @@ import type { EnergyConfig } from '../../src/utils/energy.js';
 import {
   chargeFromBattery,
   getBatterySoc,
+  getChargingState,
   getEvBatterySoc,
   setBatteryBuffer,
   setEvChargeLimit,
@@ -76,6 +77,17 @@ function makeContext(overrides: {
       : {
           isAuthenticated: () => true,
           getStateOfCharge: async () => 55,
+          getStatus: async () => ({
+            battery: {
+              soc: 55,
+              chargeLimit: 80,
+              isCharging: false,
+              chargingState: 'Stopped',
+              chargeRate: 0,
+              minutesToFull: null,
+              batteryRange: 200,
+            },
+          }),
           setChargeLimit: record('setChargeLimit'),
           startCharging: record('startCharging'),
           stopCharging: record('stopCharging'),
@@ -125,6 +137,69 @@ describe('getEvBatterySoc', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe('Tesla not connected');
     expect(calls.setChargeLimit).toBeUndefined();
+  });
+});
+
+describe('getChargingState', () => {
+  it('reports a charging vehicle with its rate and time to full', async () => {
+    const { ctx, out } = makeContext({
+      tesla: {
+        getStatus: async () => ({
+          battery: {
+            soc: 42,
+            chargeLimit: 80,
+            isCharging: true,
+            chargingState: 'Charging',
+            chargeRate: 30,
+            minutesToFull: 45,
+            batteryRange: 150,
+          },
+        }),
+      },
+    });
+    const result = await getChargingState(ctx);
+
+    expect(result.ok).toBe(true);
+    const text = out.join('\n');
+    expect(text).toContain('Charging state: Charging');
+    expect(text).toContain('Battery: 42% (charge limit 80%)');
+    expect(text).toContain('Charge rate: 30');
+    expect(text).toContain('Minutes to full: 45');
+  });
+
+  it('omits the rate lines when the vehicle is not charging', async () => {
+    const { ctx, out } = makeContext();
+    const result = await getChargingState(ctx);
+
+    expect(result.ok).toBe(true);
+    const text = out.join('\n');
+    expect(text).toContain('Charging state: Stopped');
+    expect(text).toContain('Battery: 55% (charge limit 80%)');
+    expect(text).not.toContain('Charge rate');
+  });
+
+  it('fails cleanly when Tesla is absent, without calling the service', async () => {
+    const { ctx, calls } = makeContext({ tesla: null });
+    const result = await getChargingState(ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Tesla not connected');
+    expect(calls.setChargeLimit).toBeUndefined();
+  });
+
+  it('surfaces a sleeping-vehicle 408 verbatim (reads do not wake)', async () => {
+    const { ctx, out } = makeContext({
+      tesla: {
+        getStatus: async () => {
+          throw new Error('HTTP 408: vehicle unavailable: vehicle is offline or asleep');
+        },
+      },
+    });
+    const result = await getChargingState(ctx);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('408');
+    expect(out.join('\n')).toContain('Error: HTTP 408');
   });
 });
 

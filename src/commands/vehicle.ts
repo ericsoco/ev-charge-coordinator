@@ -87,7 +87,7 @@ export async function startEvCharging(ctx: CommandContext): Promise<CommandResul
     return { ok: false, error: 'Tesla not connected' };
   }
   try {
-    log(ctx, paint.info('Starting EV charging...'));
+    log(ctx, paint.info('Starting EV charging (waking the vehicle if needed; asleep cars take up to a minute)...'));
     await ctx.tesla.startCharging();
     log(ctx, paint.success('✓ EV charging started'));
     return { ok: true };
@@ -104,7 +104,7 @@ export async function stopEvCharging(ctx: CommandContext): Promise<CommandResult
     return { ok: false, error: 'Tesla not connected' };
   }
   try {
-    log(ctx, paint.info('Stopping EV charging...'));
+    log(ctx, paint.info('Stopping EV charging (waking the vehicle if needed)...'));
     await ctx.tesla.stopCharging();
     log(ctx, paint.success('✓ EV charging stopped'));
     return { ok: true };
@@ -204,6 +204,37 @@ async function askForConfigField(
 }
 
 /**
+ * Read the vehicle's charging state via getStatus(), which is already the
+ * narrow `vehicle_data?endpoints=charge_state` read.
+ *
+ * Like every Tesla read, this does NOT wake the vehicle: an asleep car answers
+ * HTTP 408 and describeError surfaces it verbatim (wake happens only on the
+ * three command paths -- see the workplan's wake inventory).
+ */
+export async function getChargingState(ctx: CommandContext): Promise<CommandResult> {
+  if (!ctx.tesla?.isAuthenticated()) {
+    log(ctx, paint.warning('Tesla not connected'));
+    return { ok: false, error: 'Tesla not connected' };
+  }
+  try {
+    log(ctx, paint.info('Getting charging state...'));
+    const status = await ctx.tesla.getStatus();
+    const battery = status.battery;
+    log(ctx, paint.success(`Charging state: ${battery.chargingState}`));
+    log(ctx, paint.success(`Battery: ${battery.soc}% (charge limit ${battery.chargeLimit}%)`));
+    if (battery.isCharging) {
+      log(ctx, paint.success(`Charge rate: ${battery.chargeRate ?? 'n/a'}`));
+      log(ctx, paint.success(`Minutes to full: ${battery.minutesToFull ?? 'n/a'}`));
+    }
+    return { ok: true };
+  } catch (error) {
+    const message = describeError(error);
+    log(ctx, paint.error(`Error: ${message}`));
+    return { ok: false, error: message };
+  }
+}
+
+/**
  * Set the EV's charge limit from the energy the solar battery can spare.
  *
  * offerToStart is true on the interactive path (the REPL), false for the
@@ -281,6 +312,7 @@ export async function chargeFromBattery(
       log(ctx, paint.info(`Target limited by the EV pack capacity (${MAX_EV_CHARGE_LIMIT}%)`));
     }
 
+    log(ctx, paint.info('Setting the EV charge limit (waking the vehicle if needed; asleep cars take up to a minute)...'));
     await ctx.tesla.setChargeLimit(limit.targetPercent);
     log(ctx, paint.success(`✓ EV charge limit set to ${limit.targetPercent}%`));
 
