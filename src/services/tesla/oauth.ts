@@ -286,7 +286,22 @@ export function describeTeslaError(status: number | undefined, raw: string): str
   // the callback page: ANSI escapes and CR/LF must not survive into either.
   // Secrets are redacted first because this is the one function every CLI error
   // message passes through, and its output is what gets pasted into issues.
-  const safeRaw = redactSecrets(raw).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+  let safeRaw = redactSecrets(raw).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+  // The Fleet API's edge sometimes delivers a JSON error body that never got a
+  // JSON content type, so the interceptor hands the raw text over verbatim
+  // (seen on 408s as `{"error": "timeout"}`); unwrap it here so status advice
+  // reads the fields instead of echoing JSON.
+  if (safeRaw.startsWith('{')) {
+    try {
+      const body = JSON.parse(safeRaw) as { error?: unknown; error_description?: unknown; description?: unknown };
+      const parts = [body.error, body.error_description ?? body.description]
+        .filter((part): part is string => typeof part === 'string' && part.length > 0)
+        .join(': ');
+      if (parts) safeRaw = parts;
+    } catch {
+      // Not JSON after all -- keep the redacted text as-is.
+    }
+  }
   const known: Record<string, string> = {
     invalid_auth_code:
       'authorization code already used or expired; run `authenticate` to authorize again',
@@ -307,6 +322,18 @@ export function describeTeslaError(status: number | undefined, raw: string): str
   const statusText = status === undefined ? '' : `HTTP ${status}: `;
   for (const [code, advice] of Object.entries(known)) {
     if (safeRaw.includes(code)) return `${statusText}${safeRaw} - ${advice}`;
+  }
+  if (status === 408) {
+    // Observed live from vehicle_data reads: an asleep or offline car answers
+    // 408, either as "vehicle unavailable: vehicle is offline or asleep" or as
+    // a terse `{"error": "timeout"}` when the vehicle never responded. Reads
+    // deliberately never wake the vehicle (wake lives on the three command
+    // paths -- see the workplan's wake inventory), so the advice has to say so.
+    return (
+      `${statusText}${safeRaw} - the vehicle did not respond in time; it is likely ` +
+      'asleep or offline. Reads do not wake it: retry, or wake the vehicle with an ' +
+      "interacting command (e.g. `charge-from-battery --start`), and check the vehicle's connectivity."
+    );
   }
   if (status === 412) {
     // Observed live: "Account <uuid> must be registered in the current region
