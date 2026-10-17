@@ -115,26 +115,6 @@ export async function stopEvCharging(ctx: CommandContext): Promise<CommandResult
   }
 }
 
-export async function setBatteryBuffer(
-  ctx: CommandContext,
-  percent: number
-): Promise<CommandResult> {
-  if (Number.isNaN(percent) || percent < 0 || percent > 100) {
-    const message = 'Buffer must be between 0 and 100';
-    log(ctx, paint.warning(message));
-    return { ok: false, error: message };
-  }
-  try {
-    ctx.config.setField({ bufferPercent: percent });
-    log(ctx, paint.success(`✓ Battery buffer set to ${percent}%`));
-    return { ok: true };
-  } catch (error) {
-    const message = describeError(error);
-    log(ctx, paint.error(`Error: ${message}`));
-    return { ok: false, error: message };
-  }
-}
-
 /** First-run questions in schema order. The hints are advice, not defaults. */
 const CONFIG_QUESTIONS: Record<keyof EnergyConfig, string> = {
   batteryCapacityKwh: 'FranklinWH battery capacity in kWh (aPower 2 is 13.5): ',

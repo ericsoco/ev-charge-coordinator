@@ -17,7 +17,6 @@ import {
   getBatterySoc,
   getChargingState,
   getEvBatterySoc,
-  setBatteryBuffer,
   setEvChargeLimit,
   startEvCharging,
   stopEvCharging,
@@ -538,22 +537,6 @@ describe('chargeFromBattery', () => {
 });
 
 describe('buffer and charging controls', () => {
-  it('persists a valid buffer to config.json', async () => {
-    const { ctx, calls } = makeContext();
-    const result = await setBatteryBuffer(ctx, 30);
-
-    expect(result.ok).toBe(true);
-    expect(calls.setField[0]).toEqual([{ bufferPercent: 30 }]);
-  });
-
-  it.each([-1, 101, Number.NaN])('rejects buffer %s', async (bad) => {
-    const { ctx, calls } = makeContext();
-    const result = await setBatteryBuffer(ctx, bad);
-
-    expect(result.ok).toBe(false);
-    expect(calls.setField).toBeUndefined();
-  });
-
   it('starts and stops charging', async () => {
     const start = makeContext();
     await startEvCharging(start.ctx);

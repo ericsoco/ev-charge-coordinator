@@ -136,6 +136,14 @@ describe('index.ts wiring', () => {
     expect(INDEX_SOURCE).toContain('start: options.start === true, dryRun: options.dryRun === true');
   });
 
+  it('sets the battery buffer through the config command, not a standalone one', () => {
+    expect(INDEX_SOURCE).toContain(".option('--set-buffer <percent>'");
+    expect(INDEX_SOURCE).toContain("['setBuffer', 'bufferPercent', 'Battery buffer']");
+    // The standalone command is gone: no Commander definition, no REPL case.
+    expect(INDEX_SOURCE).not.toContain("command('set-battery-buffer')");
+    expect(INDEX_SOURCE).not.toContain("case 'set-battery-buffer'");
+  });
+
   it('splits the command token from its inline flags', () => {
     expect(INDEX_SOURCE).toContain('const [first, ...rest] = input.trim().split(/\\s+/)');
     expect(INDEX_SOURCE).toContain('await dispatchCommand(cmd, rest)');
