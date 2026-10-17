@@ -704,14 +704,17 @@ identifier, not a secret.
    validation only, never values. Hand-edit mistakes are echoed with the file path.
    (`--set-min-kwh` was removed with `minChargeKwh`; existing files carrying the
    key still load and the key is dropped on the next write.)
-6. ✅ **Unify the start-charging behavior** (`complete/phase-4`): the `offerToStart`
+6. ✅ **Unify the start-charging behavior** (`complete/phase-4`, amended
+   `fix/phase-4-followups`): the `offerToStart`
    argument and the REPL's y/n prompt are gone — flags are the consent model,
    identical in both modes. Default sets the limit and never starts charging;
    `--start` also starts charging (inheriting wake, response-envelope and
    state-confirmation checks); `--dry-run` computes and prints the target without
    sending anything. `--start` with `--dry-run` is rejected before any I/O. The
    REPL parses the flags via `parseCommandArgs` and routes `--help` through
-   `printCommandHelp`.
+   `printCommandHelp`. **Amended 2026-10-17 (user):** the y/n prompt is back as
+   the no-flag default when a terminal is attached — flags stay the
+   non-interactive consent model; see the "post-Phase-4 fixes" entry below.
 7. ✅ **Superseded, not built** (`complete/phase-4`, user decision): instead of
    `set-battery-buffer --get`, the standalone `set-battery-buffer` command was
    **removed entirely** — `config.json` is the single source of truth, so the
@@ -1011,7 +1014,9 @@ Branch `complete/phase-4`. Phase 4 is **complete**; this entry records the last 
   `✓ Dry run: would set the EV charge limit to N%` and sends nothing.
   `--start --dry-run` is rejected before any I/O. REPL parses the flags via
   `parseCommandArgs` (`BOOLEAN_FLAGS` entry) and routes `--help` through
-  `printCommandHelp`; source guards pin the wiring.
+  `printCommandHelp`; source guards pin the wiring. **Amended the same day**
+  (`fix/phase-4-followups`, user request): the no-flag path prompts
+  `Start charging now? (y/n)` in a TTY again — see the dated entry below.
 - **Item 7 — superseded by removal (user decision).** `set-battery-buffer` is
   gone: handler, Commander command, REPL case + digit prompt, help entry,
   tests, README references. `config.json` is the single source of truth, so the
@@ -1025,6 +1030,51 @@ Branch `complete/phase-4`. Phase 4 is **complete**; this entry records the last 
 - Gate: `npm run check` green — 333 passed / 2 skipped. Live-verified:
   `charge-from-battery --help`/`config --help` show the new flags; a
   `config --set-buffer` round-trip writes `config.json`.
+
+---
+
+## 2026-10-17 (post-Phase-4 fixes) — start prompt restored; vehicle-408 advice
+
+Branch `fix/phase-4-followups`.
+
+- **`charge-from-battery` prompt restored (user reversal of item 6).** With no
+  flags and an attached terminal (REPL or interactive one-shot), the handler now
+  asks `Start charging now? (y/n)` *after* setting the limit; `y`/`yes` starts
+  charging through the same path as `--start` (wake, response-envelope,
+  state-confirmation). Declining, or any non-TTY run, stops after the limit —
+  scripted runs never block on stdin (`ctx.interactive` gates the prompt).
+  Per user direction a start **notifies without confirming**: it echoes
+  `Starting EV charging...` and prints no `✓ EV charging started` afterwards
+  (`start-ev-charging` keeps its own confirmation — untouched). `--start` skips
+  the prompt; `--dry-run` unchanged. `--start` help now reads "skips the
+  confirmation prompt"; README usage examples, command table, REPL list, and
+  smart-charging flow updated.
+- **Investigated `HTTP 408: {"error": "timeout"}` on `get-charging-state` /
+  `get-ev-bsoc`.** Root cause: reads deliberately never wake the vehicle (wake
+  lives on the three command paths), so every read against a sleeping car 408s;
+  Tesla varies the body between `vehicle unavailable: vehicle is offline or
+  asleep` and a terse `{"error": "timeout"}` (confirmed earlier in-session:
+  both reads succeed while the car is awake). `describeTeslaError` had no 408
+  branch, so the raw body reached the terminal verbatim. Fixes:
+  a 408 branch appends asleep/offline advice ("Reads do not wake it: retry, or
+  wake the vehicle with an interacting command (e.g. `charge-from-battery
+  --start`), and check the vehicle's connectivity"); JSON-looking raw bodies
+  are unwrapped so the terse shape renders `HTTP 408: timeout - <advice>`; and
+  `describeAxiosError` passes non-JSON-content-type string bodies through
+  instead of falling back to axios's generic status line. Wake behavior itself
+  is unchanged — wake research stays open in `TODO.md`. Three new cases in
+  `tesla-error-reporting.test.ts` drive all body shapes through the real
+  interceptor chain; four new/updated cases in `vehicle.test.ts` pin the
+  prompt (y starts, n declines, non-TTY never prompts, `--start` skips it and
+  no path prints the confirmation line).
+- Gate: `npm run check` green — **338 passed / 2 skipped** (+7 new cases).
+  Live-verified: `charge-from-battery --help` shows the new `--start` text;
+  Tesla `get-charging-state` re-read fine (car awake). The end-to-end prompt
+  demo needs a Franklin `/soc` read, which was timing out live during this
+  session (`httpx.ReadTimeout` → HTTP 500) — re-run it (REPL or
+  `printf 'n\n' | script -q /dev/null node dist/index.js charge-from-battery`)
+  once Franklin's gateway responds. **Restart any REPL session opened before
+  these fixes to pick them up.**
 
 ---
 
