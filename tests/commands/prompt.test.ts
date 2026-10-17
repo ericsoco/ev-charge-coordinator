@@ -274,9 +274,11 @@ describe('index.ts wiring', () => {
 
   it('routes every numeric sub-prompt through promptNumeric with a cancel path', () => {
     expect(INDEX_SOURCE).toContain("promptNumeric('Enter charge limit");
-    expect(INDEX_SOURCE).toContain("promptNumeric('Enter battery buffer");
     expect(INDEX_SOURCE).toContain("promptNumeric('Select vehicle number");
     expect(INDEX_SOURCE).toContain("paint.info('\\nCancelled.')");
+    // The battery-buffer sub-prompt is gone: the buffer moved to
+    // `config --set-buffer` (see repl-commands.test.ts).
+    expect(INDEX_SOURCE).not.toContain("promptNumeric('Enter battery buffer");
   });
 
   it('redraws the open question after a whitelisted command', () => {

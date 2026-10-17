@@ -54,7 +54,6 @@ import {
   getBatterySoc,
   getChargingState,
   getEvBatterySoc,
-  setBatteryBuffer,
   setEvChargeLimit,
   showStatus,
   startEvCharging,
@@ -525,8 +524,8 @@ program
     }
 
     // Energy config status, reported like the services above. Non-fatal: only
-    // charge-from-battery and set-battery-buffer need it, so a session without
-    // it is still worth having.
+    // charge-from-battery needs it, so a session without it is still worth
+    // having.
     const energy = resolveEnergyConfig();
     if (energy.config) {
       console.log(paint.positive(`✓ Energy config ready (${energyConfigPath()})`));
@@ -760,22 +759,6 @@ program
             start: options.start === true,
             dryRun: options.dryRun === true,
           });
-          break;
-        }
-
-        case 'set-battery-buffer': {
-          const bufferStr = await promptNumeric('Enter battery buffer percentage (0-100, ESC to cancel): ');
-          if (bufferStr === null) {
-            // ESC never submits a line, so start a fresh one for the notice.
-            console.log(paint.info('\nCancelled.'));
-            break;
-          }
-          const buffer = parseInt(bufferStr);
-          if (isNaN(buffer)) {
-            console.log(paint.warning('Invalid buffer. Must be a number between 0 and 100.'));
-            break;
-          }
-          await setBatteryBuffer(currentContext(), buffer);
           break;
         }
 
@@ -1062,20 +1045,6 @@ program
     }
   });
 
-program
-  .command('set-battery-buffer')
-  .description('Set the amount of charge to keep in the solar battery')
-  .argument('<percent>', 'Buffer percentage (0-100)')
-  .action(async (percent: string) => {
-    const buffer = parseInt(percent);
-    if (isNaN(buffer) || buffer < 0 || buffer > 100) {
-      console.error(paint.warning('Buffer must be between 0 and 100'));
-      process.exit(1);
-    }
-
-    await runCommand((ctx) => setBatteryBuffer(ctx, buffer));
-  });
-
 /**
  * Sign in to Tesla and store the credentials.
  *
@@ -1199,6 +1168,7 @@ interface ConfigOptions {
   setBatteryKwh?: string;
   setEvKwh?: string;
   setEfficiency?: string;
+  setBuffer?: string;
   [key: string]: unknown;
 }
 
@@ -1217,6 +1187,7 @@ async function runConfig(options: ConfigOptions): Promise<boolean> {
   const energySetters: [option: string, field: keyof EnergyConfig, label: string][] = [
     ['setBatteryKwh', 'batteryCapacityKwh', 'Battery capacity'],
     ['setEvKwh', 'evBatteryKwh', 'EV capacity'],
+    ['setBuffer', 'bufferPercent', 'Battery buffer'],
     ['setEfficiency', 'chargeEfficiency', 'Charge efficiency'],
   ];
   const setter = energySetters.find(([option]) => options[option] !== undefined);
@@ -1322,6 +1293,7 @@ program
   .option('--set-battery-kwh <n>', 'Set house battery capacity, kWh')
   .option('--set-ev-kwh <n>', 'Set EV battery capacity, kWh')
   .option('--set-efficiency <0-1>', 'Set charge efficiency (0-1)')
+  .option('--set-buffer <percent>', 'Set the battery buffer reserve, percent (0-100)')
   .action(async (options) => {
     // exitCode stays here so a REPL session cannot inherit it.
     if (!(await runConfig(options))) process.exitCode = 1;

@@ -37,7 +37,6 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
     name: 'charge-from-battery',
     description: 'Set the EV charge limit from the energy the solar battery can spare (kWh math)',
   },
-  { name: 'set-battery-buffer', description: 'Set the amount of charge to keep in the solar battery' },
   { name: 'config', description: 'Show or update configuration' },
   {
     name: 'pair-tesla-key',

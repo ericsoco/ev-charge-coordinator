@@ -76,7 +76,7 @@ JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
 - **Hand-editing:** the file is validated on every read; bad values are echoed
   with the file path and the command fails instead of guessing a correction.
 - **Setters write here too:** `config --set-battery-kwh` / `--set-ev-kwh` /
-  `--set-efficiency` and `set-battery-buffer` all update the same file, so it
+  `--set-buffer` / `--set-efficiency` all update the same file, so it
   stays the single source of truth.
 - **Insufficient energy fails loudly:** if the solar battery's energy above the
   buffer cannot raise the EV's charge limit, `charge-from-battery` fails with
@@ -285,8 +285,8 @@ npm start charge-from-battery --start
 # ... preview the computed limit without sending anything to the vehicle
 npm start charge-from-battery --dry-run
 
-# Set battery buffer to 20%
-npm start set-battery-buffer 20
+# Set the battery buffer reserve to 20%
+npm start config --set-buffer 20
 
 # View configuration
 npm start config
@@ -311,7 +311,6 @@ npm start config --clear-all
 | `start-ev-charging` | Start charging the EV |
 | `stop-ev-charging` | Stop charging the EV |
 | `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). `--start` also starts charging (verified); `--dry-run` prints the computed limit without sending anything |
-| `set-battery-buffer <percent>` | Set the amount of charge to keep in the solar battery, 0-100% (written to `config.json`) |
 | `config` | Show current credentials and the energy config (with its file path) |
 | `config --clear-franklin` | Clear FranklinWH credentials |
 | `config --clear-tesla` | Clear Tesla credentials |
@@ -322,6 +321,7 @@ npm start config --clear-all
 | `config --set-battery-kwh <n>` | Set house battery capacity in `config.json` |
 | `config --set-ev-kwh <n>` | Set EV battery capacity in `config.json` |
 | `config --set-efficiency <0-1>` | Set charge efficiency in `config.json` |
+| `config --set-buffer <percent>` | Set the battery buffer reserve, 0-100%, in `config.json` |
 | `pair-tesla-key` | Register the virtual key with Tesla and print the vehicle pairing link |
 
 ### Interactive Mode Commands
@@ -339,7 +339,6 @@ When running in interactive mode (`start`), the following commands are available
 - `stop-ev-charging` - Stop EV charging
 - `charge-from-battery` - Smart charging based on solar battery (`--start` to
   also begin charging, `--dry-run` to preview; same flags as the one-shot)
-- `set-battery-buffer` - Set battery buffer percentage
 - `config` - Show or update configuration; accepts the same flags as the
   one-shot command (e.g. `config --set-efficiency 0.9`); `config --help`
   prints the flag list
