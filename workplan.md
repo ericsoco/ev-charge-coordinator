@@ -609,12 +609,14 @@ wiring.
 
 **Depends on Phase 1.5** (shared handlers) so the percent math is deleted once, not twice.
 
-**Status: ⏳ partial.** 4a ✅ complete (before this phase). 4b's energy math ✅ complete
-on `feature/phase-4-energy-math`; items 4-5 (JSON config surface + first-run prompts) ✅
-complete on `feature/phase-4b-config-surface`; the Tesla VCP/403 blocker ✅ resolved on
-`feature/phase-4-vcp-commands` (live-verified against the physical vehicle). Still
-deferred: items 6-7 (start-charging unification, `--get`) — see **"Deferred from this
-pass"** below.
+**Status: ✅ complete (2026-10-17).** 4a ✅ complete (before this phase). 4b's energy
+math ✅ complete on `feature/phase-4-energy-math`; items 4-5 (JSON config surface +
+first-run prompts) ✅ complete on `feature/phase-4b-config-surface`; the Tesla
+VCP/403 blocker ✅ resolved on `feature/phase-4-vcp-commands` (live-verified against
+the physical vehicle); items 6-7 ✅ closed on `complete/phase-4` — explicit
+`--start`/`--dry-run` flags replace the `offerToStart` prompt, and
+`set-battery-buffer` was removed in favor of `config --set-buffer` (user decision).
+No changelog: explicitly waived — the project is unreleased with no users.
 
 ### 4a. Replace the password-prompt stub
 
@@ -696,17 +698,26 @@ identifier, not a secret.
    `settings` itself was removed from `StoredCredentials` along with the old
    battery-buffer accessors — no users existed to migrate.
 5. ✅ **Config surface:** `config --set-battery-kwh <n>`, `--set-ev-kwh <n>`,
-   `--set-efficiency <0-1>` all write `config.json`, as does
-   `set-battery-buffer`. `DEFAULT_ENERGY_CONFIG` is gone: `energy.ts` carries
+   `--set-buffer <percent>`, `--set-efficiency <0-1>` all write `config.json`
+   (the standalone `set-battery-buffer` command was later removed — see item 7).
+   `DEFAULT_ENERGY_CONFIG` is gone: `energy.ts` carries
    validation only, never values. Hand-edit mistakes are echoed with the file path.
    (`--set-min-kwh` was removed with `minChargeKwh`; existing files carrying the
    key still load and the key is dropped on the next write.)
-6. ⏭️ **DEFERRED (see "Deferred from this pass" below).**
-   **Unify the start-charging behavior:** non-interactive `charge-from-battery` never starts
-   charging, but the REPL version prompts to. Make it explicit via
-   `--start` / `--dry-run`, identical in both modes (today it is the `offerToStart`
-   argument to the shared handler).
-7. ⏭️ **DEFERRED (see "Deferred from this pass" below).** `set-battery-buffer` — add `--get`.
+6. ✅ **Unify the start-charging behavior** (`complete/phase-4`): the `offerToStart`
+   argument and the REPL's y/n prompt are gone — flags are the consent model,
+   identical in both modes. Default sets the limit and never starts charging;
+   `--start` also starts charging (inheriting wake, response-envelope and
+   state-confirmation checks); `--dry-run` computes and prints the target without
+   sending anything. `--start` with `--dry-run` is rejected before any I/O. The
+   REPL parses the flags via `parseCommandArgs` and routes `--help` through
+   `printCommandHelp`.
+7. ✅ **Superseded, not built** (`complete/phase-4`, user decision): instead of
+   `set-battery-buffer --get`, the standalone `set-battery-buffer` command was
+   **removed entirely** — `config.json` is the single source of truth, so the
+   buffer is read via `config`/`status` (or by editing the file) and written via
+   `config --set-buffer <percent>` or a hand edit. A source guard pins both
+   absences (no Commander definition, no REPL case).
 8. ✅ **Tests** (`tests/utils/energy.test.ts`, 23 cases): empty / over-cap buffer,
    `bufferPercent` 0 and 100, insufficient energy (zero spare, rounding-eaten spare,
    zero-gain rounding-up, full EV), efficiency `1.0` and `0.5`, the
@@ -719,20 +730,16 @@ identifier, not a secret.
 **Exit criteria:** ✅ passwords never echo; ✅ `charge-from-battery` produces a
 unit-correct, defensible limit and explains itself in kWh.
 
-### Deferred from this pass — pick up next
+### Deferred from this pass — nothing left; Phase 4 is complete
 
-Items 4-5 (config surface + first-run prompts) landed on
-`feature/phase-4b-config-surface`. Still open, in rough priority order:
-
-1. **`--start` / `--dry-run` unification** (item 6) — replace the `offerToStart`
-   argument with explicit flags identical in both modes.
-2. **`set-battery-buffer --get`** (item 7).
-3. **Breaking-change callout** — deleting the percent rule changes behavior for anyone
-   relying on `charge-from-battery`. No changelog exists yet and none should be created
-   for this pass; whoever creates `CHANGELOG.md` (Phase 5) records it as breaking.
-
-(The former item on Tesla Vehicle Command Protocol / 403 is **resolved** — see the
-section below.)
+Every deferred item is closed: config surface + first-run prompts
+(`feature/phase-4b-config-surface`), the VCP/403 blocker
+(`feature/phase-4-vcp-commands`, live-verified), flag unification and the
+`set-battery-buffer` removal (`complete/phase-4`). The breaking-change callout
+(item 3 of the old list) is **waived by decision**: the project is unreleased
+with no users, so no changelog is maintained yet — re-evaluate when that
+changes. Further ideas live in `TODO.md` (post-phase work: command renames,
+wake/phantom-drain research, event-driven charging, solar-history math).
 
 ### Landed: Tesla Vehicle Command Protocol (signed commands)
 
@@ -992,6 +999,35 @@ docs: license year/holder, repo URLs, README rewrite, CI workflow
 
 ---
 
+## 2026-10-17 (Phase 4 close-out) — explicit charging flags; `set-battery-buffer` removed
+
+Branch `complete/phase-4`. Phase 4 is **complete**; this entry records the last two items.
+
+- **Item 6 — `--start` / `--dry-run` unify the start-charging behavior.** The
+  `offerToStart` argument and the REPL's y/n prompt are gone; flags are the
+  consent model, identical in both modes. Default sets the limit and never
+  starts charging; `--start` also starts charging (inheriting `startCharging`'s
+  wake, response-envelope, and state-confirmation checks); `--dry-run` prints
+  `✓ Dry run: would set the EV charge limit to N%` and sends nothing.
+  `--start --dry-run` is rejected before any I/O. REPL parses the flags via
+  `parseCommandArgs` (`BOOLEAN_FLAGS` entry) and routes `--help` through
+  `printCommandHelp`; source guards pin the wiring.
+- **Item 7 — superseded by removal (user decision).** `set-battery-buffer` is
+  gone: handler, Commander command, REPL case + digit prompt, help entry,
+  tests, README references. `config.json` is the single source of truth, so the
+  buffer is read via `config`/`status` (or by editing the file) and written via
+  `config --set-buffer <percent>` (new value flag on `config`, same validator
+  and error style as the other setters) or a hand edit. Source guards pin both
+  absences; the `prompt.test.ts` numeric-sub-prompt guard now pins that the
+  buffer prompt is gone (remaining prompts: charge limit, vehicle selection).
+- **Changelog: waived** (user decision — unreleased project, no users, nothing
+  to maintain yet).
+- Gate: `npm run check` green — 333 passed / 2 skipped. Live-verified:
+  `charge-from-battery --help`/`config --help` show the new flags; a
+  `config --set-buffer` round-trip writes `config.json`.
+
+---
+
 ## 10. Acceptance Checklist
 
 Traced back to `prompts.md`:
@@ -1002,7 +1038,7 @@ Traced back to `prompts.md`:
 - [ ] `set-ev-charge-limit` / `start-ev-charging` / `stop-ev-charging` succeed against a real
       Model Y (requires the Phase 1 virtual-key pairing)
 - [ ] `charge-from-battery` sets a kWh-derived limit and prints the kWh reasoning
-- [ ] `set-battery-buffer` persists across restarts
+- [x] Battery buffer persists across restarts (in `config.json`, set via `config --set-buffer`)
 - [ ] Tesla OAuth completes in a browser, honors user actions, tokens survive restart + refresh
 - [ ] FranklinWH credentials prompted once, stored securely, never echoed
 - [x] No proxy route writable without the shared token
