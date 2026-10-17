@@ -230,8 +230,12 @@ Or set `ECC_TESLA_PROXY_BIN` to the binary's location. Then:
   from the command key.
 - The command key is your existing `private-key.pem` from `pair-tesla-key`. That
   pairing tap is what enrolls the key **in the vehicle**; without it, a command
-  fails with `your public key has not been paired with the vehicle` — re-run
-  `pair-tesla-key` and tap the fresh link in the Tesla app.
+  fails with `your public key has not been paired with the vehicle`. Re-running
+  `pair-tesla-key` only re-prints the link — the tap is the enrollment. If the
+  app says the key already exists, remove it from the vehicle's key list first,
+  then re-tap the link. (Verified end-to-end 2026-10-16: an idempotent
+  `set_charge_limit` was signed by the proxy and accepted by the physical
+  vehicle.)
 
 ### FranklinWH Setup
 
