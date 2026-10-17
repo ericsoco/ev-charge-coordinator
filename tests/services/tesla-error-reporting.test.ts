@@ -259,6 +259,34 @@ describe('TeslaService error reporting', () => {
     await expect(service.getStateOfCharge()).rejects.toThrow(/region/);
   });
 
+  it('explains HTTP 408 as a vehicle timeout instead of echoing the body', async () => {
+    // The terse shape seen when an asleep vehicle never answered the read.
+    const service = serviceFailingWith(408, { error: 'timeout' });
+    service.setVin('5YJTESTVIN000001');
+
+    await expect(service.getStateOfCharge()).rejects.toThrow(/HTTP 408: timeout .*Reads do not wake it/);
+  });
+
+  it("keeps Tesla's full 408 sentence and appends the same advice", async () => {
+    const service = serviceFailingWith(408, {
+      error: 'vehicle unavailable: vehicle is offline or asleep',
+    });
+    service.setVin('5YJTESTVIN000001');
+
+    await expect(service.getStateOfCharge()).rejects.toThrow(
+      /408: vehicle unavailable: vehicle is offline or asleep .*it is likely asleep or offline/
+    );
+  });
+
+  it('unwraps a 408 body that arrived as unparsed JSON text', async () => {
+    // No JSON content type: the interceptor sees a string and must still render
+    // the fields rather than axios's generic status line or raw JSON.
+    const service = serviceFailingWith(408, '{"error": "timeout"}');
+    service.setVin('5YJTESTVIN000001');
+
+    await expect(service.getStateOfCharge()).rejects.toThrow(/HTTP 408: timeout .*Reads do not wake it/);
+  });
+
   it('does not wrap an error that is not an axios failure', async () => {
     // Guard against the interceptor converting unrelated throws (a coding error
     // inside the response mapper, say) into a flattened message.

@@ -963,10 +963,17 @@ function describeAxiosError(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as
       | { error?: unknown; error_description?: unknown; description?: unknown }
+      | string
       | undefined;
-    const raw = [data?.error, data?.error_description ?? data?.description]
-      .filter((part): part is string => typeof part === 'string' && part.length > 0)
-      .join(': ');
+    // A body that never got a JSON content type arrives as a string; pass it
+    // through intact so describeTeslaError can unwrap (or quote) it, instead of
+    // falling back to axios's generic "Request failed with status code N".
+    const raw =
+      typeof data === 'string'
+        ? data
+        : [data?.error, data?.error_description ?? data?.description]
+            .filter((part): part is string => typeof part === 'string' && part.length > 0)
+            .join(': ');
     return describeTeslaError(error.response?.status, raw || error.message);
   }
   return error instanceof Error ? error.message : String(error);
