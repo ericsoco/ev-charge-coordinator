@@ -300,6 +300,7 @@ npm start config --clear-all
 | `get-ev-bsoc` | Get the current battery state of charge from the EV |
 | `authenticate` | Sign in to Tesla and store credentials (no other side effects) |
 | `get-battery-soc` | Get the current battery state of charge from the solar battery |
+| `get-charging-state` | Get the EV's charging state, battery level, and charge limit (`charge_state`; does not wake the vehicle — a sleeping car returns HTTP 408) |
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%) |
 | `start-ev-charging` | Start charging the EV |
 | `stop-ev-charging` | Stop charging the EV |
@@ -326,6 +327,7 @@ When running in interactive mode (`start`), the following commands are available
 - `authenticate` - Sign in to Tesla and store the credentials
 - `get-ev-bsoc` - Get EV battery state of charge
 - `get-battery-soc` - Get solar battery state of charge
+- `get-charging-state` - Get the EV's charging state (does not wake the vehicle)
 - `set-ev-charge-limit` - Set EV charge limit (prompts for value)
 - `start-ev-charging` - Start EV charging
 - `stop-ev-charging` - Stop EV charging
@@ -491,6 +493,23 @@ the prompt says so rather than echoing silently.
   the token endpoint and `ECC_TESLA_PKCE=0` drops the PKCE parameters from the
   authorize request (Tesla does not document PKCE, so this restores the strictly
   documented request shape)
+
+### `✓ EV charging started` but nothing happens
+
+- Older versions trusted the HTTP status of a charging command. Tesla's command
+  proxy reports an action the car refused (for example `charge_start` while
+  unplugged) as **HTTP 200** with an error body
+  (`{"response":null,"error":"car could not execute command: …"}`), so the CLI
+  printed success for a command that never happened.
+- Charging commands now verify twice: the response body must not report a
+  failure, and a post-condition check polls `charge_state` for up to ~12 seconds
+  to confirm the car actually reports `Charging` (or not-charging, for
+  `stop-ev-charging`). A failure names the observed state, e.g.
+  `state: Disconnected - plug in the vehicle`.
+- To inspect the live state yourself, run `get-charging-state`. Note it does not
+  wake the vehicle: a sleeping car returns HTTP 408 - either wait for the next
+  charging command (which wakes it) or accept the wake cost is only paid on
+  commands.
 
 ### FranklinWH Connection Issues
 
