@@ -129,6 +129,13 @@ describe('index.ts wiring', () => {
     expect(INDEX_SOURCE).toContain('if (!(await runPairTeslaKey(options))) process.exitCode = 1;');
   });
 
+  it('routes charge-from-battery flags through parseCommandArgs and the help renderer', () => {
+    expect(INDEX_SOURCE).toContain("case 'charge-from-battery':");
+    expect(INDEX_SOURCE).toContain("parseCommandArgs('charge-from-battery', args)");
+    expect(INDEX_SOURCE).toContain("printCommandHelp('charge-from-battery')");
+    expect(INDEX_SOURCE).toContain('start: options.start === true, dryRun: options.dryRun === true');
+  });
+
   it('splits the command token from its inline flags', () => {
     expect(INDEX_SOURCE).toContain('const [first, ...rest] = input.trim().split(/\\s+/)');
     expect(INDEX_SOURCE).toContain('await dispatchCommand(cmd, rest)');
@@ -201,6 +208,21 @@ describe('parseCommandArgs - REPL inline flags match Commander', () => {
     expect(parseCommandArgs('config', ['--help', '--set-efficiency', '0.9'])).toEqual({
       options: { help: true, setEfficiency: '0.9' },
       error: null,
+    });
+  });
+
+  it('parses the charge-from-battery consent flags', () => {
+    expect(parseCommandArgs('charge-from-battery', ['--start', '--dry-run'])).toEqual({
+      options: { start: true, dryRun: true },
+      error: null,
+    });
+    expect(parseCommandArgs('charge-from-battery', ['--help'])).toEqual({
+      options: { help: true },
+      error: null,
+    });
+    expect(parseCommandArgs('charge-from-battery', ['--nope'])).toEqual({
+      options: {},
+      error: "error: unknown option '--nope'",
     });
   });
 

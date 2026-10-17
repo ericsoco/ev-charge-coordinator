@@ -746,11 +746,22 @@ program
           await stopEvCharging(currentContext());
           break;
 
-        case 'charge-from-battery':
-          // offerToStart is true here: the interactive path asks whether to
-          // begin charging once the limit is set. The one-shot command does not.
-          await chargeFromBattery(currentContext(), { offerToStart: true });
+        case 'charge-from-battery': {
+          const { options, error } = parseCommandArgs('charge-from-battery', args);
+          if (error) {
+            console.log(paint.warning(error));
+            break;
+          }
+          if (options.help) {
+            printCommandHelp('charge-from-battery');
+            break;
+          }
+          await chargeFromBattery(currentContext(), {
+            start: options.start === true,
+            dryRun: options.dryRun === true,
+          });
           break;
+        }
 
         case 'set-battery-buffer': {
           const bufferStr = await promptNumeric('Enter battery buffer percentage (0-100, ESC to cancel): ');
@@ -1031,17 +1042,18 @@ program
 program
   .command('charge-from-battery')
   .description('Set the EV charge limit from the energy the solar battery can spare (kWh math)')
-  .action(async () => {
+  .option('--start', 'Start charging after setting the limit')
+  .option('--dry-run', 'Compute and print the limit without sending anything to the vehicle')
+  .action(async (options) => {
     // Short-circuit preserved: Franklin's failure exits before Tesla is asked
     // for anything, which is also what `||` did here.
     requireService('FranklinWH', await initializeFranklin());
     requireService('Tesla', await initializeTesla());
-    
+
     try {
-      // offerToStart is false here, preserving the one-shot behaviour: it sets
-      // the limit and stops. The REPL passes true. That difference is now
-      // explicit rather than an accident of which copy you happen to read.
-      await runCommand((ctx) => chargeFromBattery(ctx, { offerToStart: false }));
+      await runCommand((ctx) =>
+        chargeFromBattery(ctx, { start: options.start === true, dryRun: options.dryRun === true })
+      );
     } catch (error) {
       console.error(paint.error(`Error: ${error instanceof Error ? error.message : error}`));
       process.exit(1);
