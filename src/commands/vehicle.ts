@@ -188,8 +188,9 @@ async function askForConfigField(
  * narrow `vehicle_data?endpoints=charge_state` read.
  *
  * Like every Tesla read, this does NOT wake the vehicle: an asleep car answers
- * HTTP 408 and describeError surfaces it verbatim (wake happens only on the
- * three command paths -- see the workplan's wake inventory).
+ * HTTP 408 and describeError surfaces the mapped message, which now carries
+ * asleep/timeout advice (wake happens only on the three command paths -- see
+ * the workplan's wake inventory).
  */
 export async function getChargingState(ctx: CommandContext): Promise<CommandResult> {
   if (!ctx.tesla?.isAuthenticated()) {
@@ -217,12 +218,21 @@ export async function getChargingState(ctx: CommandContext): Promise<CommandResu
 /**
  * Set the EV's charge limit from the energy the solar battery can spare.
  *
- * Flags are the consent model, identical in the REPL and the one-shot CLI:
- * by default the limit is set and charging is never started; `start` also
- * starts charging (and inherits startCharging's wake, response-envelope,
- * and state-confirmation checks); `dryRun` computes and prints the plan
- * without sending anything to the vehicle.
+ * Consent: `start` starts charging without prompting; `dryRun` computes and
+ * prints the plan without sending anything. With neither flag, an attached
+ * terminal (REPL or interactive one-shot) is asked "Start charging now? (y/n)"
+ * after the limit is set -- declining, or running without a TTY (scripted),
+ * leaves the limit as the only action. Starting echoes "Starting EV charging..."
+ * but prints no follow-up confirmation; `start` and the prompt share that path,
+ * which inherits startCharging's wake, response-envelope, and
+ * state-confirmation checks.
  */
+async function confirmStartNow(ctx: CommandContext): Promise<boolean> {
+  if (!ctx.interactive) return false;
+  const answer = (await ctx.ask('Start charging now? (y/n): ')).trim().toLowerCase();
+  return answer === 'y' || answer === 'yes';
+}
+
 export async function chargeFromBattery(
   ctx: CommandContext,
   options: { start?: boolean; dryRun?: boolean } = {}
@@ -313,10 +323,10 @@ export async function chargeFromBattery(
     await ctx.tesla.setChargeLimit(limit.targetPercent);
     log(ctx, paint.success(`✓ EV charge limit set to ${limit.targetPercent}%`));
 
-    if (options.start) {
+    const shouldStart = options.start || (await confirmStartNow(ctx));
+    if (shouldStart) {
       log(ctx, paint.info('Starting EV charging...'));
       await ctx.tesla.startCharging();
-      log(ctx, paint.success('✓ EV charging started'));
     }
     return { ok: true };
   } catch (error) {
