@@ -367,28 +367,73 @@ describe('chargeFromBattery', () => {
   });
 
   // The flags are the consent model, identical in the REPL and one-shot path.
-  it('sets the limit without starting charging by default', async () => {
+  it('sets the limit without starting (or prompting) when no TTY is attached', async () => {
+    const ask = vi.fn(async () => 'y');
     const { ctx, calls } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
+      ask,
+      interactive: false,
+    });
+    const result = await chargeFromBattery(ctx);
+
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit[0]).toEqual([66]);
+    // Scripted runs must never block on stdin, even for a would-be 'y'.
+    expect(ask).not.toHaveBeenCalled();
+    expect(calls.startCharging).toBeUndefined();
+  });
+
+  it('prompts after setting the limit and starts on y, with no confirmation line', async () => {
+    const ask = vi.fn(async () => 'y');
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => 90 },
+      buffer: 20,
+      ask,
+      interactive: true,
+    });
+    const result = await chargeFromBattery(ctx);
+
+    expect(result.ok).toBe(true);
+    expect(ask).toHaveBeenCalledWith('Start charging now? (y/n): ');
+    expect(calls.setChargeLimit[0]).toEqual([66]);
+    expect(calls.startCharging).toBeDefined();
+    expect(out.join('\n')).toContain('Starting EV charging...');
+    // The start is announced, not confirmed afterwards.
+    expect(out.join('\n')).not.toContain('✓ EV charging started');
+  });
+
+  it('stops after the limit when the prompt is declined', async () => {
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => 90 },
+      buffer: 20,
+      ask: async () => 'n',
+      interactive: true,
     });
     const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([66]);
     expect(calls.startCharging).toBeUndefined();
+    expect(out.join('\n')).not.toContain('Starting EV charging...');
   });
 
-  it('starts charging when --start is given, after setting the limit', async () => {
-    const { ctx, calls } = makeContext({
+  it('starts charging when --start is given, after setting the limit, without prompting', async () => {
+    const ask = vi.fn(async () => 'n');
+    const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
+      ask,
+      interactive: true,
     });
     const result = await chargeFromBattery(ctx, { start: true });
 
     expect(result.ok).toBe(true);
+    expect(ask).not.toHaveBeenCalled();
     expect(calls.setChargeLimit[0]).toEqual([66]);
     expect(calls.startCharging).toBeDefined();
+    expect(out.join('\n')).toContain('Starting EV charging...');
+    expect(out.join('\n')).not.toContain('✓ EV charging started');
   });
 
   it('sends nothing on a dry run, but reports the target', async () => {
