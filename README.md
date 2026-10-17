@@ -279,6 +279,12 @@ npm start stop-ev-charging
 # Set charge limit from the energy the solar battery can spare (kWh math)
 npm start charge-from-battery
 
+# ... the same, and start charging right away
+npm start charge-from-battery --start
+
+# ... preview the computed limit without sending anything to the vehicle
+npm start charge-from-battery --dry-run
+
 # Set battery buffer to 20%
 npm start set-battery-buffer 20
 
@@ -304,7 +310,7 @@ npm start config --clear-all
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%) |
 | `start-ev-charging` | Start charging the EV |
 | `stop-ev-charging` | Stop charging the EV |
-| `charge-from-battery` | Set EV charge limit from the energy the solar battery can spare (kWh math) |
+| `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). `--start` also starts charging (verified); `--dry-run` prints the computed limit without sending anything |
 | `set-battery-buffer <percent>` | Set the amount of charge to keep in the solar battery, 0-100% (written to `config.json`) |
 | `config` | Show current credentials and the energy config (with its file path) |
 | `config --clear-franklin` | Clear FranklinWH credentials |
@@ -331,7 +337,8 @@ When running in interactive mode (`start`), the following commands are available
 - `set-ev-charge-limit` - Set EV charge limit (prompts for value)
 - `start-ev-charging` - Start EV charging
 - `stop-ev-charging` - Stop EV charging
-- `charge-from-battery` - Smart charging based on solar battery
+- `charge-from-battery` - Smart charging based on solar battery (`--start` to
+  also begin charging, `--dry-run` to preview; same flags as the one-shot)
 - `set-battery-buffer` - Set battery buffer percentage
 - `config` - Show or update configuration; accepts the same flags as the
   one-shot command (e.g. `config --set-efficiency 0.9`); `config --help`
@@ -377,7 +384,7 @@ one-shot `node dist/index.js help <command>`.
 2. Convert the energy above your configured buffer (your reserve) into kWh
 3. Add that energy to the EV's current charge, accounting for charging
    efficiency, and request the resulting percent limit (Tesla clamps to 50-100%)
-4. Optionally start charging immediately
+4. Optionally start charging immediately (`--start`)
 
 This ensures your EV only charges using excess energy from your solar battery system.
 

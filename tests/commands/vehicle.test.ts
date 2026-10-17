@@ -245,7 +245,7 @@ describe('chargeFromBattery', () => {
       franklin: { getStateOfCharge: async () => 20 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe(
@@ -264,7 +264,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 55 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('cannot raise the EV charge limit above its current 55%');
@@ -279,7 +279,7 @@ describe('chargeFromBattery', () => {
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([66]);
@@ -296,7 +296,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 50.4 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([51]);
@@ -309,7 +309,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 80 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([91]);
@@ -322,7 +322,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 20 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([50]);
@@ -333,7 +333,7 @@ describe('chargeFromBattery', () => {
     const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => undefined as unknown as number },
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('Solar battery SoC unavailable');
@@ -345,7 +345,7 @@ describe('chargeFromBattery', () => {
     const { ctx, calls, out } = makeContext({
       tesla: { getStateOfCharge: async () => undefined as unknown as number },
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('EV SoC unavailable');
@@ -359,7 +359,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 100 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('Cannot charge: the EV is already fully charged');
@@ -367,46 +367,61 @@ describe('chargeFromBattery', () => {
     expect(out.join('\n')).toContain('the EV is already fully charged');
   });
 
-  // The only behavioural difference between the REPL and the one-shot path is now
-  // an explicit argument rather than an accident of which copy you read.
-  it('offers to start charging when asked and the user agrees', async () => {
+  // The flags are the consent model, identical in the REPL and one-shot path.
+  it('sets the limit without starting charging by default', async () => {
     const { ctx, calls } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
-      ask: async () => 'y',
     });
-    await chargeFromBattery(ctx, { offerToStart: true });
+    const result = await chargeFromBattery(ctx);
 
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit[0]).toEqual([66]);
+    expect(calls.startCharging).toBeUndefined();
+  });
+
+  it('starts charging when --start is given, after setting the limit', async () => {
+    const { ctx, calls } = makeContext({
+      franklin: { getStateOfCharge: async () => 90 },
+      buffer: 20,
+    });
+    const result = await chargeFromBattery(ctx, { start: true });
+
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit[0]).toEqual([66]);
     expect(calls.startCharging).toBeDefined();
   });
 
-  it('never prompts when not asked', async () => {
-    const ask = vi.fn(async () => 'y');
-    const { ctx, calls } = makeContext({
+  it('sends nothing on a dry run, but reports the target', async () => {
+    const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
-      ask,
     });
-    await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx, { dryRun: true });
 
-    expect(ask).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit).toBeUndefined();
     expect(calls.startCharging).toBeUndefined();
+    expect(out.join('\n')).toContain('✓ Dry run: would set the EV charge limit to 66%');
   });
 
-  it('does not start charging when the user declines', async () => {
-    const { ctx, calls } = makeContext({
+  it('rejects --start combined with --dry-run before touching anything', async () => {
+    const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
-      ask: async () => 'n',
     });
-    await chargeFromBattery(ctx, { offerToStart: true });
+    const result = await chargeFromBattery(ctx, { start: true, dryRun: true });
 
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('--start and --dry-run are mutually exclusive');
+    expect(calls.setChargeLimit).toBeUndefined();
     expect(calls.startCharging).toBeUndefined();
+    expect(out.join('\n')).toContain('mutually exclusive');
   });
 
   it('requires both systems', async () => {
     const { ctx } = makeContext({ franklin: null });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/must be connected/);
@@ -421,7 +436,7 @@ describe('chargeFromBattery', () => {
         partial: {},
       },
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('invalid energy config');
@@ -433,7 +448,7 @@ describe('chargeFromBattery', () => {
     const { ctx, calls, out } = makeContext({
       energyConfig: { config: null, missing: ALL_FIELDS_MISSING, invalid: [], partial: {} },
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('energy config incomplete');
@@ -454,7 +469,7 @@ describe('chargeFromBattery', () => {
         return answers[asked.length - 1] ?? null;
       },
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(true);
     expect(asked).toHaveLength(4);
@@ -483,7 +498,7 @@ describe('chargeFromBattery', () => {
         return '0.9';
       },
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(true);
     expect(asked).toHaveLength(1);
@@ -496,7 +511,7 @@ describe('chargeFromBattery', () => {
       interactive: true,
       askNumeric: async () => null,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('energy config setup cancelled');
@@ -513,7 +528,7 @@ describe('chargeFromBattery', () => {
       interactive: true,
       askNumeric: async () => answers[prompts++] ?? null,
     });
-    const result = await chargeFromBattery(ctx, { offerToStart: false });
+    const result = await chargeFromBattery(ctx);
 
     expect(result.ok).toBe(true);
     expect(prompts).toBe(5); // the out-of-range answer cost one extra prompt

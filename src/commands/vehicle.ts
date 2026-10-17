@@ -237,13 +237,22 @@ export async function getChargingState(ctx: CommandContext): Promise<CommandResu
 /**
  * Set the EV's charge limit from the energy the solar battery can spare.
  *
- * offerToStart is true on the interactive path (the REPL), false for the
- * one-shot command: after the limit is set, ask whether to begin charging now.
+ * Flags are the consent model, identical in the REPL and the one-shot CLI:
+ * by default the limit is set and charging is never started; `start` also
+ * starts charging (and inherits startCharging's wake, response-envelope,
+ * and state-confirmation checks); `dryRun` computes and prints the plan
+ * without sending anything to the vehicle.
  */
 export async function chargeFromBattery(
   ctx: CommandContext,
-  options: { offerToStart: boolean }
+  options: { start?: boolean; dryRun?: boolean } = {}
 ): Promise<CommandResult> {
+  if (options.start && options.dryRun) {
+    const message = '--start and --dry-run are mutually exclusive';
+    log(ctx, paint.warning(message));
+    return { ok: false, error: message };
+  }
+
   if (!ctx.franklin?.isAuthenticated() || !ctx.tesla?.isAuthenticated()) {
     const message = 'Both FranklinWH and Tesla must be connected';
     log(ctx, paint.warning(message));
@@ -312,16 +321,22 @@ export async function chargeFromBattery(
       log(ctx, paint.info(`Target limited by the EV pack capacity (${MAX_EV_CHARGE_LIMIT}%)`));
     }
 
+    if (options.dryRun) {
+      log(
+        ctx,
+        paint.success(`✓ Dry run: would set the EV charge limit to ${limit.targetPercent}%`)
+      );
+      return { ok: true };
+    }
+
     log(ctx, paint.info('Setting the EV charge limit (waking the vehicle if needed; asleep cars take up to a minute)...'));
     await ctx.tesla.setChargeLimit(limit.targetPercent);
     log(ctx, paint.success(`✓ EV charge limit set to ${limit.targetPercent}%`));
 
-    if (options.offerToStart) {
-      const answer = await ctx.ask('Start charging now? (y/n): ');
-      if (answer.trim().toLowerCase() === 'y') {
-        await ctx.tesla.startCharging();
-        log(ctx, paint.success('✓ EV charging started'));
-      }
+    if (options.start) {
+      log(ctx, paint.info('Starting EV charging...'));
+      await ctx.tesla.startCharging();
+      log(ctx, paint.success('✓ EV charging started'));
     }
     return { ok: true };
   } catch (error) {
