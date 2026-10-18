@@ -69,3 +69,22 @@ by this branch):
   used on macOS, so existing login-keychain entries read transparently; on other
   platforms a miss falls through to the encrypted file (or a one-time re-auth if
   neither store has data).
+
+### 2026-10-18 — `config --clear-all` renamed to `--clear-credentials`
+
+Branch `rename/clear-all-to-clear-credentials` (TODO.md item 25, user-maintained
+file left untouched):
+
+- `index.ts`: Commander option, `ConfigOptions` field, and handler condition
+  renamed (`clearAll` → `clearCredentials`); the success message still reads
+  "✓ All credentials cleared".
+- `repl.ts`: `BOOLEAN_FLAGS.config` updated, so the REPL parses the new flag
+  (camelCasing is generic) and Commander's `--help` shows it. The retired
+  `--clear-all` now errors with `unknown option` — deliberate hard rename, no
+  back-compat alias (personal CLI, per TODO wording "Rename").
+- `repl-commands.test.ts`: parse case added for `--clear-credentials`, plus a
+  pin rejecting `--clear-all` so the rename cannot silently regress.
+- README: usage example + CLI reference table row.
+- Gate: `npm run check` green. `node dist/index.js config --help` verified to
+  show the new flag. The flag itself was not executed live (it would delete
+  real stored credentials).

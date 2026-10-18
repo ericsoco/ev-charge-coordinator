@@ -309,7 +309,7 @@ npm start config --set-buffer 20
 npm start config
 
 # Clear stored third-party credentials
-npm start config --clear-all
+npm start config --clear-credentials
 ```
 
 ## CLI Reference
@@ -331,7 +331,7 @@ npm start config --clear-all
 | `config` | Show current credentials and the energy config (with its file path) |
 | `config --clear-franklin` | Clear FranklinWH credentials |
 | `config --clear-tesla` | Clear Tesla credentials |
-| `config --clear-all` | Clear all stored credentials |
+| `config --clear-credentials` | Clear all stored credentials |
 | `config --tesla-region <na\|eu\|cn>` | Choose the Tesla Fleet API deployment |
 | `config --tesla-domain <domain>` | Set the domain that hosts the virtual key public key |
 | `config --show-public-key` | Print the virtual key public key Tesla reads |
