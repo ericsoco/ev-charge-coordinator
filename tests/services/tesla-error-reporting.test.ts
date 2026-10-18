@@ -264,7 +264,9 @@ describe('TeslaService error reporting', () => {
     const service = serviceFailingWith(408, { error: 'timeout' });
     service.setVin('5YJTESTVIN000001');
 
-    await expect(service.getStateOfCharge()).rejects.toThrow(/HTTP 408: timeout .*Reads do not wake it/);
+    await expect(service.getStateOfCharge()).rejects.toThrow(
+      /HTTP 408: timeout .*asleep or offline\. Reads do not wake vehicle/
+    );
   });
 
   it("keeps Tesla's full 408 sentence and appends the same advice", async () => {
@@ -274,7 +276,7 @@ describe('TeslaService error reporting', () => {
     service.setVin('5YJTESTVIN000001');
 
     await expect(service.getStateOfCharge()).rejects.toThrow(
-      /408: vehicle unavailable: vehicle is offline or asleep .*it is likely asleep or offline/
+      /408: vehicle unavailable: vehicle is offline or asleep .*vehicle is likely asleep or offline\. Reads do not wake vehicle/
     );
   });
 
@@ -284,7 +286,9 @@ describe('TeslaService error reporting', () => {
     const service = serviceFailingWith(408, '{"error": "timeout"}');
     service.setVin('5YJTESTVIN000001');
 
-    await expect(service.getStateOfCharge()).rejects.toThrow(/HTTP 408: timeout .*Reads do not wake it/);
+    await expect(service.getStateOfCharge()).rejects.toThrow(
+      /HTTP 408: timeout .*asleep or offline\. Reads do not wake vehicle/
+    );
   });
 
   it('does not wrap an error that is not an axios failure', async () => {
