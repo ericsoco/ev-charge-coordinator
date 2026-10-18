@@ -910,9 +910,6 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
   automated away by this CLI.
 - The `.venv` currently resolves only because this session has it on `PATH`; Phase 2 item 6 is
   what makes the proxy startup reproducible for other developers.
-- Deleting the percent rule (Phase 4) is a **behavior change** for anyone already relying on
-  `charge-from-battery`; call it out in `CHANGELOG.md` as breaking. (`CHANGELOG.md` was
-  deferred in Phase 5 on 2026-10-17 — keep this pending until it lands.)
 
 ---
 
