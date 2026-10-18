@@ -124,6 +124,21 @@ JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
 10. Re-run `node dist/index.js pair-tesla-key --domain your-domain.com` and open the
     pairing link on your phone.
 
+### Authorize host vs. token host
+
+Tesla uses two different OAuth hosts, and sending a token exchange to the wrong
+one fails in a way the docs make easy to miss:
+
+- **Authorize** (browser consent): `https://auth.tesla.com/oauth2/v3/authorize`
+- **Token exchange** (`authorization_code` and `client_credentials` grants):
+  `https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token`
+
+The OIDC metadata document advertises `auth.tesla.com/oauth2/v3/token`, but
+Tesla's Partner Tokens and Third-Party Tokens pages carry an explicit "Important"
+note -- and curl examples -- requiring `fleet-auth.prd.vn.cloud.tesla.com`. The
+CLI follows the explicit note. If Tesla changes this, override with
+`ECC_TESLA_TOKEN_URL` (see Troubleshooting).
+
 ### Tesla Virtual Key pairing
 
 Vehicles that use the Vehicle Command Protocol verify a signature on every command,
@@ -357,28 +372,34 @@ one-shot `node dist/index.js help <command>`.
 ### Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    EV Charge Coordinator                    │
-│                      (TypeScript/Node.js)                   │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────────┐         ┌──────────────────┐           │
-│  │   Tesla Service │         │ FranklinWH Svc   │           │
-│  │  (Fleet API)    │         │ (HTTP Proxy)     │           │
-│  └────────┬────────┘         └────────┬─────────┘           │
-└───────────┼───────────────────────────┼─────────────────────┘
-            │                           │
-            ▼                           ▼
-     ┌──────────────┐          ┌──────────────────┐
-     │ Tesla Fleet  │          │  Python Proxy    │
-     │     API      │          │  (Flask Server)  │
-     └──────────────┘          └────────┬─────────┘
-                                        │
-                                        ▼
-                               ┌──────────────────┐
-                               │  FranklinWH API  │
-                               │   (franklinwh)   │
-                               └──────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                      EV Charge Coordinator                       │
+│                        (TypeScript/Node.js)                      │
+│                                                                  │
+│  ┌────────────┐   ┌─────────────────┐   ┌────────────────────┐   │
+│  │ Commands   │   │ TeslaService    │   │ FranklinWHService  │   │
+│  │ (vehicle,  │   │ (Fleet API +    │   │ (BatteryService,   │   │
+│  │  repl, …)  │   │  OAuth)         │   │  reads via proxy)  │   │
+│  └────────────┘   └───────┬─────────┘   └─────────┬──────────┘   │
+└───────────────────────────┼───────────────────────┼──────────────┘
+                            │ commands (REST)       │ spawns
+                            ▼                       ▼
+                ┌───────────────────────┐ ┌──────────────────────┐
+                │  tesla-http-proxy     │ │  Python Proxy        │
+                │  (Tesla's Go sidecar, │ │  (Flask, spawned per │
+                │  TLS :4443; spawned   │ │  session or one-shot)│
+                │  per session/one-shot)│ └──────────┬───────────┘
+                └───────────┬───────────┘            │ franklinwh
+                            │ signed + OAuth         ▼
+                            ▼              ┌──────────────────────┐
+                   ┌──────────────────┐    │   FranklinWH API     │
+                   │ Tesla Fleet API  │    └──────────────────────┘
+                   └──────────────────┘
 ```
+
+Reads (`get-battery-soc`, `get-charging-state`, …) go straight to the Fleet
+API; only command endpoints need the signing sidecar. Both sidecars are torn
+down on `exit` and by one-shot commands when they exit.
 
 ### Smart Charging Flow
 
@@ -390,6 +411,21 @@ one-shot `node dist/index.js help <command>`.
    `y` sets the limit and starts charging, `n` sends nothing; `--start` skips
    the prompt and does both, `--dry-run` stops after the preview
 
+The math in full (`src/utils/energy.ts`; done in kWh, never percent-on-percent,
+because a percent of the ~13.5 kWh house pack and a percent of a ~75 kWh car are
+different quantities):
+
+```
+available   = batteryCapacityKwh × max(0, batterySoc − bufferPercent) / 100
+evCurrent   = evBatteryKwh × evSoc / 100
+evTarget    = min(evBatteryKwh, evCurrent + available × chargeEfficiency)
+targetLimit = clamp(round(evTarget / evBatteryKwh × 100), 50, 100)
+```
+
+The plan also reports *why* the target landed where it did: `battery` (the house
+pack cannot lift the limit further), `ev-capacity` (the car would overfill), or
+`tesla-minimum` (the kWh math fell below Tesla's 50% floor).
+
 This ensures your EV only charges using excess energy from your solar battery system.
 
 ## Security
@@ -397,6 +433,9 @@ This ensures your EV only charges using excess energy from your solar battery sy
 - Credentials are stored securely using:
   - System keychain (via `keytar`) when available
   - AES-256-GCM encrypted file storage as fallback
+  (`keytar` is unmaintained and ships no prebuilt binaries for newer Node
+  versions; the CLI builds it from source where needed, and the encrypted-file
+  fallback takes over automatically when that is impossible)
 - OAuth tokens are automatically refreshed
 - No credentials are logged or exposed in error messages
 
@@ -407,19 +446,30 @@ This ensures your EV only charges using excess energy from your solar battery sy
 ```
 ev-charge-coordinator/
 ├── src/
-│   ├── index.ts              # CLI entry point
+│   ├── index.ts                  # CLI entry point (Commander)
+│   ├── commands/
+│   │   ├── context.ts            # shared command context, services, prompts
+│   │   ├── prompt.ts             # masked prompts on one readline interface
+│   │   ├── repl.ts               # interactive mode
+│   │   └── vehicle.ts            # vehicle commands + VCP sidecar wiring
 │   ├── services/
-│   │   ├── FranklinWHService.ts
-│   │   └── TeslaService.ts
-│   ├── types/
-│   │   ├── battery.ts
-│   │   └── ev.ts
+│   │   ├── FranklinWHService.ts  # BatteryService via the Python proxy
+│   │   ├── TeslaService.ts       # EVService via the Fleet API
+│   │   ├── TeslaCommandProxy.ts  # manages the tesla-http-proxy sidecar
+│   │   ├── ProcessManager.ts     # generic sidecar spawn/teardown
+│   │   └── tesla/                # Fleet API wire format (oauth, endpoints, virtual key)
+│   ├── types/                    # BatteryService / EVService interfaces
 │   └── utils/
-│       └── credentials.ts
+│       ├── config.ts             # ~/.ev-charge-coordinator/config.json
+│       ├── credentials.ts        # keychain (keytar) / encrypted-file storage
+│       ├── energy.ts             # charge-from-battery math (pure)
+│       └── color.ts              # output theming
 ├── python/
-│   ├── franklin_proxy.py     # FranklinWH API proxy server
+│   ├── franklin_proxy.py         # Flask proxy around the franklinwh package
 │   └── requirements.txt
-├── dist/                     # Compiled JavaScript
+├── scripts/                      # dev checks (check-franklin-auth.py, …)
+├── tests/                        # vitest suites; live tests gated by RUN_LIVE_TESTS=1
+├── dist/                         # Compiled JavaScript (npm run build)
 ├── package.json
 ├── tsconfig.json
 └── README.md
@@ -430,6 +480,20 @@ ev-charge-coordinator/
 ```bash
 npm run build
 ```
+
+### Checks
+
+```bash
+npm run check       # build + lint + typecheck + unit tests — the gate for any change
+npm run test        # unit tests only (vitest)
+npm run lint
+npm run typecheck
+```
+
+Tests that hit the real FranklinWH / Tesla APIs are gated behind
+`RUN_LIVE_TESTS=1` and need local credentials; everything else runs offline.
+CI (`.github/workflows/ci.yml`) runs the same checks on Node 24 and 26 and
+verifies that the Python proxy compiles.
 
 ### Running in Development
 
@@ -476,6 +540,29 @@ prompt library, no second interface to double-echo against. The Gateway ID is
 deliberately unmasked: it is a device identifier visible in the FranklinWH app,
 not a secret. Without a TTY (piped input, CI) there is nothing to mask with, so
 the prompt says so rather than echoing silently.
+
+### Python interpreter resolution
+
+The FranklinWH proxy runs on your local Python, resolved in this order:
+
+1. the project's `.venv/bin/python`
+2. `$ECC_PYTHON`, if set
+3. `python3` on your `PATH`
+
+If none of those can run the proxy, the CLI stops with the interpreter it tried
+and the fix:
+
+```
+✗ Could not run the project .venv (/path/to/.venv/bin/python).
+  Fix: python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt
+```
+
+To check that your interpreter and credentials reach the real FranklinWH
+library:
+
+```bash
+npm run check:franklin -- --email you@example.com
+```
 
 ### Tesla Authentication Issues
 
