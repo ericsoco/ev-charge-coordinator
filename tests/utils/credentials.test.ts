@@ -204,7 +204,7 @@ describe('CredentialStore - module surface', () => {
   });
 
   it('takes the file fallback instead of the keychain when ECC_DISABLE_KEYCHAIN is set', async () => {
-    // If keytar were reachable, save() would target the macOS keychain and no .enc file
+    // If the keychain were reachable, save() would target the macOS keychain and no .enc file
     // would appear. Its presence proves the encrypted-file path was taken.
     const store = new mod.CredentialStore();
     await store.setFranklinCredentials('user@example.com', 'hunter2', 'GW12345');
