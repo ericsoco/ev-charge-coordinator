@@ -74,3 +74,4 @@ this historical information can be left in the workplan if valuable.
 ## Development
 Write a timestamp at the top of every final response, whether Plan or Act mode.
 Update workplan.md after every Act response to ensure other agents can pick up where you left off.
+For the completed Phase 0–5 record, see workplan-history.md (historical — reference only).
