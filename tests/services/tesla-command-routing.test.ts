@@ -204,9 +204,39 @@ describe('vehicle command response envelopes', () => {
   });
 
   it('accepts "already in that state" reasons as no-ops', () => {
-    for (const reason of ['requested', 'is_charging', 'not_charging']) {
+    for (const reason of ['requested', 'is_charging', 'not_charging', 'already_set']) {
       expect(() => assertVehicleCommandAccepted({ response: { result: false, reason } })).not.toThrow();
     }
+  });
+
+  it('accepts benign reasons wrapped by the proxy, in either envelope', () => {
+    // set_charge_limit reports `already_set` (limit already at target); throwing
+    // on it aborted `charge-from-battery` right before the start step. The
+    // proxy surfaces the car's reason in either of two shapes, both observed live.
+    const wrapped = 'car could not execute command: already_set';
+    expect(() =>
+      assertVehicleCommandAccepted({
+        response: null,
+        error: wrapped,
+        error_description: '',
+        txid: '00000000-0000-0000-0000-000000000000',
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertVehicleCommandAccepted({ response: { result: false, reason: wrapped } })
+    ).not.toThrow();
+    // Non-benign wrapped reasons keep the full message in both shapes, and get
+    // the per-reason hint exactly as a bare Fleet reason would.
+    expect(() =>
+      assertVehicleCommandAccepted({
+        response: { result: false, reason: 'car could not execute command: charging not allowed' },
+      })
+    ).toThrow('Vehicle rejected the command: car could not execute command: charging not allowed');
+    expect(() =>
+      assertVehicleCommandAccepted({
+        response: { result: false, reason: 'car could not execute command: disconnected' },
+      })
+    ).toThrow(/car could not execute command: disconnected \(the vehicle is not connected to a charger\)/);
   });
 
   it('fails on a Fleet REST refusal, naming the reason and its meaning', () => {

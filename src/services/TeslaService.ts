@@ -95,10 +95,11 @@ function readStatusFrom(error: unknown): number | undefined {
 }
 
 /**
- * Reasons a Fleet REST command reports as `result:false` that mean the
- * requested end state already holds — a no-op, not a failure.
+ * Reasons a vehicle command reports (Fleet REST `result:false`, or the signed
+ * proxy's wrapped `car could not execute command: …`) that mean the requested
+ * end state already holds — a no-op, not a failure.
  */
-const BENIGN_COMMAND_REASONS = new Set(['requested', 'is_charging', 'not_charging']);
+const BENIGN_COMMAND_REASONS = new Set(['requested', 'is_charging', 'not_charging', 'already_set']);
 
 /** Extra guidance for the failure reasons the Fleet docs enumerate. */
 function rejectedReasonHint(reason: string): string {
@@ -156,12 +157,27 @@ export function assertVehicleCommandAccepted(data: unknown): void {
     | undefined;
 
   const response = body?.response;
-  if (response && response.result === false) {
-    const reason =
-      typeof response.reason === 'string' && response.reason ? response.reason : 'unknown reason';
-    if (BENIGN_COMMAND_REASONS.has(reason)) return; // end state already holds
-    const hint = rejectedReasonHint(reason);
-    throw new Error(`Vehicle rejected the command: ${reason}${hint ? ` (${hint})` : ''}`);
+  const envelopeReason =
+    response && response.result === false
+      ? typeof response.reason === 'string' && response.reason
+        ? response.reason
+        : 'unknown reason'
+      : undefined;
+
+  // The proxy can deliver the car's own reason behind this prefix in either
+  // envelope (set_charge_limit reports `already_set` when the limit already
+  // matches); benign "end state already holds" answers pass through either way.
+  const wrapped = (envelopeReason ?? (typeof body?.error === 'string' ? body.error : '')).match(
+    /car could not execute command:\s*(.+)$/
+  );
+  const carReason = wrapped?.[1]?.trim();
+  if (carReason && BENIGN_COMMAND_REASONS.has(carReason)) return;
+
+  if (envelopeReason !== undefined) {
+    if (BENIGN_COMMAND_REASONS.has(envelopeReason)) return; // end state already holds
+    // Hint on the car's own reason when the proxy wrapped it, else directly.
+    const hint = rejectedReasonHint(carReason ?? envelopeReason);
+    throw new Error(`Vehicle rejected the command: ${envelopeReason}${hint ? ` (${hint})` : ''}`);
   }
 
   if (typeof body?.error === 'string' && body.error.length > 0) {
@@ -169,7 +185,10 @@ export function assertVehicleCommandAccepted(data: unknown): void {
       typeof body.error_description === 'string' && body.error_description
         ? ` (${body.error_description})`
         : '';
-    throw new Error(`Vehicle rejected the command: ${body.error}${detail}`);
+    const hint = carReason ? rejectedReasonHint(carReason) : '';
+    throw new Error(
+      `Vehicle rejected the command: ${body.error}${hint ? ` (${hint})` : ''}${detail}`
+    );
   }
 }
 
