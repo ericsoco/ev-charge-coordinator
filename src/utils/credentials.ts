@@ -1,8 +1,8 @@
 /**
  * Secure credential storage and management.
- * 
- * Uses keytar for secure system keychain storage, with fallback to
- * encrypted file storage when keychain is not available.
+ *
+ * Uses @napi-rs/keyring for secure system keychain storage, with fallback to
+ * encrypted file storage when the keychain is not available.
  */
 
 import * as fs from 'fs';
@@ -66,10 +66,17 @@ interface StoredCredentials {
   };
 }
 
-let keytar: typeof import('keytar') | null = null;
+/** The only keychain operations this module needs, backed by @napi-rs/keyring. */
+interface KeyChain {
+  get(): string | null;
+  set(value: string): void;
+  delete(): void;
+}
 
-async function getKeytar(): Promise<typeof import('keytar') | null> {
-  if (keytar !== null) return keytar;
+let keyChain: KeyChain | null = null;
+
+async function getKeyChain(): Promise<KeyChain | null> {
+  if (keyChain !== null) return keyChain;
 
   // ECC_DISABLE_KEYCHAIN forces the encrypted-file path. Required in tests (a real
   // macOS keychain is shared state) and in CI/headless runs.
@@ -78,10 +85,19 @@ async function getKeytar(): Promise<typeof import('keytar') | null> {
   }
 
   try {
-    keytar = await import('keytar');
-    return keytar;
+    const { Entry } = await import('@napi-rs/keyring');
+    // Pin Linux to Secret Service: the default auto-selection silently falls back
+    // to the kernel keyring, which does not survive reboots -- secrets appearing
+    // to work until a reboot, then vanishing, is worse than the file fallback.
+    const entry = new Entry(SERVICE_NAME, 'credentials', { linux: { store: 'secret-service' } });
+    keyChain = {
+      get: () => entry.getPassword(),
+      set: (value: string) => { entry.setPassword(value); },
+      delete: () => { entry.deletePassword(); },
+    };
+    return keyChain;
   } catch {
-    // keytar not available (common in headless environments)
+    // Keyring unavailable (headless, locked, or no Secret Service on Linux)
     return null;
   }
 }
@@ -188,11 +204,11 @@ export class CredentialStore {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    const kt = await getKeytar();
+    const kc = await getKeyChain();
 
-    if (kt) {
+    if (kc) {
       try {
-        const stored = await kt.getPassword(SERVICE_NAME, 'credentials');
+        const stored = kc.get();
         if (stored) {
           this.credentials = JSON.parse(stored);
           this.backend = 'keychain';
@@ -222,9 +238,9 @@ export class CredentialStore {
     // that loaded from the file must save to the file, even if the keychain
     // becomes reachable later in the same process.
     if (this.backend === 'keychain') {
-      const kt = await getKeytar();
-      if (kt) {
-        await kt.setPassword(SERVICE_NAME, 'credentials', JSON.stringify(this.credentials));
+      const kc = await getKeyChain();
+      if (kc) {
+        kc.set(JSON.stringify(this.credentials));
         return;
       }
       // The keychain went away after we resolved to it. Write the file rather
@@ -321,10 +337,10 @@ export class CredentialStore {
     this.credentials = {};
     await this.save();
     
-    const kt = await getKeytar();
-    if (kt) {
+    const kc = await getKeyChain();
+    if (kc) {
       try {
-        await kt.deletePassword(SERVICE_NAME, 'credentials');
+        kc.delete();
       } catch {
         // Ignore errors
       }
