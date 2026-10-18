@@ -184,9 +184,20 @@ describe('parseCommandArgs - REPL inline flags match Commander', () => {
       options: { clearTesla: true },
       error: null,
     });
+    expect(parseCommandArgs('config', ['--clear-credentials'])).toEqual({
+      options: { clearCredentials: true },
+      error: null,
+    });
     expect(parseCommandArgs('pair-tesla-key', ['--check-only'])).toEqual({
       options: { checkOnly: true },
       error: null,
+    });
+  });
+
+  it('rejects the retired --clear-all flag (renamed to --clear-credentials)', () => {
+    expect(parseCommandArgs('config', ['--clear-all'])).toEqual({
+      options: {},
+      error: "error: unknown option '--clear-all'",
     });
   });
 

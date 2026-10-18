@@ -56,7 +56,7 @@ const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
 };
 
 const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  config: ['clear-franklin', 'clear-tesla', 'clear-all', 'show-public-key', 'help'],
+  config: ['clear-franklin', 'clear-tesla', 'clear-credentials', 'show-public-key', 'help'],
   'pair-tesla-key': ['check-only', 'skip-registration', 'help'],
   'charge-from-battery': ['start', 'dry-run', 'help'],
 };

@@ -1172,7 +1172,7 @@ interface ConfigOptions {
   showPublicKey?: boolean;
   clearFranklin?: boolean;
   clearTesla?: boolean;
-  clearAll?: boolean;
+  clearCredentials?: boolean;
   teslaRegion?: string;
   teslaDomain?: string;
   setBatteryKwh?: string;
@@ -1259,7 +1259,7 @@ async function runConfig(options: ConfigOptions): Promise<boolean> {
     console.log(paint.positive('✓ Tesla credentials cleared'));
     return true;
   }
-  if (options.clearAll) {
+  if (options.clearCredentials) {
     await credentialStore.clearAll();
     console.log(paint.positive('✓ All credentials cleared'));
     return true;
@@ -1296,7 +1296,7 @@ program
   .description('Show or update configuration')
   .option('--clear-franklin', 'Clear FranklinWH credentials')
   .option('--clear-tesla', 'Clear Tesla credentials')
-  .option('--clear-all', 'Clear all stored credentials')
+  .option('--clear-credentials', 'Clear all stored credentials')
   .option('--tesla-region <region>', 'Set the Tesla Fleet API deployment (na | eu | cn)')
   .option('--tesla-domain <domain>', 'Set the domain that hosts the virtual key public key')
   .option('--show-public-key', 'Print the virtual key public key that Tesla reads')
