@@ -330,9 +330,8 @@ export function describeTeslaError(status: number | undefined, raw: string): str
     // deliberately never wake the vehicle (wake lives on the three command
     // paths -- see the workplan's wake inventory), so the advice has to say so.
     return (
-      `${statusText}${safeRaw} - the vehicle did not respond in time; it is likely ` +
-      'asleep or offline. Reads do not wake it: retry, or wake the vehicle with an ' +
-      "interacting command (e.g. `charge-from-battery --start`), and check the vehicle's connectivity."
+      `${statusText}${safeRaw} - vehicle is likely asleep or offline.` +
+      'Reads do not wake vehicle; issue a command (e.g. `charge-from-battery --start`).'
     );
   }
   if (status === 412) {

@@ -1063,9 +1063,8 @@ Branch `fix/phase-4-followups`.
   asleep` and a terse `{"error": "timeout"}` (confirmed earlier in-session:
   both reads succeed while the car is awake). `describeTeslaError` had no 408
   branch, so the raw body reached the terminal verbatim. Fixes:
-  a 408 branch appends asleep/offline advice ("Reads do not wake it: retry, or
-  wake the vehicle with an interacting command (e.g. `charge-from-battery
-  --start`), and check the vehicle's connectivity"); JSON-looking raw bodies
+  a 408 branch appends asleep/offline advice ("Reads do not wake vehicle;
+  issue a command (e.g. `charge-from-battery --start`)."); JSON-looking raw bodies
   are unwrapped so the terse shape renders `HTTP 408: timeout - <advice>`; and
   `describeAxiosError` passes non-JSON-content-type string bodies through
   instead of falling back to axios's generic status line. Wake behavior itself
