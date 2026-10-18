@@ -1,5 +1,7 @@
 # EV Charge Coordinator
 
+[![CI](https://github.com/ericsoco/ev-charge-coordinator/actions/workflows/ci.yml/badge.svg)](https://github.com/ericsoco/ev-charge-coordinator/actions/workflows/ci.yml)
+
 Coordinate electric vehicle (EV) charging with home solar battery storage. This application allows you to charge your EV using the energy stored in your home battery system, to charge your car with sunlight 🌞 instead of from the grid 💸
 
 - **Modular**: Designed to support any EV and home battery system; see below for currently supported vehicles + battery storage

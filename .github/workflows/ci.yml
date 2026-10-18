@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [24.x, 26.x]
+    steps:
+      - uses: actions/checkout@v4
+
+      # keytar ships no prebuilt binaries for recent Node ABIs, so it compiles
+      # from source on the runner; that build needs the libsecret headers.
+      - name: Install keytar build dependency (libsecret)
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (lockfile-exact)
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Python proxy compiles
+        run: python -m py_compile python/franklin_proxy.py
