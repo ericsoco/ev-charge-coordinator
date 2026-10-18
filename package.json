@@ -4,6 +4,9 @@
   "description": "Coordinate EV charging with home solar battery storage",
   "main": "dist/index.js",
   "type": "module",
+  "bin": {
+    "ev-charge-coordinator": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -26,6 +29,14 @@
   ],
   "author": "ericsoco",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ericsoco/ev-charge-coordinator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ericsoco/ev-charge-coordinator/issues"
+  },
+  "homepage": "https://github.com/ericsoco/ev-charge-coordinator#readme",
   "devDependencies": {
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
@@ -40,6 +51,6 @@
     "keytar": "^7.9.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=24.0.0"
   }
 }
