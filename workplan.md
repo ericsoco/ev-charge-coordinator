@@ -1033,22 +1033,29 @@ Branch `complete/phase-4`. Phase 4 is **complete**; this entry records the last 
 
 ---
 
-## 2026-10-17 (post-Phase-4 fixes) — start prompt restored; vehicle-408 advice
+## 2026-10-17 (post-Phase-4 fixes) — consent prompt gates limit+start; vehicle-408 advice
 
 Branch `fix/phase-4-followups`.
 
-- **`charge-from-battery` prompt restored (user reversal of item 6).** With no
-  flags and an attached terminal (REPL or interactive one-shot), the handler now
-  asks `Start charging now? (y/n)` *after* setting the limit; `y`/`yes` starts
-  charging through the same path as `--start` (wake, response-envelope,
-  state-confirmation). Declining, or any non-TTY run, stops after the limit —
-  scripted runs never block on stdin (`ctx.interactive` gates the prompt).
-  Per user direction a start **notifies without confirming**: it echoes
+- **`charge-from-battery` consent now gates the whole action (user flow).**
+  With no flags the handler reads both SoCs, runs the math, shows the plan
+  (`... -> target N%`), and only then asks
+  `Set the EV charge limit to N% and start charging? (y/n)`: `y`/`yes` sets the
+  limit and starts charging through the same path as `--start` (wake,
+  response-envelope, state-confirmation); declining prints `No changes made.`
+  and sends nothing — the earlier set-limit-then-`Start charging now?` ordering
+  from this branch is gone. A no-flag run without a TTY (scripted) is an early
+  no-op before any read: `Non-interactive run: pass --start to set the limit
+  and start charging, or --dry-run to preview.` — set-limit-only is retired.
+  `--start` sets and starts without prompting; `--dry-run` unchanged. Per user
+  direction a start **notifies without confirming**: it echoes
   `Starting EV charging...` and prints no `✓ EV charging started` afterwards
-  (`start-ev-charging` keeps its own confirmation — untouched). `--start` skips
-  the prompt; `--dry-run` unchanged. `--start` help now reads "skips the
-  confirmation prompt"; README usage examples, command table, REPL list, and
-  smart-charging flow updated.
+  (`start-ev-charging` keeps its own confirmation — untouched). `--start` help
+  now reads "Set the charge limit and start charging, without prompting";
+  README usage examples, command table, REPL list, and smart-charging flow
+  updated. Tests: the four consent cases rewritten (prompt names the target;
+  decline = nothing sent; non-TTY = hint, no reads), and math/refusal/config
+  cases pass `{ start: true }` since a flagless non-TTY run no longer acts.
 - **Investigated `HTTP 408: {"error": "timeout"}` on `get-charging-state` /
   `get-ev-bsoc`.** Root cause: reads deliberately never wake the vehicle (wake
   lives on the three command paths), so every read against a sleeping car 408s;
@@ -1067,14 +1074,14 @@ Branch `fix/phase-4-followups`.
   interceptor chain; four new/updated cases in `vehicle.test.ts` pin the
   prompt (y starts, n declines, non-TTY never prompts, `--start` skips it and
   no path prints the confirmation line).
-- Gate: `npm run check` green — **338 passed / 2 skipped** (+7 new cases).
-  Live-verified: `charge-from-battery --help` shows the new `--start` text;
-  Tesla `get-charging-state` re-read fine (car awake). The end-to-end prompt
-  demo needs a Franklin `/soc` read, which was timing out live during this
-  session (`httpx.ReadTimeout` → HTTP 500) — re-run it (REPL or
-  `printf 'n\n' | script -q /dev/null node dist/index.js charge-from-battery`)
-  once Franklin's gateway responds. **Restart any REPL session opened before
-  these fixes to pick them up.**
+- Gate: `npm run check` green — **338 passed / 2 skipped**. Live-verified after
+  the consent rework: `charge-from-battery --help` shows the new `--start`
+  text; a flagless non-TTY run prints the hint and exits 0 with no `/soc` read
+  (proxy log shows only `/auth`/`/shutdown`); and the PTY decline demo ran the
+  full flow (Franklin's gateway recovered — `GET /soc` 200): plan shown
+  (`-> target 72%`), prompt answered `n`, `No changes made.` with no command
+  routes hit. **Restart any REPL session opened before these fixes to pick
+  them up.**
 
 ---
 

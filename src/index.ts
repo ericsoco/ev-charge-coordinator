@@ -1025,7 +1025,7 @@ program
 program
   .command('charge-from-battery')
   .description('Set the EV charge limit from the energy the solar battery can spare (kWh math)')
-  .option('--start', 'Start charging after setting the limit (skips the confirmation prompt)')
+  .option('--start', 'Set the charge limit and start charging, without prompting')
   .option('--dry-run', 'Compute and print the limit without sending anything to the vehicle')
   .action(async (options) => {
     // Short-circuit preserved: Franklin's failure exits before Tesla is asked

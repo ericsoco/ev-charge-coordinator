@@ -215,24 +215,25 @@ export async function getChargingState(ctx: CommandContext): Promise<CommandResu
   }
 }
 
-/**
- * Set the EV's charge limit from the energy the solar battery can spare.
- *
- * Consent: `start` starts charging without prompting; `dryRun` computes and
- * prints the plan without sending anything. With neither flag, an attached
- * terminal (REPL or interactive one-shot) is asked "Start charging now? (y/n)"
- * after the limit is set -- declining, or running without a TTY (scripted),
- * leaves the limit as the only action. Starting echoes "Starting EV charging..."
- * but prints no follow-up confirmation; `start` and the prompt share that path,
- * which inherits startCharging's wake, response-envelope, and
- * state-confirmation checks.
- */
-async function confirmStartNow(ctx: CommandContext): Promise<boolean> {
-  if (!ctx.interactive) return false;
-  const answer = (await ctx.ask('Start charging now? (y/n): ')).trim().toLowerCase();
+/** Whether to apply the computed plan; only called on an interactive TTY. */
+async function confirmStartNow(ctx: CommandContext, targetPercent: number): Promise<boolean> {
+  const answer = (
+    await ctx.ask(`Set the EV charge limit to ${targetPercent}% and start charging? (y/n): `)
+  ).trim().toLowerCase();
   return answer === 'y' || answer === 'yes';
 }
 
+/**
+ * Set the EV's charge limit from the energy the solar battery can spare, and
+ * start charging only with consent.
+ *
+ * Consent: `start` sets the limit and starts charging without prompting;
+ * `dryRun` computes and prints the plan, sending nothing. With neither flag,
+ * a terminal is shown the computed plan and asked
+ * "Set the EV charge limit to N% and start charging? (y/n)": declining sends
+ * nothing, and a run without a TTY (scripted) is a no-op that names `--start`
+ * and `--dry-run`.
+ */
 export async function chargeFromBattery(
   ctx: CommandContext,
   options: { start?: boolean; dryRun?: boolean } = {}
@@ -241,6 +242,18 @@ export async function chargeFromBattery(
     const message = '--start and --dry-run are mutually exclusive';
     log(ctx, paint.warning(message));
     return { ok: false, error: message };
+  }
+
+  // Scripted runs: with no one to prompt and set-limit-only retired, say what
+  // the run would have needed and do nothing at all.
+  if (!options.start && !options.dryRun && !ctx.interactive) {
+    log(
+      ctx,
+      paint.info(
+        'Non-interactive run: pass --start to set the limit and start charging, or --dry-run to preview.'
+      )
+    );
+    return { ok: true };
   }
 
   if (!ctx.franklin?.isAuthenticated() || !ctx.tesla?.isAuthenticated()) {
@@ -319,15 +332,17 @@ export async function chargeFromBattery(
       return { ok: true };
     }
 
+    if (!options.start && !(await confirmStartNow(ctx, limit.targetPercent))) {
+      log(ctx, paint.info('No changes made.'));
+      return { ok: true };
+    }
+
     log(ctx, paint.info('Setting the EV charge limit (waking the vehicle if needed; asleep cars take up to a minute)...'));
     await ctx.tesla.setChargeLimit(limit.targetPercent);
     log(ctx, paint.success(`✓ EV charge limit set to ${limit.targetPercent}%`));
 
-    const shouldStart = options.start || (await confirmStartNow(ctx));
-    if (shouldStart) {
-      log(ctx, paint.info('Starting EV charging...'));
-      await ctx.tesla.startCharging();
-    }
+    log(ctx, paint.info('Starting EV charging...'));
+    await ctx.tesla.startCharging();
     return { ok: true };
   } catch (error) {
     const message = describeError(error);
