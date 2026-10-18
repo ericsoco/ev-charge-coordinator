@@ -18,7 +18,7 @@ Coordinate electric vehicle (EV) charging with home solar battery storage. This 
 
 ## Prerequisites
 
-- **Node.js** 18.0.0 or higher
+- **Node.js** 24 or higher
 - **Python** 3.10 or higher (for FranklinWH API proxy)
 - **Tesla Developer Account** with a registered application (for Tesla integration)
 - **FranklinWH Account** with access to your gateway (for FranklinWH integration)
@@ -35,8 +35,10 @@ cd ev-charge-coordinator
 ### 2. Install Node.js dependencies
 
 ```bash
-npm install
+npm ci
 ```
+
+(`npm install` instead if you plan to change `package.json` or add dependencies.)
 
 ### 3. Install Python dependencies
 
