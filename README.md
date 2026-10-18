@@ -430,6 +430,9 @@ pack cannot lift the limit further), `ev-capacity` (the car would overfill), or
 
 This ensures your EV only charges using excess energy from your solar battery system.
 
+Note: The above is subject to refinement in upcoming iterations, to account for
+historical usage, weather forecasts, observed energy transfer efficiency, etc.
+
 ## Security
 
 - Credentials are stored securely using:
