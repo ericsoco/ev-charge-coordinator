@@ -812,24 +812,45 @@ drift was invisible. Fixed on `fix/repl-config-pairing`:
 
 ---
 
-## Phase 5 — Open-source packaging (~0.5 d)
+## Phase 5 — Open-source packaging (~0.5 d) — ✅ Landed on `feature/phase-5-packaging` (2026-10-17)
 
-1. `LICENSE` -> `Copyright (c) 2026 <holder>` (currently `2024`, no holder). `package.json`:
-   fill `author` (currently `""`), add `repository`, `bugs`, `homepage`, and
-   `bin: { "ev-charge-coordinator": "./dist/index.js" }` (shebang already present at
-   `index.ts:1`).
-2. `README.md`: replace `your-username` (`:34`) with the real repo; document that the Fleet
-   **token** host differs from the **authorize** host; the public-key hosting + pairing deep
-   link flow; the `charge-from-battery` kWh formula; the venv / `python3` resolution failure in
-   Troubleshooting; refresh the CLI Reference + Architecture diagrams to match Phases 1-4.
-3. `.github/workflows/ci.yml`: `npm ci` -> build -> lint -> unit tests ->
-   `python -m py_compile python/franklin_proxy.py`.
-4. `CONTRIBUTING.md`, issue/PR templates, `CHANGELOG.md`.
-5. Update `AGENTS.md` with the new `npm test` / lint commands and the `src/commands/`,
-   `src/utils/energy.ts` layout.
+1. ✅ Stale-plan correction: `LICENSE` (Eric Socolofsky) and `author: "ericsoco"` were already
+   filled before this phase ran (see the decision-table row below). Added `repository`, `bugs`,
+   `homepage`, and `bin: { "ev-charge-coordinator": "./dist/index.js" }` (shebang at
+   `index.ts:1`, preserved by tsc). Added a `files` whitelist (`dist`, `python`, `scripts`,
+   with `__pycache__` negated) — without it `npm pack` shipped 143 files including `src/`,
+   `tests/`, and this workplan; it now ships 92. `engines` bumped `>=18` -> `>=24` (18/20 are
+   EOL; user chose CI on Node 24 + 26); README prerequisites and first-time install (`npm ci`)
+   aligned.
+2. ✅ Stale-plan corrections: the `your-username` placeholder was already gone (README uses
+   `ericsoco`), the CLI Reference was already current after the Phase 4 passes, and the
+   public-key hosting + pairing deep-link flow was already documented under "Tesla Virtual Key
+   pairing". Added: authorize-host vs token-host subsection (incl. the OIDC-metadata
+   contradiction and the `ECC_TESLA_TOKEN_URL` override); the `charge-from-battery` kWh formula
+   from `src/utils/energy.ts` with the `limitedBy` reasons; the venv / `ECC_PYTHON` / `python3`
+   resolution entry in Troubleshooting (quotes the real failure text from
+   `run-python-check.mjs`); refreshed architecture diagram (commands layer, `tesla-http-proxy`
+   signing sidecar, teardown semantics) and project-structure tree; a Checks section
+   (`npm run check`, `RUN_LIVE_TESTS=1` gating, CI pointer); keytar maintenance note under
+   Security; CI badge.
+3. ✅ `.github/workflows/ci.yml`: push-to-main + PRs, Node 24/26 matrix; installs
+   `libsecret-1-dev` before `npm ci` because keytar compiles from source on these ABIs; then
+   `npm ci` -> build -> lint -> typecheck -> unit tests -> `python -m py_compile
+   python/franklin_proxy.py`. YAML parsed locally with `js-yaml`; the workflow itself can only
+   run after the user pushes.
+4. ⏸️ **Deferred by user decision (2026-10-17):** `CONTRIBUTING.md`, issue/PR templates,
+   `CHANGELOG.md` — not ready to welcome external contributions. Revisit before any outreach;
+   the Phase 4 breaking-change callout (see §8 Risks) stays pending on `CHANGELOG.md`.
+5. ✅ `AGENTS.md`: `npm ci` / `check` / `lint` / `typecheck` commands, `src/commands/` +
+   `TeslaCommandProxy` / `ProcessManager` sidecar + `src/utils/{config,energy,color}.ts`
+   layout, CI and `RUN_LIVE_TESTS` notes.
 
-**Exit criteria:** a first-time clone can follow the README top-to-bottom and reach a
-successful `get-battery-soc`.
+**Exit criteria:** ✅ satisfied 2026-10-17. Fresh clone of this branch into `/tmp`, followed
+README top-to-bottom: `npm ci` (lockfile in sync, keytar installed), `.venv` + `pip install -r
+python/requirements.txt`, `npm run check` -> 340 passed / 2 skipped, then live `node
+dist/index.js get-battery-soc` -> `Solar Battery SoC: 16.316%` with one-shot proxy spawn and
+clean `/shutdown`. Bin packaging proven separately: `npm pack` -> installed the tarball in a
+scratch dir -> `./node_modules/.bin/ev-charge-coordinator --help` prints the real usage.
 
 ---
 
@@ -859,7 +880,7 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 | REPL sub-prompts | One shared readline with one-shot listeners (a second interface on the same stdin caused the double echo and the broken prompt); digits-only keystroke filter via an instance `_ttyWrite` patch; ESC/Ctrl+C cancel; cancel folds to `''` at free-text prompts so `CommandContext.ask` keeps its `Promise<string>` type |
 | Output theming | User-chosen 24-bit RGB palette in `src/utils/color.ts`, zero dependencies; gated at call time on `isTTY && !NO_COLOR`, so tests, redirects, and NO_COLOR users receive byte-identical plain output |
 | Proxy shared secret | Raw token minted per spawn, stored in owner-only `runtime.json` (a hash cannot authenticate); `hmac.compare_digest` on every route except `/health`, which the attach flow needs before it knows the token |
-| `LICENSE` holder / `author` | Not yet supplied by user - Phase 5 needs a name before it can close |
+| `LICENSE` holder / `author` | Supplied before Phase 5 ran: "Eric Socolofsky" in `LICENSE`, `ericsoco` as npm `author` |
 
 ---
 
@@ -890,7 +911,8 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 - The `.venv` currently resolves only because this session has it on `PATH`; Phase 2 item 6 is
   what makes the proxy startup reproducible for other developers.
 - Deleting the percent rule (Phase 4) is a **behavior change** for anyone already relying on
-  `charge-from-battery`; call it out in `CHANGELOG.md` as breaking.
+  `charge-from-battery`; call it out in `CHANGELOG.md` as breaking. (`CHANGELOG.md` was
+  deferred in Phase 5 on 2026-10-17 — keep this pending until it lands.)
 
 ---
 
