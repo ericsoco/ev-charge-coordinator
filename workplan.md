@@ -812,7 +812,7 @@ drift was invisible. Fixed on `fix/repl-config-pairing`:
 
 ---
 
-## Phase 5 — Open-source packaging (~0.5 d) — ✅ Landed on `feature/phase-5-packaging` (2026-10-17)
+## Phase 5 — Open-source packaging (~0.5 d) — ✅ Complete (2026-10-17; merged to `main`, GitHub CI green 2026-10-18)
 
 1. ✅ Stale-plan correction: `LICENSE` (Eric Socolofsky) and `author: "ericsoco"` were already
    filled before this phase ran (see the decision-table row below). Added `repository`, `bugs`,
@@ -836,8 +836,8 @@ drift was invisible. Fixed on `fix/repl-config-pairing`:
 3. ✅ `.github/workflows/ci.yml`: push-to-main + PRs, Node 24/26 matrix; installs
    `libsecret-1-dev` before `npm ci` because keytar compiles from source on these ABIs; then
    `npm ci` -> build -> lint -> typecheck -> unit tests -> `python -m py_compile
-   python/franklin_proxy.py`. YAML parsed locally with `js-yaml`; the workflow itself can only
-   run after the user pushes.
+   python/franklin_proxy.py`. YAML parsed locally with `js-yaml`; the first real run on
+   GitHub (2026-10-18) was green on both matrix legs.
 4. ⏸️ **Deferred by user decision (2026-10-17):** `CONTRIBUTING.md`, issue/PR templates,
    `CHANGELOG.md` — not ready to welcome external contributions. Revisit before any outreach;
    the Phase 4 breaking-change callout (see §8 Risks) stays pending on `CHANGELOG.md`.
@@ -851,6 +851,12 @@ python/requirements.txt`, `npm run check` -> 340 passed / 2 skipped, then live `
 dist/index.js get-battery-soc` -> `Solar Battery SoC: 16.316%` with one-shot proxy spawn and
 clean `/shutdown`. Bin packaging proven separately: `npm pack` -> installed the tarball in a
 scratch dir -> `./node_modules/.bin/ev-charge-coordinator --help` prints the real usage.
+
+**Close-out (2026-10-18):** Phase 5 landed on `main` (user-merged, `main` @ `6891126`);
+GitHub Actions green on Node 24 + 26 — the first real run of the workflow (user-confirmed).
+The last open non-destructive check, `get-charging-state` against an asleep car, returns the
+408 wake-gap message with useful guidance (user-verified 2026-10-18). §10 acceptance
+checklist updated to match what the live sessions already verified.
 
 ---
 
@@ -886,9 +892,6 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
 
 ## 8. Risks & Caveats
 
-- **Tesla is untestable offline.** Phases 1 and 5 can be written to spec and unit-tested with
-  mocks, but **cannot be verified in this environment** (no real vehicle, no public domain to
-  host the key). Budget one debug round-trip on the user's side.
 - **Fleet API is billed**, and `set_charge_limit` (`TeslaService.ts:384`) may be deprecated on
   newer firmware in favor of scheduled-charging endpoints. Verify against the vehicle during
   Phase 1. **⚠️ Confirmed materialized (inter-phase REPL session): Tesla now answers HTTP 403
@@ -905,11 +908,9 @@ as `npx ev-charge-coordinator` - `keytar` replacement.
   user command.
 - **`keytar@7.9.0` is deprecated** with no prebuilt binaries for newer Node/OS targets. It is
   correctly optional today (`credentials.ts:39-49`), so the AES-256-GCM file fallback will carry
-  most users - but it deserves a `package.json` / README note.
+  most users. README note added in Phase 5 (Security section).
 - **Public-key hosting is a hard external prerequisite** for Tesla commands and cannot be
   automated away by this CLI.
-- The `.venv` currently resolves only because this session has it on `PATH`; Phase 2 item 6 is
-  what makes the proxy startup reproducible for other developers.
 
 ---
 
@@ -1015,9 +1016,9 @@ docs: license year/holder, repo URLs, README rewrite, CI workflow
   held port 4443 while its state file had been cleaned, so the test's spawn died
   on the occupied port (silent exit). Killed the orphan; if it recurs run
   `lsof -ti tcp:4443 | xargs kill` before the proxy test.
-- Still open for live verification (non-destructive): `get-charging-state`
-  awake vs asleep (instant 408 demo of the wake gap), and `start-ev-charging`
-  while unplugged must now fail loudly instead of printing a false ✓.
+- Live-verification follow-ups (both since closed): unplugged `start-ev-charging`
+  now fails loudly (verified in the post-Phase-4 run below); `get-charging-state`
+  against an asleep car returns the 408 wake-gap message (user-verified 2026-10-18).
 
 ---
 
@@ -1155,13 +1156,17 @@ Traced back to `prompts.md`:
 - [x] `start` starts the Python proxy **and** a resident Node process; PIDs printed
 - [x] `exit` from a **separate shell** terminates both, leaving no stray `python3`
 - [x] `get-ev-bsoc` / `get-battery-soc` return live values
-- [ ] `set-ev-charge-limit` / `start-ev-charging` / `stop-ev-charging` succeed against a real
-      Model Y (requires the Phase 1 virtual-key pairing)
-- [ ] `charge-from-battery` sets a kWh-derived limit and prints the kWh reasoning
+- [x] `set-ev-charge-limit` / `start-ev-charging` / `stop-ev-charging` succeed against a real
+      Model Y (signed via `tesla-http-proxy`; live-verified 2026-10-16, refinements 2026-10-17)
+- [x] `charge-from-battery` sets a kWh-derived limit and prints the kWh reasoning (live-verified
+      2026-10-17 — see the post-Phase-4 entry above)
 - [x] Battery buffer persists across restarts (in `config.json`, set via `config --set-buffer`)
-- [ ] Tesla OAuth completes in a browser, honors user actions, tokens survive restart + refresh
-- [ ] FranklinWH credentials prompted once, stored securely, never echoed
+- [x] Tesla OAuth completes in a browser, honors user actions, tokens survive restart + refresh
+      (Phase 1 exit criteria, live-verified; rotated refresh token persisted on every refresh)
+- [x] FranklinWH credentials prompted once, stored securely, never echoed (Phase 2 human run;
+      masking pinned by `tests/commands/prompt.test.ts`)
 - [x] No proxy route writable without the shared token
-- [ ] `npm run build`, `npm run lint`, `npm test` and CI all green
-- [ ] MIT `LICENSE` + README CLI docs accurate for the shipped commands
+- [x] `npm run build`, `npm run lint`, `npm test` and CI all green (local gate green; GitHub
+      Actions green on Node 24 + 26, 2026-10-18)
+- [x] MIT `LICENSE` + README CLI docs accurate for the shipped commands (Phase 5)
 
