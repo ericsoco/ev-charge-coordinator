@@ -1,6 +1,7 @@
 FEATURES
 [ ] Trigger charging math + session on vehicle plugged in (at home) event. Does Tesla provide a way to push this event?
     [ ] Need to (re?) design application as a long-running process
+    [ ] Maybe better to start with a GUI to manually trigger when plugged in?
 [ ] Host application online somewhere
     Ideally this is part of the install + build process, and can leverage publicly available tooling for hosting (GH pages?)
     Need to think about what other functionality we'll need in the future,
@@ -23,5 +24,6 @@ TASKS / BUGS
 [ ] Rename `npm start config --clear-all` to `--clear-credentials`
 [ ] Tab completion for flags
 [ ] Replace `keytar` (deprecated) with...? Need to clarify specific needed functionality.
+    Prompt: "The `keytar` package is deprecated. What should we use instead? Provide options and we'll draw up a plan from there."
     [ ] Update CI accordingly
 [ ] 
