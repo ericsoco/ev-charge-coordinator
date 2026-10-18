@@ -272,7 +272,8 @@ npm start start-ev-charging
 npm start stop-ev-charging
 
 # Set charge limit from the energy the solar battery can spare (kWh math);
-# in a terminal this is followed by "Start charging now? (y/n)"
+# in a terminal this shows the computed plan and asks
+# "Set the EV charge limit to N% and start charging? (y/n)"
 npm start charge-from-battery
 
 # ... the same, and start charging without prompting
@@ -307,7 +308,7 @@ npm start config --clear-all
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%) |
 | `start-ev-charging` | Start charging the EV |
 | `stop-ev-charging` | Stop charging the EV |
-| `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is prompted `Start charging now? (y/n)` after the limit is set (a non-TTY run never prompts and never starts); `--start` starts charging without prompting; `--dry-run` calculates and prints BSoC and the computed charge target, without issuing any commands |
+| `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is shown the computed plan and prompted `Set the EV charge limit to N% and start charging? (y/n)`; declining sends nothing, and a non-TTY run is a no-op that points at the flags; `--start` sets the limit and starts charging without prompting; `--dry-run` calculates and prints BSoC and the computed charge target, without issuing any commands |
 | `config` | Show current credentials and the energy config (with its file path) |
 | `config --clear-franklin` | Clear FranklinWH credentials |
 | `config --clear-tesla` | Clear Tesla credentials |
@@ -334,9 +335,10 @@ When running in interactive mode (`start`), the following commands are available
 - `set-ev-charge-limit` - Set EV charge limit (prompts for value)
 - `start-ev-charging` - Start EV charging
 - `stop-ev-charging` - Stop EV charging
-- `charge-from-battery` - Smart charging based on solar battery (prompts
-  `Start charging now? (y/n)` when no flag is given; `--start` to begin
-  charging without prompting, `--dry-run` to preview; same flags as the
+- `charge-from-battery` - Smart charging based on solar battery (shows the
+  computed plan, then prompts `Set the EV charge limit to N% and start charging? (y/n)`
+  when no flag is given; declining sends nothing; `--start` to set the limit and
+  start charging without prompting, `--dry-run` to preview; same flags as the
   one-shot)
 - `config` - Show or update configuration; accepts the same flags as the
   one-shot command (e.g. `config --set-efficiency 0.9`); `config --help`
@@ -382,8 +384,9 @@ one-shot `node dist/index.js help <command>`.
 2. Convert the energy above your configured buffer (your reserve) into kWh
 3. Add that energy to the EV's current charge, accounting for charging
    efficiency, and request the resulting percent limit (Tesla clamps to 50-100%)
-4. Optionally start charging immediately (`--start`, or `y` at the prompt shown
-   when no flag is given in a terminal)
+4. Show the computed plan, then (with no flag in a terminal) ask to apply it:
+   `y` sets the limit and starts charging, `n` sends nothing; `--start` skips
+   the prompt and does both, `--dry-run` stops after the preview
 
 This ensures your EV only charges using excess energy from your solar battery system.
 
