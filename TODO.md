@@ -23,8 +23,5 @@ TASKS / BUGS
     Note: this is already in place for write (state-changing) commands, but not for reads.
 [ ] Rename `npm start config --clear-all` to `--clear-credentials`
 [ ] Tab completion for flags
-[x] Replace `keytar` (deprecated) with `@napi-rs/keyring` -- prebuilt native binaries,
-    keytar-era macOS keychain entries read transparently, AES-256-GCM file fallback kept.
-    See workplan.md log entry 2026-10-18.
-    [x] Update CI accordingly (libsecret-1-dev build step removed)
+[X] Replace `keytar` (deprecated) with...? Need to clarify specific needed functionality.
 [ ] 
