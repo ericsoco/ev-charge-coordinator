@@ -11,4 +11,5 @@
     [ ] weather forecast (solar irradiation)
     [ ] projected amount of battery storage accrued during EV charging session (based on both of the above)
 [ ] Rename `npm start config --clear-all` to `--clear-credentials`
+[ ] Tab completion for flags
 [ ] 
