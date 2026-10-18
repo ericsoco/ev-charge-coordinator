@@ -931,18 +931,28 @@ function currentContext(): CommandContext {
 }
 
 /**
- * Run a handler and set the process exit code on failure.
+ * Run a handler, stop this run's sidecar proxy, and exit non-zero on failure.
  *
- * Every one-shot command funnels through here so failures always exit non-zero.
+ * Every one-shot command funnels through here so failures always exit non-zero
+ * and any signed-command proxy this run spawned is stopped before the process
+ * ends -- a running child would keep the event loop alive and hang the CLI.
  * The REPL calls the handlers directly instead, because a failed command there
- * must not kill an interactive session.
+ * must not kill an interactive session; it stops its proxy at session close.
  */
 async function runCommand(
   run: (ctx: CommandContext) => Promise<CommandResult>
 ): Promise<void> {
-  const result = await run(currentContext());
-  if (!result.ok) {
-    process.exitCode = 1;
+  try {
+    const result = await run(currentContext());
+    if (!result.ok) {
+      process.exitCode = 1;
+    }
+  } finally {
+    // Only a proxy this process spawned: one that was merely attached to
+    // (REPL or daemon) belongs to whoever started it.
+    if (spawnedTeslaProxyPid() !== null) {
+      await stopTeslaProxy();
+    }
   }
 }
 

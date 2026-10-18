@@ -185,4 +185,17 @@ describe('Tesla command proxy (signed commands) wiring', () => {
     // ...while REPL close stops only what this session started.
     expect(INDEX_SOURCE).toContain('spawnedTeslaProxyPid() !== null');
   });
+
+  it('stops a sidecar it spawned when a one-shot command finishes', () => {
+    // A spawned child keeps the event loop alive: without the stop below, any
+    // one-shot run that sent a vehicle command hung after its output.
+    const block = INDEX_SOURCE.slice(
+      INDEX_SOURCE.indexOf('async function runCommand'),
+      INDEX_SOURCE.indexOf('function requireService(')
+    );
+    expect(block).toContain('process.exitCode = 1');
+    expect(block).toContain('finally {');
+    expect(block).toContain('spawnedTeslaProxyPid() !== null');
+    expect(block).toContain('stopTeslaProxy()');
+  });
 });
