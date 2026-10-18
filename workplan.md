@@ -1084,6 +1084,51 @@ Branch `fix/phase-4-followups`.
 
 ---
 
+## 2026-10-17 (post-Phase-4 fixes, continued) — one-shot teardown; `already_set` no-op
+
+- **Live bug: one-shot hang after a vehicle command.** Any one-shot command that
+  sends a vehicle action lazy-spawns `tesla-http-proxy` (the `commandProxy`
+  resolver) — but nothing on the one-shot path ever stopped it: `stopTeslaProxy()`
+  was wired only to REPL close and `exit`. The child kept the event loop alive,
+  so the CLI hung after its last output (user had to Ctrl+C; the run's Franklin
+  `/shutdown` line made teardown look like it ran — it did, on the other
+  service). `runCommand` now stops a sidecar it spawned in a `finally`, guarded
+  by `spawnedTeslaProxyPid()` so an attached REPL/daemon proxy is left alone.
+  Source pin in `start-reporting.test.ts`.
+- **Live bug: `already_set` treated as a failure.** `set_charge_limit` on a limit
+  already at the target returns `car could not execute command: already_set`.
+  The proxy surfaces the car's own reason in two shapes (`{response:null,
+  error:"…"}` and `{response:{result:false, reason:"…"}}` — the second is the
+  Fleet envelope forwarded through the proxy); the benign set was only checked
+  on the bare Fleet reason, so `charge-from-battery`'s `y` aborted right before
+  the start step. `assertVehicleCommandAccepted` now extracts the wrapped reason
+  in both shapes and accepts the benign set (`requested`/`is_charging`/
+  `not_charging`/`already_set`), and applies the per-reason hint to the
+  extracted car reason — a wrapped `disconnected` now reads `… disconnected (the
+  vehicle is not connected to a charger)`, same as the bare reason.
+- **Not a bug — the non-TTY hint.** `npm start charge-from-battery` in a terminal
+  is an interactive run (`ctx.interactive = process.stdin.isTTY === true`), so
+  the plan+prompt is correct; "Non-interactive run" is for piped/redirected
+  stdin (`< /dev/null`) — live-verified.
+- **Drive-by from `29dcd98`:** its 408-advice rewrite dropped the space between
+  the two sentences (`offline.Reads`) and left its three pinned tests red; the
+  space is restored and the tests pin the cleaned wording — and the space.
+- Harness note: input piped into `script`'s pty reaches the readline interface
+  before the prompt is shown and folds into an empty answer (= no), so the
+  earlier PTY decline demo was a false positive for the same reason. Drive
+  consent-flow demos with `expect` (send the answer on prompt match).
+- Gate: `npm run check` green — **340 passed / 2 skipped**. Live-verified:
+  `set-ev-charge-limit 59` → `✓ EV charge limit set to 59%` (the `already_set`
+  case) exit 0; decline demo → plan (`-> target 59%`) + prompt + `No changes
+  made.` exit 0; `y` flow → limit accepted (now `already_set` → no-op success),
+  `Starting EV charging...`, then an honest `disconnected (the vehicle is not
+  connected to a charger)` because the car is unplugged, exit 1. Every run exits
+  on its own with no leftover `tesla-http-proxy`/`franklin_proxy` and no state
+  file. Car left at limit 58% (target drifted 59→58 as the battery discharged);
+  charging did not start because the vehicle is unplugged — plug it in and rerun.
+
+---
+
 ## 10. Acceptance Checklist
 
 Traced back to `prompts.md`:
