@@ -436,11 +436,11 @@ historical usage, weather forecasts, observed energy transfer efficiency, etc.
 ## Security
 
 - Credentials are stored securely using:
-  - System keychain (via `keytar`) when available
+  - System keychain (via `@napi-rs/keyring`, prebuilt native binaries) when available
   - AES-256-GCM encrypted file storage as fallback
-  (`keytar` is unmaintained and ships no prebuilt binaries for newer Node
-  versions; the CLI builds it from source where needed, and the encrypted-file
-  fallback takes over automatically when that is impossible)
+  (the keychain store is pinned to the Linux Secret Service so it degrades to the
+  encrypted-file path instead of the kernel keyring, which does not persist across
+  reboots; on headless/CI setups `ECC_DISABLE_KEYCHAIN` forces the file path)
 - OAuth tokens are automatically refreshed
 - No credentials are logged or exposed in error messages
 
@@ -466,7 +466,7 @@ ev-charge-coordinator/
 │   ├── types/                    # BatteryService / EVService interfaces
 │   └── utils/
 │       ├── config.ts             # ~/.ev-charge-coordinator/config.json
-│       ├── credentials.ts        # keychain (keytar) / encrypted-file storage
+│       ├── credentials.ts        # keychain (@napi-rs/keyring) / encrypted-file storage
 │       ├── energy.ts             # charge-from-battery math (pure)
 │       └── color.ts              # output theming
 ├── python/

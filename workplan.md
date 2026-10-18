@@ -32,7 +32,8 @@
   `CHANGELOG.md` — revisit before any outreach to external contributors.
 - **Out of scope by decision (Phase 6 list):** Web GUI, multi-EV / multi-gateway fan-out,
   scheduled charging windows + solar-aware rate timing, Fleet Telemetry WebSocket instead of
-  polling, `npx` publishing, `keytar` replacement (file fallback already handles absence).
+  polling, `npx` publishing. (The keytar replacement formerly listed here was done 2026-10-18:
+  `@napi-rs/keyring`, see Log.)
 - **Battery-buffer product evolution** (`requirements.md` Oct 10 / Oct 14 entries:
   trigger on charger-plug-in event, sub-50% target handling with polling stop) is open
   product work — record design decisions here when it is picked up.
@@ -40,3 +41,31 @@
 ## Log
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
+
+### 2026-10-18 — keytar replaced with `@napi-rs/keyring`
+
+Branch `deps/keytar-to-napi-keyring-v2` (resolves TODO.md item 26; re-run of
+`deps/keytar-to-napi-keyring`, which predates the workplan archive and is superseded
+by this branch):
+
+- `credentials.ts`: `getKeytar()` → `getKeyChain()`, a small adapter over
+  `@napi-rs/keyring`'s `Entry` (`get`/`set`/`delete`), leaving `save()`/`load()`/
+  `clearAll()` and all stored formats untouched. Linux pinned to
+  `{ linux: { store: 'secret-service' } }` so an unavailable Secret Service throws
+  → file fallback, instead of the binding's silent fallback to the kernel keyring,
+  which does not persist across reboots. `ECC_DISABLE_KEYCHAIN` semantics unchanged
+  (tests still force the file path).
+- CI: dropped the `libsecret-1-dev` install step — it existed only because keytar
+  compiled from source on Node 24/26 ABIs; the prebuilt platform binaries need no
+  headers, and tests never touch the keychain.
+- Docs: README Security section + structure tree, AGENTS.md utils line, TODO.md item
+  26 ticked, Phase 6 out-of-scope bullet above refreshed.
+- Gate: `npm run check` green — **340 passed / 2 skipped** (baseline unchanged).
+  Live macOS smoke test against the real keychain: seeded entry → store resolved
+  `storageBackend === 'keychain'`, wrote without creating `credentials.enc`,
+  round-tripped through a fresh store, `clearAll()` deleted the entry, and the
+  real pre-existing keychain value was backed up and restored afterwards.
+- Migration: same `ev-charge-coordinator`/`credentials` service+account as keytar
+  used on macOS, so existing login-keychain entries read transparently; on other
+  platforms a miss falls through to the encrypted file (or a one-time re-auth if
+  neither store has data).

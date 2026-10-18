@@ -16,7 +16,7 @@ TypeScript/Node.js application that coordinates EV charging with home solar batt
   `endpoints.ts` (region -> hostnames, scopes), `VirtualKeyService.ts` (app key pair)
 - **Python Proxy** (`python/franklin_proxy.py`): Flask server for FranklinWH API, spawned
   per session or one-shot
-- **Utils**: `credentials.ts` (keytar/encrypted files), `config.ts`
+- **Utils**: `credentials.ts` (@napi-rs/keyring/encrypted files), `config.ts`
   (`~/.ev-charge-coordinator/config.json` energy config), `energy.ts` (charge-from-battery
   math, pure), `color.ts` (output theming)
 
