@@ -152,3 +152,82 @@ write-up in [design.md](./design.md) — the forward reference for Phase 1 work:
   engine + notifiers + dry-run/live auto-start → P1c measured efficiency +
   weather-aware limits + sub-50% stop-at-target monitor; three small spikes
   alongside (design.md §5). No code changed yet — docs only on this branch.
+
+### 2026-10-19 — P1a plan recorded (collect-only daemon; implementation deferred)
+
+Branch `plan/p1a-workplan`. The Phase 1 design branch has already landed on `main`
+([design.md](./design.md) is in place); approved in plan mode; per user
+direction only this recording happens now: **implementation proceeds one step at a time from
+step 1 below, never as a batch.** Design rationale lives in design.md §3/§5;
+this entry is the execution checklist.
+
+**Goal:** long-running `evcc daemon` on this Mac that only observes and records — battery
+samples, poll-while-awake EV samples, plug-in/session events, daily weather forecasts — into a
+new SQLite store. No decision engine, no actuation, no notifications.
+
+**Scope in:** `daemon` command (foreground; `--once` = single cycle); SQLite store + versioned
+migrations (all 7 design tables, `site_id`/`vehicle_id`, no raw-GPS columns); samplers (battery
+120 s default; EV status probe 60 s + `vehicle_data` 60 s plugged / 300 s awake-idle / none
+asleep; weather daily Open-Meteo, 48–72 h rolling); event/session recording; read-only `status`
++ `sessions` commands; `set-home-location` one-shot; launchd plist + install/uninstall scripts
++ README docs.
+**Out:** decision engine, filters/geofence enforcement, notifications, auto-start, efficiency
+computation (inputs stored only), telemetry, Modbus, any CLI writes to the store.
+
+**Decisions:**
+- Built-in `node:sqlite` driver (verified working on local Node v24.14.0; zero new deps;
+  `ExperimentalWarning` tolerated or suppressed via launchd arg; CI Node 24/26 matrix is the
+  compatibility gate; fallback `better-sqlite3` behind `src/store/` if CI breaks).
+- `daemon.json` (ops tunables, documented defaults, validate-on-read fail-loud) separate from
+  energy `config.json` (strict `EnergyConfig`, no defaults).
+- Home location is a secret: `credentials.ts` gains `getHomeLocation`/`setHomeLocation`, set
+  via one-shot `set-home-location` — never written to `config.json`.
+- Event detection (poll state machine + pure transition reducer) built once here with a
+  record-only consumer; P1b adds the decision consumer.
+- Weather sampler included; degrades with a notice until the home-location secret exists.
+- Single-writer: only the daemon writes the store; CLI opens read-only (WAL).
+- **launchd: document plist + install/uninstall + `launchctl bootstrap` steps only — the user
+  performs the install themselves.**
+
+**Data model (migration v1, `<config-dir>/data.sqlite`, WAL, `user_version`):** `battery_samples`,
+`ev_samples` (incl. `at_home`, NULL until P1b), `events`, `sessions`, `decisions`,
+`efficiency_observations`, `weather_forecasts`; epoch-ms UTC timestamps; daily retention prune
+(raw samples 90 d).
+
+**New modules:** `src/daemon/{runDaemon,lockfile,scheduler,EvPoller,eventDetector,BatterySampler,WeatherSampler}.ts`,
+`src/store/{database,migrations,SampleStore,SessionStore,WeatherStore}.ts`,
+`src/utils/daemonConfig.ts`, `scripts/{evcc-daemon.plist,install-daemon.sh,uninstall-daemon.sh}`.
+**Changed:** `index.ts` (+4 thin actions: `daemon`, `status`, `sessions`, `set-home-location`),
+`repl.ts` (`status`/`sessions` registered; `daemon`/`set-home-location` in the one-shot
+whitelist — the repl-commands drift guard drives the wiring), `TeslaService.ts` (non-waking
+`getVehicleState()` probe + `chargeEnergyAdded` in `getStatus()`), `credentials.ts`, README.
+**Reuse:** `initializeFranklin`/`initializeTesla` (index.ts:254/326), `keepResident` (:81),
+`startTeslaProxy`, `writeRuntimeState`, Franklin `attachOrStartProxy`/`isProxyHealthy`, the
+non-waking `getStatus()` read (`vehicle_data?endpoints=charge_state`).
+
+**Steps — one at a time; each green (`npm run check`) + its own commit on
+`feat/p1a-collect-daemon`:**
+1. **Store layer** — database/migrations/repositories + tests (ECC_CONFIG_DIR tmp dirs;
+   round-trip, migration idempotency, WAL single-writer).
+2. **daemon config + lockfile + scheduler** + tests (defaults, validation failures, stale-lock
+   recovery, per-tick error isolation).
+3. **Tesla state probe + `chargeEnergyAdded` + event detector** + tests (transition matrix:
+   `Disconnected→*` = plug_in, `*→Disconnected` = unplug, `Charging→Complete` = stop;
+   408-as-asleep probe handling).
+4. **Samplers + `runDaemon`** + tests with fake Franklin/Tesla services (rows land; totals
+   deltas; weather skipped without the secret).
+5. **CLI + REPL wiring** — `daemon`, `status`, `sessions`, `set-home-location` + tests (drift
+   guard, output snapshots).
+6. **launchd assets + README daemon section + workplan log** — plist template, install/uninstall
+   scripts, documented `launchctl bootstrap` steps; **user performs the install**.
+7. **Validation** (checklist below) — stop for review before landing to main.
+
+**Validation checklist:** `npm run check` green (baseline 349 passed / 2 skipped + new);
+`node dist/index.js --help` lists the new commands; `daemon --once` real cycle (asleep car →
+probe path, no 408 error); sample counts grow via `sqlite3 <config-dir>/data.sqlite 'select
+count(*) from battery_samples'`; `status` shows alive + last-sample ages; a second `daemon`
+invocation refuses the lock; optional `RUN_LIVE_TESTS=1` live cycle test.
+
+**Risks:** `node:sqlite` experimental vs Node 26 CI (fallback noted); Mac sleep misses events
+(document `pmset`, not automated); `exit` stops the daemon-owned proxy → daemon health-check
+restarts it; Tesla status-probe billing negligible after the $10/mo individual credit.
