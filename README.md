@@ -369,6 +369,10 @@ When running in interactive mode (`start`), the following commands are available
 `help <command>` inside the REPL prints that command's help, matching the
 one-shot `node dist/index.js help <command>`.
 
+Tab completion covers command names, the flags of the typed command (e.g.
+`config --se` → `--set-`, double-Tab lists the matches), the accepted values
+of `config --tesla-region`, and `help` topics.
+
 ## How It Works
 
 ### Architecture

@@ -10,7 +10,7 @@
 ## Current state (verified 2026-10-18)
 
 - **Phases 0–5 complete and landed on `main`;** GitHub Actions CI green on Node 24 + 26.
-  Gate for every change: `npm run check` (build + lint + typecheck + unit tests; 340 passed /
+  Gate for every change: `npm run check` (build + lint + typecheck + unit tests; 349 passed /
   2 skipped at last run).
 - **Shipped surface:** `start` / `exit` lifecycle, `get-battery-soc`, `get-ev-bsoc`,
   `set-ev-charge-limit`, `start-ev-charging`, `stop-ev-charging`, `charge-from-battery`,
@@ -88,3 +88,33 @@ file left untouched):
 - Gate: `npm run check` green. `node dist/index.js config --help` verified to
   show the new flag. The flag itself was not executed live (it would delete
   real stored credentials).
+
+### 2026-10-18 — REPL tab completion for command flags
+
+Branch `feat/repl-flag-completion` (TODO.md item 26, user-maintained file left
+untouched):
+
+- `repl.ts`: `completeCommand` now tokenizes the line up to the cursor and
+  completes in three modes — command names (old behavior preserved), a typed
+  command's flags (`config --se` → `--set-`; after a trailing space, all of
+  them), and value slots (`--tesla-region` offers `na eu cn` sourced from
+  `TESLA_REGIONS`; other value flags offer nothing). `help` completes topic
+  names. Commander's shell-completion feature was rejected: it targets
+  bash/zsh via `COMP_LINE`, not an in-process readline.
+- **Contract verified, not assumed:** readline calls the completer with the
+  line up to the cursor and treats the tuple's second element as the suffix
+  ending at the cursor (Node 24 `kTabComplete`/`kTabCompleter` source read via
+  `--expose-internals`). Hits are full tokens; common-prefix insertion and the
+  double-Tab listing were confirmed live with a scripted readline smoke
+  (`config --se` + TAB → `config --set-`, TAB again lists the four `--set-*`).
+- **Bug fixed en route:** `VALUE_FLAGS.config` was missing `set-buffer`, so
+  the REPL rejected `config --set-buffer 20` while the one-shot CLI accepted
+  it. Tables are now exported for tests.
+- `repl-commands.test.ts`: 8 new completer cases, a `--set-buffer` parse case,
+  and a drift guard that extracts every Commander `.option('--flag')` from
+  `index.ts` and asserts set equality with the flag tables — closing the sync
+  gap that let `set-buffer` drift. `start` and `authenticate` are whitelisted
+  as one-shot-only-flagged (not parsed by the REPL dispatch); the guard fails
+  if that whitelist rots or either gains REPL flag tables.
+- README: tab-completion note under Interactive Mode Commands.
+- Gate: `npm run check` green — **349 passed / 2 skipped**.
