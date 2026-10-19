@@ -9,6 +9,7 @@
  */
 
 import { info } from '../utils/color.js';
+import { TESLA_REGIONS } from '../services/tesla/endpoints.js';
 
 export interface ReplCommand {
   readonly name: string;
@@ -48,14 +49,22 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
 
 /**
  * Flag tables for commands that take inline arguments, mirroring Commander's
- * flags exactly. Value flags consume the next token; boolean flags stand alone.
+ * flags exactly (pinned by the drift guard in repl-commands.test.ts). Value
+ * flags consume the next token; boolean flags stand alone.
  */
-const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  config: ['tesla-region', 'tesla-domain', 'set-battery-kwh', 'set-ev-kwh', 'set-efficiency'],
+export const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  config: [
+    'tesla-region',
+    'tesla-domain',
+    'set-battery-kwh',
+    'set-buffer',
+    'set-ev-kwh',
+    'set-efficiency',
+  ],
   'pair-tesla-key': ['domain', 'vin'],
 };
 
-const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
+export const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
   config: ['clear-franklin', 'clear-tesla', 'clear-credentials', 'show-public-key', 'help'],
   'pair-tesla-key': ['check-only', 'skip-registration', 'help'],
   'charge-from-battery': ['start', 'dry-run', 'help'],
@@ -126,13 +135,54 @@ export function renderHelp(): string {
   );
 }
 
+const COMMAND_NAMES: readonly string[] = REPL_COMMANDS.map((command) => command.name);
+
+function completeCommandNames(current: string): [string[], string] {
+  return [COMMAND_NAMES.filter((name) => name.startsWith(current)), current];
+}
+
 /**
- * readline completer: the commands starting with what has been typed.
- * Returns the hit list and the untouched line, readline's expected shape.
+ * readline completer: command names while a command is being typed, its flags
+ * once one has been, and accepted values inside a value flag's slot.
+ *
+ * Returns the hit list and the token being completed, readline's expected
+ * shape: readline replaces the trailing token (back to the last space before
+ * the cursor) with the hits' common prefix and lists the hits on a repeated
+ * Tab. The completer is handed the line up to the cursor, never past it, so
+ * every hit must be the full replacement token.
  */
 export function completeCommand(line: string): [string[], string] {
-  const hits = REPL_COMMANDS.map((command) => command.name).filter((name) => name.startsWith(line));
-  return [hits, line];
+  // The trailing token starts at the earliest position from which the rest of
+  // the typed text contains no whitespace; a finished word followed by a
+  // space matches at the end (an empty token).
+  const current = line.slice(line.search(/\S*$/));
+  const before = line.slice(0, line.length - current.length);
+
+  if (!before.trim()) return completeCommandNames(current);
+
+  const [command, ...args] = before.trim().split(/\s+/);
+  if (!COMMAND_NAMES.includes(command)) return [[], current];
+  if (command === 'help') return completeCommandNames(current);
+
+  // A value slot: the previous token expects its value, not another flag.
+  const previous = args[args.length - 1];
+  const previousFlag = previous?.startsWith('--') ? previous.slice(2) : undefined;
+  if (previousFlag === 'tesla-region') {
+    return [Object.keys(TESLA_REGIONS).filter((value) => value.startsWith(current)), current];
+  }
+  if (previousFlag !== undefined && (VALUE_FLAGS[command] ?? []).includes(previousFlag)) {
+    return [[], current];
+  }
+
+  // A flag slot: offer what parseCommandArgs would accept here. An empty
+  // token (command + space) is a flag slot too; only a stray positional is not.
+  if (current !== '' && !current.startsWith('-')) return [[], current];
+  const flags = [
+    ...(VALUE_FLAGS[command] ?? []).map((flag) => `--${flag}`),
+    ...(BOOLEAN_FLAGS[command] ?? []).map((flag) => `--${flag}`),
+    '-h',
+  ];
+  return [flags.filter((flag) => flag.startsWith(current)), current];
 }
 
 /**
