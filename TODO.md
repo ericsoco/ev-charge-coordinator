@@ -2,6 +2,7 @@ FEATURES
 [ ] Trigger charging math + session on vehicle plugged in (at home) event. Does Tesla provide a way to push this event?
     [ ] Need to (re?) design application as a long-running process
     [ ] Maybe better to start with a GUI to manually trigger when plugged in?
+    [ ] Switch to Fleet Telemetry to receive pushes?
 [ ] Host application online somewhere
     Ideally this is part of the install + build process, and can leverage publicly available tooling for hosting (GH pages?)
     Need to think about what other functionality we'll need in the future,
@@ -21,7 +22,7 @@ TASKS / BUGS
          [ ] ...but skipped over Tesla and Franklin setup in ## Configuration
 [ ] Wake before issuing command -- how to ensure app is not keeping vehicle awake and causing phantom drain? Need some research.
     Note: this is already in place for write (state-changing) commands, but not for reads.
-[ ] Rename `npm start config --clear-all` to `--clear-credentials`
+[X] Rename `npm start config --clear-all` to `--clear-credentials`
 [ ] Tab completion for flags
 [X] Replace `keytar` (deprecated) with...? Need to clarify specific needed functionality.
 [ ] 
