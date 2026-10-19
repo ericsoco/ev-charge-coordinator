@@ -23,6 +23,6 @@ TASKS / BUGS
 [ ] Wake before issuing command -- how to ensure app is not keeping vehicle awake and causing phantom drain? Need some research.
     Note: this is already in place for write (state-changing) commands, but not for reads.
 [X] Rename `npm start config --clear-all` to `--clear-credentials`
-[ ] Tab completion for flags
+[X] Tab completion for flags
 [X] Replace `keytar` (deprecated) with...? Need to clarify specific needed functionality.
 [ ] 
