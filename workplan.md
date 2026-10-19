@@ -6,6 +6,8 @@
 > this file first and consult history only when deeper context is needed. Product
 > requirements live in [requirements.md](./requirements.md); the user's backlog lives in
 > [TODO.md](./TODO.md) (keep it there — do not mirror backlog items into this file).
+> The Phase 1 design (long-running daemon, auto-start event filters, storage, hosting)
+> lives in [design.md](./design.md) (approved 2026-10-18).
 
 ## Current state (verified 2026-10-18)
 
@@ -118,3 +120,35 @@ untouched):
   if that whitelist rots or either gains REPL flag tables.
 - README: tab-completion note under Interactive Mode Commands.
 - Gate: `npm run check` green — **349 passed / 2 skipped**.
+
+### 2026-10-18 — Phase 1 design recorded (daemon, auto-start, storage, hosting)
+
+Branch `docs/phase1-design`: design discussed and approved in plan mode; full
+write-up in [design.md](./design.md) — the forward reference for Phase 1 work:
+
+- **Scope:** keep the CLI UX; add (1) plug-in event detection → auto-start
+  charging and (2) stored history (battery depletion, charging efficiency,
+  weather forecasts) feeding smarter charge-limit math. Phase 2 = mobile UX,
+  single user; Phase 3 = multi-user cloud. Phase-2/3 seams are listed in
+  design.md §7 (HTTP wrapper over the engine, repos → Postgres, env/KMS
+  secrets, telemetry event source, per-home Modbus collector).
+- **Decisions:** poll-while-awake Fleet API polling (plugging in wakes the car,
+  so detection is near-instant with zero wake cost from us; Fleet Telemetry
+  deferred behind a `VehicleEventSource` seam — it forces cloud hosting:
+  public domain + publicly-trusted TLS terminating directly on Tesla's
+  server); home-hosted on this Mac (launchd; OrangePi/systemd later);
+  SQLite behind repository interfaces with `site_id`/`vehicle_id` on every
+  table; auto-start via a general event-filter framework (`always`, optional
+  `geofence`; empty filter list = all plug-ins; every filter result audited);
+  home coordinates stored as a credential-store secret with only `at_home`
+  persisted (privacy); pluggable `Notifier` with ntfy + Slack clients;
+  `--dry-run` + decision audit table replace a notify-only stage.
+- **Research:** Tesla offers no webhooks (telemetry is the only push);
+  `franklinwh` lib is realtime-only, but the Franklin cloud API has history
+  endpoints (`get_electric_data`, `get_power_by_day`, …) — backfill spike
+  planned; `franklinwh-local-api` (Modbus TCP :502) kept as the long-term
+  per-home collector option for the cloud phase.
+- **Build order:** P1a collect-only daemon + storage → P1b filters + decision
+  engine + notifiers + dry-run/live auto-start → P1c measured efficiency +
+  weather-aware limits + sub-50% stop-at-target monitor; three small spikes
+  alongside (design.md §5). No code changed yet — docs only on this branch.
