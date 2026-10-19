@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { REPL_COMMANDS, completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from '../../src/commands/repl.js';
+import { BOOLEAN_FLAGS, REPL_COMMANDS, VALUE_FLAGS, completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from '../../src/commands/repl.js';
 
 const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
 
@@ -56,6 +56,119 @@ describe('completeCommand', () => {
 
   it('offers everything on an empty line', () => {
     expect(completeCommand('')).toEqual([names, '']);
+  });
+
+  it("offers a command's flags once the command has been typed", () => {
+    // `-h` is filtered out by the typed `--` prefix; it is offered for `-`.
+    expect(completeCommand('charge-from-battery --')).toEqual([
+      ['--start', '--dry-run', '--help'],
+      '--',
+    ]);
+    expect(completeCommand('pair-tesla-key --')).toEqual([
+      ['--domain', '--vin', '--check-only', '--skip-registration', '--help'],
+      '--',
+    ]);
+    expect(completeCommand('charge-from-battery -')).toEqual([
+      ['--start', '--dry-run', '--help', '-h'],
+      '-',
+    ]);
+  });
+
+  it('filters flags by the typed prefix, including --set-buffer', () => {
+    expect(completeCommand('config --se')).toEqual([
+      ['--set-battery-kwh', '--set-buffer', '--set-ev-kwh', '--set-efficiency'],
+      '--se',
+    ]);
+    expect(completeCommand('config --clear-')).toEqual([
+      ['--clear-franklin', '--clear-tesla', '--clear-credentials'],
+      '--clear-',
+    ]);
+  });
+
+  it('offers every flag after a command and a trailing space', () => {
+    expect(completeCommand('config ')).toEqual([
+      [
+        '--tesla-region',
+        '--tesla-domain',
+        '--set-battery-kwh',
+        '--set-buffer',
+        '--set-ev-kwh',
+        '--set-efficiency',
+        '--clear-franklin',
+        '--clear-tesla',
+        '--clear-credentials',
+        '--show-public-key',
+        '--help',
+        '-h',
+      ],
+      '',
+    ]);
+  });
+
+  it('offers the region names inside the --tesla-region value slot', () => {
+    expect(completeCommand('config --tesla-region ')).toEqual([['na', 'eu', 'cn'], '']);
+    expect(completeCommand('config --tesla-region n')).toEqual([['na'], 'n']);
+  });
+
+  it('offers nothing inside another value flag slot', () => {
+    expect(completeCommand('config --set-buffer ')).toEqual([[], '']);
+    expect(completeCommand('config --set-buffer 2')).toEqual([[], '2']);
+  });
+
+  it('offers nothing for unknown commands, non-flag tokens, and flagless commands', () => {
+    expect(completeCommand('nope --')).toEqual([[], '--']);
+    expect(completeCommand('config foo')).toEqual([[], 'foo']);
+    expect(completeCommand('status --')).toEqual([[], '--']);
+  });
+
+  it('offers command names as help topics', () => {
+    expect(completeCommand('help co')).toEqual([['config'], 'co']);
+    expect(completeCommand('help ')).toEqual([names, '']);
+  });
+});
+
+describe('flag tables mirror Commander definitions', () => {
+  // The REPL parses flags from these tables and the one-shot CLI from
+  // Commander; drift between them surfaces as the REPL rejecting a flag the
+  // CLI accepts (which is exactly what happened to --set-buffer).
+  it('has no command whose flags diverge from Commander', () => {
+    // Commands whose flags the REPL deliberately does not parse: `start` is
+    // not a REPL command at all (it enters the REPL), and the dispatch runs
+    // `authenticate` without options, so parseCommandArgs rejects their
+    // flags in the REPL — they are one-shot CLI flags by design.
+    const oneShotOnly = new Set(['start', 'authenticate']);
+
+    const commandNames = [...INDEX_SOURCE.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]);
+    expect(commandNames.length).toBeGreaterThan(0);
+
+    const drift: string[] = [];
+    for (const name of commandNames) {
+      const start = INDEX_SOURCE.indexOf(`.command('${name}')`);
+      const end = INDEX_SOURCE.indexOf('.action(', start);
+      const block = INDEX_SOURCE.slice(start, end === -1 ? undefined : end);
+      const commanderFlags = [...block.matchAll(/\.option\('--([a-z0-9-]+)/g)].map((m) => m[1]);
+      const tabled = [...(VALUE_FLAGS[name] ?? []), ...(BOOLEAN_FLAGS[name] ?? [])];
+
+      if (commanderFlags.length > 0 && tabled.length === 0) {
+        if (!oneShotOnly.has(name)) drift.push(`${name}: Commander flags not parsed in the REPL`);
+        continue;
+      }
+      if (oneShotOnly.has(name)) drift.push(`${name}: whitelisted one-shot-only but has flag tables`);
+      // Commander adds -h/--help itself; the tables list it as 'help'.
+      const expected = commanderFlags.length > 0 ? [...commanderFlags, 'help'] : [];
+      const want = [...new Set(expected)].sort();
+      const have = [...new Set(tabled)].sort();
+      if (have.join(',') !== want.join(',')) {
+        drift.push(`${name}: Commander=[${want}] tables=[${have}]`);
+      }
+    }
+
+    // The whitelist cannot rot silently: both commands must still exist.
+    expect(commandNames.filter((name) => oneShotOnly.has(name)).sort()).toEqual([
+      'authenticate',
+      'start',
+    ]);
+    expect(drift).toEqual([]);
   });
 });
 
@@ -175,6 +288,10 @@ describe('parseCommandArgs - REPL inline flags match Commander', () => {
     });
     expect(parseCommandArgs('config', ['--tesla-domain', 'example.com'])).toEqual({
       options: { teslaDomain: 'example.com' },
+      error: null,
+    });
+    expect(parseCommandArgs('config', ['--set-buffer', '15'])).toEqual({
+      options: { setBuffer: '15' },
       error: null,
     });
   });
