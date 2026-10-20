@@ -42,7 +42,8 @@
 
 ## P1a — collect-only daemon (active execution plan)
 
-> Status: **planning complete 2026-10-19; Step 1 — Store layer not started.** Standing rules:
+> Status: **Step 1 — Store layer complete (2026-10-19); next: Step 2 — daemon config +
+> lockfile + scheduler (detail to be planned at execution).** Standing rules:
 > one step at a time; each step green (`npm run check`) + its own commit on
 > `feat/p1a-collect-daemon`; stop for review after each step; **the user performs the launchd
 > install themselves** (guide below). Design rationale: [design.md](./design.md) §3/§5.
@@ -210,7 +211,7 @@ the wiring), `TeslaService.ts` (non-waking `getVehicleState()` probe + `chargeEn
 `startTeslaProxy`, `writeRuntimeState`, Franklin `attachOrStartProxy`/`isProxyHealthy`, the
 non-waking `getStatus()` read (`vehicle_data?endpoints=charge_state`).
 
-### Current step detail: 1 — Store layer (not started)
+### Current step detail: 1 — Store layer (complete 2026-10-19, commit `e0bf1e9`)
 
 Branch `feat/p1a-collect-daemon`; one commit; gate `npm run check`.
 
@@ -455,5 +456,27 @@ schema + migration design were then clarified with user feedback (per-version mi
 `home_battery_samples` + `home_energy_counters` split; session-closing aggregates with
 efficiency folded in; enumerated `decisions.reason_code`; append-only weather vintages).
 Implementation: not started — step 1 (Store layer) awaits the user's go.
+
+### 2026-10-19 — P1a step 1 complete: store layer
+
+Branch `feat/p1a-collect-daemon`, commit `e0bf1e9` (14 files, +1636): migration
+`001-initial-schema.ts` (all 7 tables + indexes + CHECK enums), `migrations/index.ts`
+(explicit chain), `database.ts` (`openStore` WAL/busy-timeout/migrate with newer-store guard
+and close-on-failure; `openStoreReadOnly` never migrates), `types.ts` (`SiteId` + row
+interfaces), repositories `HomeBatteryStore` / `EvStore` / `SessionStore` /
+`WeatherForecastStore`, and 6 test files in `tests/store/` (37 tests: round-trips, ordering,
+retention cutoff, migration idempotency, version-999 refusal, CHECK probes, WAL
+cross-connection read, readOnly write-block, no-migration guarantee).
+
+- **No dependency changes:** `@types/node` 22.19 ships `node:sqlite` types incl. `readOnly`
+  — the workplan contingency (types bump) was not needed.
+- **Small deviations, disclosed:** (1) `EvStore.prune` added — retention covers both raw
+  tables, the checklist had pruned only the battery side; (2) no events *reader* yet
+  (`mapEvent` dropped) — no read API was in the step-1 contract, P1a consumers read events
+  when they exist; (3) `.all()` rows cast through `unknown` (node:sqlite returns
+  `Record<string, SQLOutputValue>[]`, insufficient overlap for direct casts).
+- **Gate:** `npm run check` green — **386 passed / 2 skipped** (baseline 349 + 37 new).
+  `ExperimentalWarning: SQLite` observed at test startup, exactly as recorded in Risks.
+- Step 1 touches no CLI surface: `node dist/index.js --help` unchanged (step 5 adds commands).
 
 
