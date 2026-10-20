@@ -16,39 +16,24 @@ import {
   type SiteId,
 } from './types.js';
 
-interface RawSession {
-  id: number;
-  site_id: string;
-  vehicle_id: string;
-  home_battery_id: string;
-  plug_ts_ms: number;
-  unplug_ts_ms: number | null;
-  energy_kwh: number | null;
-  energy_percent: number | null;
-  elapsed_ms: number | null;
-  house_energy_kwh: number | null;
-  efficiency: number | null;
-}
-
-const SESSION_COLUMNS =
-  'id, site_id, vehicle_id, home_battery_id, plug_ts_ms, unplug_ts_ms, ' +
-  'energy_kwh, energy_percent, elapsed_ms, house_energy_kwh, efficiency';
-
-function mapSession(row: RawSession): SessionRow {
-  return {
-    id: Number(row.id),
-    siteId: row.site_id as SiteId,
-    vehicleId: row.vehicle_id,
-    homeBatteryId: row.home_battery_id,
-    plugTsMs: Number(row.plug_ts_ms),
-    unplugTsMs: row.unplug_ts_ms === null ? null : Number(row.unplug_ts_ms),
-    energyKwh: row.energy_kwh,
-    energyPercent: row.energy_percent,
-    elapsedMs: row.elapsed_ms === null ? null : Number(row.elapsed_ms),
-    houseEnergyKwh: row.house_energy_kwh,
-    efficiency: row.efficiency,
-  };
-}
+/**
+ * Aliased to camelCase so the driver output *is* the SessionRow shape — no
+ * Raw* mirror interface, no per-row mapper. The schema-pin test pins this
+ * alias list to the DDL and the interface.
+ */
+const SESSION_COLUMNS = [
+  'id',
+  'site_id AS siteId',
+  'vehicle_id AS vehicleId',
+  'home_battery_id AS homeBatteryId',
+  'plug_ts_ms AS plugTsMs',
+  'unplug_ts_ms AS unplugTsMs',
+  'energy_kwh AS energyKwh',
+  'energy_percent AS energyPercent',
+  'elapsed_ms AS elapsedMs',
+  'house_energy_kwh AS houseEnergyKwh',
+  'efficiency',
+].join(', ');
 
 /** Append one transition; returns the row id. Bad kinds fail the CHECK. */
 export function insertEvent(
@@ -99,8 +84,8 @@ export function openSessionFor(
         WHERE site_id = ? AND vehicle_id = ? AND unplug_ts_ms IS NULL
         ORDER BY plug_ts_ms DESC LIMIT 1`
     )
-    .get(siteId, vehicleId) as RawSession | null | undefined;
-  return row ? mapSession(row) : null;
+    .get(siteId, vehicleId) as SessionRow | null | undefined;
+  return row ?? null;
 }
 
 /**
@@ -141,6 +126,6 @@ export function recentSessions(
       `SELECT ${SESSION_COLUMNS} FROM sessions
         WHERE site_id = ? ORDER BY plug_ts_ms DESC, id DESC LIMIT ?`
     )
-    .all(siteId, limit) as unknown as RawSession[];
-  return rows.map(mapSession);
+    .all(siteId, limit) as unknown as SessionRow[];
+  return rows;
 }

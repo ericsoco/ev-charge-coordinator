@@ -16,66 +16,36 @@ import {
   type SiteId,
 } from './types.js';
 
-interface RawSample {
-  id: number;
-  site_id: string;
-  home_battery_id: string;
-  ts_ms: number;
-  soc_percent: number | null;
-  soc_kwh: number | null;
-  power_w: number | null;
-  home_load_w: number | null;
-  solar_w: number | null;
-  grid_w: number | null;
-}
+/**
+ * Aliased to camelCase so the driver output *is* the row shape — no Raw*
+ * mirror interfaces, no per-row mappers. The schema-pin test pins these
+ * alias lists to the DDL and the types.ts interfaces.
+ */
+const SAMPLE_COLUMNS = [
+  'id',
+  'site_id AS siteId',
+  'home_battery_id AS homeBatteryId',
+  'ts_ms AS tsMs',
+  'soc_percent AS socPercent',
+  'soc_kwh AS socKwh',
+  'power_w AS powerW',
+  'home_load_w AS homeLoadW',
+  'solar_w AS solarW',
+  'grid_w AS gridW',
+].join(', ');
 
-interface RawCounters {
-  id: number;
-  site_id: string;
-  home_battery_id: string;
-  ts_ms: number;
-  battery_charge_kwh: number | null;
-  battery_discharge_kwh: number | null;
-  grid_import_kwh: number | null;
-  grid_export_kwh: number | null;
-  solar_kwh: number | null;
-  home_use_kwh: number | null;
-}
-
-const SAMPLE_COLUMNS =
-  'id, site_id, home_battery_id, ts_ms, soc_percent, soc_kwh, power_w, home_load_w, solar_w, grid_w';
-const COUNTER_COLUMNS =
-  'id, site_id, home_battery_id, ts_ms, battery_charge_kwh, battery_discharge_kwh, grid_import_kwh, grid_export_kwh, solar_kwh, home_use_kwh';
-
-function mapSample(row: RawSample): HomeBatterySampleRow {
-  return {
-    id: Number(row.id),
-    siteId: row.site_id as SiteId,
-    homeBatteryId: row.home_battery_id,
-    tsMs: Number(row.ts_ms),
-    socPercent: row.soc_percent,
-    socKwh: row.soc_kwh,
-    powerW: row.power_w,
-    homeLoadW: row.home_load_w,
-    solarW: row.solar_w,
-    gridW: row.grid_w,
-  };
-}
-
-function mapCounters(row: RawCounters): HomeEnergyCountersRow {
-  return {
-    id: Number(row.id),
-    siteId: row.site_id as SiteId,
-    homeBatteryId: row.home_battery_id,
-    tsMs: Number(row.ts_ms),
-    batteryChargeKwh: row.battery_charge_kwh,
-    batteryDischargeKwh: row.battery_discharge_kwh,
-    gridImportKwh: row.grid_import_kwh,
-    gridExportKwh: row.grid_export_kwh,
-    solarKwh: row.solar_kwh,
-    homeUseKwh: row.home_use_kwh,
-  };
-}
+const COUNTER_COLUMNS = [
+  'id',
+  'site_id AS siteId',
+  'home_battery_id AS homeBatteryId',
+  'ts_ms AS tsMs',
+  'battery_charge_kwh AS batteryChargeKwh',
+  'battery_discharge_kwh AS batteryDischargeKwh',
+  'grid_import_kwh AS gridImportKwh',
+  'grid_export_kwh AS gridExportKwh',
+  'solar_kwh AS solarKwh',
+  'home_use_kwh AS homeUseKwh',
+].join(', ');
 
 /** Insert one instantaneous reading; returns the row id. */
 export function insertSample(
@@ -141,8 +111,8 @@ export function latestSample(
       `SELECT ${SAMPLE_COLUMNS} FROM home_battery_samples
         WHERE site_id = ? ORDER BY ts_ms DESC, id DESC LIMIT 1`
     )
-    .get(siteId) as RawSample | null | undefined;
-  return row ? mapSample(row) : null;
+    .get(siteId) as HomeBatterySampleRow | null | undefined;
+  return row ?? null;
 }
 
 /** Newest counter snapshot for the site, or null. */
@@ -155,8 +125,8 @@ export function latestCounters(
       `SELECT ${COUNTER_COLUMNS} FROM home_energy_counters
         WHERE site_id = ? ORDER BY ts_ms DESC, id DESC LIMIT 1`
     )
-    .get(siteId) as RawCounters | null | undefined;
-  return row ? mapCounters(row) : null;
+    .get(siteId) as HomeEnergyCountersRow | null | undefined;
+  return row ?? null;
 }
 
 /**

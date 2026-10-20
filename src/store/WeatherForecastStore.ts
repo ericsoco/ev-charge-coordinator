@@ -13,30 +13,20 @@ import {
   type WeatherForecastRow,
 } from './types.js';
 
-interface RawForecast {
-  id: number;
-  site_id: string;
-  fetched_ts_ms: number;
-  hour_ts_ms: number;
-  irradiance_wm2: number | null;
-  temperature_c: number | null;
-  raw_json: string | null;
-}
-
-const COLUMNS =
-  'id, site_id, fetched_ts_ms, hour_ts_ms, irradiance_wm2, temperature_c, raw_json';
-
-function map(row: RawForecast): WeatherForecastRow {
-  return {
-    id: Number(row.id),
-    siteId: row.site_id as SiteId,
-    fetchedTsMs: Number(row.fetched_ts_ms),
-    hourTsMs: Number(row.hour_ts_ms),
-    irradianceWm2: row.irradiance_wm2,
-    temperatureC: row.temperature_c,
-    rawJson: row.raw_json,
-  };
-}
+/**
+ * Aliased to camelCase so the driver output *is* the WeatherForecastRow
+ * shape — no Raw* mirror interface, no per-row mapper. The schema-pin test
+ * pins this alias list to the DDL and the interface.
+ */
+const COLUMNS = [
+  'id',
+  'site_id AS siteId',
+  'fetched_ts_ms AS fetchedTsMs',
+  'hour_ts_ms AS hourTsMs',
+  'irradiance_wm2 AS irradianceWm2',
+  'temperature_c AS temperatureC',
+  'raw_json AS rawJson',
+].join(', ');
 
 /**
  * Append one vintage of forecast rows atomically (own transaction — do not
@@ -88,8 +78,8 @@ export function latestVintage(
           )
         ORDER BY hour_ts_ms`
     )
-    .all(siteId, siteId) as unknown as RawForecast[];
-  return rows.map(map);
+    .all(siteId, siteId) as unknown as WeatherForecastRow[];
+  return rows;
 }
 
 /** Total stored rows (retention/diagnostics helper). */
