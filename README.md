@@ -437,6 +437,46 @@ This ensures your EV only charges using excess energy from your solar battery sy
 Note: The above is subject to refinement in upcoming iterations, to account for
 historical usage, weather forecasts, observed energy transfer efficiency, etc.
 
+### Data Storage & Schema
+
+Application history lives in a single SQLite file, `<config-dir>/data.sqlite`
+(WAL mode). Exactly one process ever writes it — the background collector
+daemon — while CLI commands open a separate read-only connection. Three rules
+keep the database and the TypeScript in agreement:
+
+**1. The schema is defined in versioned migrations — SQL, frozen once
+applied.** Each migration is a file, `src/store/migrations/NNN-name.ts`, with
+an integer version; `src/store/migrations/index.ts` holds the explicit
+ordered chain. A migration exports `{ version, up(db) }` containing plain
+DDL. `openStore()` applies pending versions in order against
+`PRAGMA user_version`, each inside a transaction; a store written by a
+*newer* build is refused loudly instead of guessed at; read-only connections
+never migrate.
+
+**2. The application runtime speaks only the current schema.** Row shapes
+are the camelCase interfaces in `src/store/types.ts`; behavior lives in the
+`src/store/*Store.ts` repositories, whose SELECTs alias columns
+(`site_id AS siteId`) so the driver output *is* the interface shape. No ORM,
+no codegen. Migrations carry history; interfaces never version — a schema
+change updates the migration, the interface, and the repositories together
+in one commit.
+
+**3. Tests enforce the match: a three-way schema pin**
+(`tests/store/schema-pin.test.ts`):
+
+- `PRAGMA table_info` is pinned to literal column-order, NOT NULL, and
+  primary-key lists;
+- every DDL column camel-converts to an interface key — the fixtures are
+  *typed* as the interfaces, so `tsc` itself rejects fixture drift;
+- repository reads must return exactly the interface's key set, catching a
+  missing, misspelled, or extra column alias.
+
+Round-trip tests in `tests/store/` cover behavior alongside the pin:
+insert→read fidelity, NULL mapping, retention cutoffs, migration idempotency,
+and the newer-store refusal. Changing the schema therefore forces migration +
+interface + repositories + pin lists to move together — any omission fails
+`npm run check`.
+
 ## Security
 
 - Credentials are stored securely using:
@@ -467,9 +507,12 @@ ev-charge-coordinator/
 │   │   ├── TeslaCommandProxy.ts  # manages the tesla-http-proxy sidecar
 │   │   ├── ProcessManager.ts     # generic sidecar spawn/teardown
 │   │   └── tesla/                # Fleet API wire format (oauth, endpoints, virtual key)
+│   ├── daemon/                   # daemon runtime: single-instance lock, scheduler adapter
+│   ├── store/                    # SQLite: database.ts (open/migrate), migrations/ (DDL), repositories
 │   ├── types/                    # BatteryService / EVService interfaces
 │   └── utils/
 │       ├── config.ts             # ~/.ev-charge-coordinator/config.json
+│       ├── daemonConfig.ts       # ~/.ev-charge-coordinator/daemon.json (daemon tunables)
 │       ├── credentials.ts        # keychain (@napi-rs/keyring) / encrypted-file storage
 │       ├── energy.ts             # charge-from-battery math (pure)
 │       └── color.ts              # output theming
@@ -503,6 +546,9 @@ Tests that hit the real FranklinWH / Tesla APIs are gated behind
 `RUN_LIVE_TESTS=1` and need local credentials; everything else runs offline.
 CI (`.github/workflows/ci.yml`) runs the same checks on Node 24 and 26 and
 verifies that the Python proxy compiles.
+`tests/store/schema-pin.test.ts` also pins the database schema, the TypeScript
+row interfaces, and the repositories' SELECT aliases together (see
+**Data Storage & Schema** above).
 
 ### Running in Development
 

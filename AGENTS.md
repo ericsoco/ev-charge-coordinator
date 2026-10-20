@@ -36,6 +36,9 @@ python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt  # Pyt
 ## Key Files
 - `src/types/battery.ts`: BatteryService interface
 - `src/types/ev.ts`: EVService interface
+- `src/store/`: SQLite store — `database.ts` (open/migrate/WAL), `migrations/` (versioned
+  DDL), `*Store.ts` repositories, `types.ts` row interfaces; schema↔code is enforced by
+  `tests/store/schema-pin.test.ts`
 - `python/franklin_proxy.py`: Proxies requests to franklinwh Python library
 
 ## External APIs
