@@ -42,11 +42,11 @@
 
 ## P1a — collect-only daemon (active execution plan)
 
-> Status: **Step 1 — Store layer complete (2026-10-19, incl. row-mapper refactor + schema-pin
-> addendum); next: Step 2 — daemon config + lockfile + scheduler (detail to be planned at
+> Status: **Step 2 — daemon config + lockfile + scheduler complete (2026-10-20); next: Step 3 —
+> Tesla state probe + `chargeEnergyAdded` + event detector (detail to be planned at
 > execution).** Standing rules:
-> one step at a time; each step green (`npm run check`) + its own commit on
-> `feat/p1a-collect-daemon`; stop for review after each step; **the user performs the launchd
+> one step at a time; each step green (`npm run check`) + its own commit on the step's branch
+> (step 1: `feat/p1a-collect-daemon`, step 2: `feat/p1a-daemon-runtime`); stop for review after each step; **the user performs the launchd
 > install themselves** (guide below). Design rationale: [design.md](./design.md) §3/§5.
 > After each step: update the status line here, append a short dated Log entry.
 
@@ -503,5 +503,42 @@ Branch `feat/p1a-collect-daemon`, two commits after review of the DDL↔interfac
   documented at the `TABLES` literal. No DDL change (`id INTEGER PRIMARY KEY` is the
   idiomatic form).
 - Gate: `npm run check` green — **390 passed / 2 skipped** (baseline 386 + 4 pin tests).
+
+### 2026-10-20 — P1a step 2 complete: daemon config, lockfile, scheduler
+
+Branch `feat/p1a-daemon-runtime` (cut from `main` after the user landed step 1), three commits:
+
+- `2cddd03` **deps: toad-scheduler@4.2.0** (transitive croner@10). Verification *before*
+  coding, per the user's halt-condition instruction: licenses MIT/MIT ✓; Node 24 runtime
+  smoke PASS (cadence, `runImmediately`, `AsyncTask` error callback, `executeAsync`,
+  `stop`, overlap on an 80 ms task / 50 ms interval) ✓; **runtime-dependency check MISSED
+  the zero-dep expectation** (toad 4.x depends on croner — and 3.x does too) → halted and
+  prompted with options; **user chose to keep toad + croner** (2-package closure, both MIT,
+  croner being the already-vetted runner-up and useful later for local-time cron).
+- `c06edbd` **feat:** `src/utils/daemonConfig.ts` — `daemon.json` with documented defaults
+  (field renamed to **`evSamplePluggedSec`** at the user's request after review: fast
+  `vehicle_data` cadence while `charging_state !== 'Disconnected'`, which is broader than
+  "while charging" — the plug-in event usually arrives as Disconnected→Stopped);
+  validate-on-read, any invalid field ⇒ `config: null` + per-field problems (file optional,
+  absent ⇒ defaults). `src/daemon/lockfile.ts` — O_EXCL acquire, liveness via `kill(pid,0)`
+  (EPERM = alive), automatic stale-pid recovery (launchd KeepAlive self-heals), corrupt
+  lock ⇒ loud refusal (never stolen), release deletes only our own pid. `src/daemon/scheduler.ts`
+  — thin toad adapter: immediate-first cadence, `preventOverrun`, per-tick `onError`
+  isolation (sync throw and rejection), drain-on-stop (toad's `stop()` doesn't drain — the
+  adapter tracks in-flight ticks), `runOnce()` for `daemon --once`. 27 tests (12 config /
+  8 lock / 7 scheduler).
+- **Test-writing findings, disclosed:** (1) a missing `config[field] = value` assignment —
+  caught immediately by the override test; (2) `preventOverrun` belongs in toad's
+  JobOptions third arg — typecheck caught it (runtime had worked only because toad
+  *defaults* it to true); (3) the fake-timer overlap test hung on `stop()` — diagnosed in
+  toad's source (plain `setInterval` + `isExecuting` guard, nothing fake-timer-hostile):
+  a test artifact, fixed by stop-then-advance-then-await; **verification #4 (fake timers)
+  passes** — all 27 green.
+- `0679e32` **docs:** README `### Data Storage & Schema` (versioned SQL migrations, current-
+  schema-only runtime, three-way schema pin — closes the step-1 documentation gap the user
+  flagged), project-structure tree += `daemon/`, `store/`, `daemonConfig.ts`, Checks pointer
+  to the pin; AGENTS.md Key Files += `src/store/` bullet (user-approved).
+- Gate: `npm run check` green — **417 passed / 2 skipped** (baseline 390 + 27 new).
+- Next: Step 3 — Tesla state probe + `chargeEnergyAdded` + event detector.
 
 
