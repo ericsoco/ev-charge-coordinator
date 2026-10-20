@@ -42,8 +42,9 @@
 
 ## P1a — collect-only daemon (active execution plan)
 
-> Status: **Step 1 — Store layer complete (2026-10-19); next: Step 2 — daemon config +
-> lockfile + scheduler (detail to be planned at execution).** Standing rules:
+> Status: **Step 1 — Store layer complete (2026-10-19, incl. row-mapper refactor + schema-pin
+> addendum); next: Step 2 — daemon config + lockfile + scheduler (detail to be planned at
+> execution).** Standing rules:
 > one step at a time; each step green (`npm run check`) + its own commit on
 > `feat/p1a-collect-daemon`; stop for review after each step; **the user performs the launchd
 > install themselves** (guide below). Design rationale: [design.md](./design.md) §3/§5.
@@ -478,5 +479,29 @@ cross-connection read, readOnly write-block, no-migration guarantee).
 - **Gate:** `npm run check` green — **386 passed / 2 skipped** (baseline 349 + 37 new).
   `ExperimentalWarning: SQLite` observed at test startup, exactly as recorded in Risks.
 - Step 1 touches no CLI surface: `node dist/index.js --help` unchanged (step 5 adds commands).
+
+### 2026-10-19 — P1a step-1 addendum: row-mapper refactor + schema-pin test
+
+Branch `feat/p1a-collect-daemon`, two commits after review of the DDL↔interface duplication:
+
+- `67312b7` — **aliased SELECTs** (`site_id AS siteId`, …): driver output now *is* the
+  `types.ts` row shape, so the per-store `Raw*` snake_case mirror interfaces and every
+  per-row `map*` function are gone (4 files, +92/−163). One interface per table remains,
+  plus the DDL — the duplication the user flagged (interfaces differing only by key case)
+  is removed. `Number()` coercions dropped (epoch-ms and ids are inside the JS safe range,
+  verified).
+- `99a66d8` — **`tests/store/schema-pin.test.ts`** (4 tests): three-way drift guard —
+  (1) `PRAGMA table_info` pinned to literal column order + explicit NOT NULL sets + `id`
+  pk; (2) every DDL column camel-converts to a row-interface key (fixtures are *typed* as
+  the interfaces, so tsc rejects fixture drift); (3) repository reads return exactly the
+  interface key set (catches missing/misspelled/extra aliases); (4) `decisions` is the only
+  intentionally unpinned table (row interface arrives with P1b — the test fails when that
+  stops being true).
+- **SQLite quirk, learned and pinned:** `INTEGER PRIMARY KEY` (rowid alias) is implicitly
+  non-NULL, yet `table_info` reports `notnull = 0` unless `NOT NULL` is written literally —
+  the pin's first run caught exactly this; `id` is pinned via the pk assertion instead,
+  documented at the `TABLES` literal. No DDL change (`id INTEGER PRIMARY KEY` is the
+  idiomatic form).
+- Gate: `npm run check` green — **390 passed / 2 skipped** (baseline 386 + 4 pin tests).
 
 
