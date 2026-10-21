@@ -1,8 +1,10 @@
 FEATURES
 [ ] Trigger charging math + session on vehicle plugged in (at home) event. Does Tesla provide a way to push this event?
-    [ ] Need to (re?) design application as a long-running process
-    [ ] Maybe better to start with a GUI to manually trigger when plugged in?
-    [ ] Switch to Fleet Telemetry to receive pushes?
+    [X] Need to (re?) design application as a long-running process
+    [-] Maybe better to start with a GUI to manually trigger when plugged in?
+    [-] Switch to Fleet Telemetry to receive pushes?
+    [ ] Add analytics to ensure the poll-while-awake algo does not regress and cause
+        unintended vehicle wake (watch for lack of poll requests returning 'asleep')
 [ ] Host application online somewhere
     Ideally this is part of the install + build process, and can leverage publicly available tooling for hosting (GH pages?)
     Need to think about what other functionality we'll need in the future,
