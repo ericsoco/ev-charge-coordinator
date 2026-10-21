@@ -9,6 +9,7 @@ export interface EVBatteryStats {
   chargingState: string; // e.g., "Disconnected", "Charging", "Complete", "Stopped"
   chargeRate?: number; // Current charge rate in kW
   minutesToFull?: number; // Estimated minutes to reach charge limit
+  chargeEnergyAdded?: number; // kWh added in the current charge session (charge_energy_added)
   batteryRange?: number; // Estimated range in miles
 }
 
@@ -17,6 +18,11 @@ export interface EVStatus {
   displayName: string;
   state: string; // e.g., "online", "asleep", "offline"
   battery: EVBatteryStats;
+}
+
+/** Connectivity from the cheap non-waking vehicle probe. */
+export interface EVVehicleState {
+  state: string; // e.g., "online", "asleep", "offline"
 }
 
 export interface EVCredentials {
@@ -73,6 +79,13 @@ export interface EVService {
    * Get full vehicle status.
    */
   getStatus(): Promise<EVStatus>;
+
+  /**
+   * Cheap connectivity probe: never wakes the vehicle and never waits on it,
+   * so unlike a vehicle_data read it cannot 408. The poll-while-awake daemon
+   * loop gates the expensive read on this result.
+   */
+  getVehicleState(): Promise<EVVehicleState>;
 
   /**
    * Wake up the vehicle if asleep.

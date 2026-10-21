@@ -507,7 +507,7 @@ ev-charge-coordinator/
 │   │   ├── TeslaCommandProxy.ts  # manages the tesla-http-proxy sidecar
 │   │   ├── ProcessManager.ts     # generic sidecar spawn/teardown
 │   │   └── tesla/                # Fleet API wire format (oauth, endpoints, virtual key)
-│   ├── daemon/                   # daemon runtime: single-instance lock, scheduler adapter
+│   ├── daemon/                   # daemon runtime: lock, scheduler adapter, event detector
 │   ├── store/                    # SQLite: database.ts (open/migrate), migrations/ (DDL), repositories
 │   ├── types/                    # BatteryService / EVService interfaces
 │   └── utils/
