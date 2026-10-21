@@ -38,6 +38,8 @@ import {
   setEnergyConfigField,
 } from './utils/config.js';
 import type { EnergyConfig } from './utils/energy.js';
+import { daemonConfigPath, resolveDaemonConfig } from './utils/daemonConfig.js';
+import { runDaemonOnce, startDaemon } from './daemon/runDaemon.js';
 
 import {
   describeError,
@@ -970,6 +972,83 @@ function requireService(name: 'Tesla' | 'FranklinWH', init: ServiceStart): void 
   console.log(paint.error(`✗ ${name} service not started. Error: ${init.error}`));
   process.exit(1);
 }
+
+program
+  .command('daemon')
+  .description('Run the collect daemon in the foreground (samplers, sessions, history)')
+  .option('--once', 'Run every sampler once and exit (non-zero if any failed)')
+  .option('--debug', 'Print full stack traces for startup failures')
+  .action(async (cliOptions) => {
+    const resolved = resolveDaemonConfig();
+    if (!resolved.config) {
+      for (const problem of resolved.problems) console.log(paint.error(problem));
+      console.log(paint.error(`Fix ${daemonConfigPath()} and try again.`));
+      process.exitCode = 1;
+      return;
+    }
+
+    const franklin = await initializeFranklin();
+    const tesla = await initializeTesla();
+    if (!franklin.ok && !tesla.ok) {
+      console.log(paint.error('No services available. Exiting.'));
+      process.exitCode = 1;
+      return;
+    }
+
+    const franklinCreds = await credentialStore.getFranklinCredentials();
+    const teslaCreds = await credentialStore.getTeslaCredentials();
+    let vehicleId = teslaCreds?.vin;
+    if (!vehicleId && tesla.ok && teslaService) {
+      vehicleId = (await teslaService.listVehicles())[0]?.vin;
+      if (vehicleId) await credentialStore.setTeslaVin(vehicleId);
+    }
+
+    const daemonOptions = {
+      services: {
+        franklin: franklin.ok ? franklinService : null,
+        tesla: tesla.ok ? teslaService : null,
+      },
+      homeBatteryId: franklinCreds?.gatewayId,
+      vehicleId,
+      config: resolved.config,
+    };
+
+    try {
+      if (cliOptions.once) {
+        console.log(paint.info('Running one collection cycle…'));
+        const outcome = await runDaemonOnce(daemonOptions);
+        for (const [task, result] of Object.entries(outcome.taskResults)) {
+          if (result === null) {
+            console.log(paint.positive(`✓ ${task}`));
+          } else {
+            const message = result instanceof Error ? result.message : String(result);
+            console.log(paint.error(`✗ ${task}: ${message}`));
+          }
+        }
+        console.log(
+          outcome.ok ? paint.positive('✓ Cycle complete') : paint.error('Cycle finished with errors')
+        );
+        if (!outcome.ok) process.exitCode = 1;
+        return;
+      }
+
+      const handle = await startDaemon(daemonOptions);
+      console.log(paint.info('Daemon running in the foreground. Stop with Ctrl-C.'));
+      await new Promise<void>((resolve) => {
+        const stop = () => {
+          void handle.stop().then(() => resolve());
+        };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+      });
+      console.log(paint.positive('\n✓ Daemon stopped'));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(paint.error(`Daemon failed: ${message}`));
+      reportDebugDetails(cliOptions.debug, error);
+      process.exitCode = 1;
+    }
+  });
 
 program
   .command('get-ev-bsoc')

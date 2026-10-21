@@ -136,7 +136,7 @@ describe('flag tables mirror Commander definitions', () => {
     // not a REPL command at all (it enters the REPL), and the dispatch runs
     // `authenticate` without options, so parseCommandArgs rejects their
     // flags in the REPL — they are one-shot CLI flags by design.
-    const oneShotOnly = new Set(['start', 'authenticate']);
+    const oneShotOnly = new Set(['start', 'authenticate', 'daemon']);
 
     const commandNames = [...INDEX_SOURCE.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]);
     expect(commandNames.length).toBeGreaterThan(0);
@@ -166,6 +166,7 @@ describe('flag tables mirror Commander definitions', () => {
     // The whitelist cannot rot silently: both commands must still exist.
     expect(commandNames.filter((name) => oneShotOnly.has(name)).sort()).toEqual([
       'authenticate',
+      'daemon',
       'start',
     ]);
     expect(drift).toEqual([]);
