@@ -10,6 +10,7 @@ export interface BatteryStats {
 }
 
 export interface BatteryCurrentStats {
+  /** Power in W at the store boundary; the franklinwh wire format is kW (converted in BatterySampler). */
   solarProduction: number;
   generatorProduction: number;
   generatorEnabled: boolean;
