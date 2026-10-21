@@ -13,7 +13,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as http from 'http';
 import * as https from 'https';
-import type { EVService, EVCredentials, EVStatus, EVBatteryStats, TeslaTokens } from '../types/ev.js';
+import type { EVService, EVCredentials, EVStatus, EVVehicleState, EVBatteryStats, TeslaTokens } from '../types/ev.js';
 import { credentialStore } from '../utils/credentials.js';
 import * as paint from '../utils/color.js';
 import {
@@ -55,6 +55,7 @@ interface TeslaChargeState {
   charge_rate?: number;
   minutes_to_full_charge?: number;
   battery_range?: number;
+  charge_energy_added?: number;
 }
 
 interface TeslaVehicleData {
@@ -785,6 +786,22 @@ export class TeslaService implements EVService {
     }
   }
 
+  /**
+   * Connectivity probe via GET /api/1/vehicles/{vin}. Tesla answers with the
+   * vehicle's state without waking it or waiting on it, so unlike
+   * vehicle_data this cannot 408 — the daemon's poll-while-awake loop gates
+   * its expensive read on this result.
+   */
+  async getVehicleState(): Promise<EVVehicleState> {
+    if (!this.vin) {
+      await this.resolveVin();
+    }
+    const response = await this.client.get<{ response: { state: string } }>(
+      `/api/1/vehicles/${this.vin}`
+    );
+    return { state: response.data.response.state };
+  }
+
   async getStatus(): Promise<EVStatus> {
     if (!this.vin) {
       throw new Error('No VIN configured');
@@ -805,7 +822,8 @@ export class TeslaService implements EVService {
       chargingState: chargeState.charging_state,
       chargeRate: chargeState.charge_rate,
       minutesToFull: chargeState.minutes_to_full_charge,
-      batteryRange: chargeState.battery_range
+      batteryRange: chargeState.battery_range,
+      chargeEnergyAdded: chargeState.charge_energy_added
     };
 
     return {
