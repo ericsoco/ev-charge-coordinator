@@ -129,3 +129,53 @@ export function recentSessions(
     .all(siteId, limit) as unknown as SessionRow[];
   return rows;
 }
+
+/**
+ * Closing aggregates for a session. Every field nullable: a session can end
+ * without enough samples (car slept through it, counters missing), and an
+ * uncomputable aggregate is recorded as NULL rather than guessed.
+ */
+export interface FinalizeSessionInput {
+  /** Monotonic-summed charge_energy_added over the session, kWh. */
+  energyKwh: number | null;
+  /** last − first soc_percent over the session. */
+  energyPercent: number | null;
+  /** unplug − plug (also derivable from the timestamps; stored for queries). */
+  elapsedMs: number | null;
+  /** Monotonic-summed battery discharge over the session, kWh. */
+  houseEnergyKwh: number | null;
+  /** energyKwh / houseEnergyKwh; null when house <= 0. Stored raw. */
+  efficiency: number | null;
+}
+
+/**
+ * Write the closing aggregates once the session closes. Returns the session
+ * id, or null when no such session exists (site-scoped). Not guarded against
+ * re-finalization: the close flow only reaches this when closeOpenSession
+ * succeeded, which happens at most once per session.
+ */
+export function finalizeSession(
+  db: DatabaseSync,
+  sessionId: number,
+  input: FinalizeSessionInput,
+  siteId: SiteId = HOME_SITE
+): number | null {
+  const row = db
+    .prepare(
+      `UPDATE sessions SET
+         energy_kwh = ?, energy_percent = ?, elapsed_ms = ?,
+         house_energy_kwh = ?, efficiency = ?
+       WHERE id = ? AND site_id = ?
+       RETURNING id`
+    )
+    .get(
+      input.energyKwh,
+      input.energyPercent,
+      input.elapsedMs,
+      input.houseEnergyKwh,
+      input.efficiency,
+      sessionId,
+      siteId
+    ) as { id: number } | null | undefined;
+  return row ? Number(row.id) : null;
+}

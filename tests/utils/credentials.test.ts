@@ -211,3 +211,31 @@ describe('CredentialStore - module surface', () => {
     expect(fs.existsSync(credPath())).toBe(true);
   });
 });
+
+describe('CredentialStore - home location secret', () => {
+  it('round-trips coordinates and starts unset', async () => {
+    // Fresh instance: the shared singleton keeps in-memory state across tests.
+    const store = new mod.CredentialStore();
+    expect(await store.getHomeLocation()).toBeUndefined();
+    await store.setHomeLocation(37.7749, -122.4194);
+    expect(await store.getHomeLocation()).toEqual({
+      latitude: 37.7749,
+      longitude: -122.4194,
+    });
+  });
+
+  it('rejects out-of-range coordinates without storing anything', async () => {
+    const store = new mod.CredentialStore();
+    await expect(store.setHomeLocation(91, 0)).rejects.toThrow(/latitude/);
+    await expect(store.setHomeLocation(0, 181)).rejects.toThrow(/longitude/);
+    await expect(store.setHomeLocation(Number.NaN, 0)).rejects.toThrow(/latitude/);
+    expect(await store.getHomeLocation()).toBeUndefined();
+  });
+
+  it('survives a fresh store instance (persisted, not in-memory)', async () => {
+    const first = new mod.CredentialStore();
+    await first.setHomeLocation(51.5074, -0.1278);
+    const fresh = new mod.CredentialStore();
+    expect(await fresh.getHomeLocation()).toEqual({ latitude: 51.5074, longitude: -0.1278 });
+  });
+});

@@ -98,3 +98,25 @@ export function prune(
     .run(siteId, cutoff);
   return Number(result.changes);
 }
+
+/**
+ * Samples for a vehicle within [fromMs, toMs], oldest first — the session
+ * aggregation read (works across daemon restarts: state lives in the store,
+ * never assumed in memory).
+ */
+export function samplesInRange(
+  db: DatabaseSync,
+  vehicleId: string,
+  fromMs: number,
+  toMs: number,
+  siteId: SiteId = HOME_SITE
+): EvSampleRow[] {
+  const rows = db
+    .prepare(
+      `SELECT ${COLUMNS} FROM ev_samples
+        WHERE site_id = ? AND vehicle_id = ? AND ts_ms >= ? AND ts_ms <= ?
+        ORDER BY ts_ms, id`
+    )
+    .all(siteId, vehicleId, fromMs, toMs) as unknown as EvSampleRow[];
+  return rows;
+}

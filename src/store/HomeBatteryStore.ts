@@ -151,3 +151,24 @@ export function prune(
     .run(siteId, cutoff);
   return Number(samples.changes) + Number(counters.changes);
 }
+
+/**
+ * Counter snapshots within [fromMs, toMs], oldest first — feeds the session
+ * house-energy aggregation (which tolerates a midnight reset inside the
+ * range; see daemon/sessionAggregates).
+ */
+export function countersInRange(
+  db: DatabaseSync,
+  fromMs: number,
+  toMs: number,
+  siteId: SiteId = HOME_SITE
+): HomeEnergyCountersRow[] {
+  const rows = db
+    .prepare(
+      `SELECT ${COUNTER_COLUMNS} FROM home_energy_counters
+        WHERE site_id = ? AND ts_ms >= ? AND ts_ms <= ?
+        ORDER BY ts_ms, id`
+    )
+    .all(siteId, fromMs, toMs) as unknown as HomeEnergyCountersRow[];
+  return rows;
+}

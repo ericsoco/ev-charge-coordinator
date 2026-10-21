@@ -161,3 +161,64 @@ describe('recentSessions', () => {
     expect(() => sessions.recentSessions(db, 1.5)).toThrow(/limit/);
   });
 });
+
+describe('finalizeSession', () => {
+  it('writes every closing aggregate onto a closed session', () => {
+    const id = sessions.openSession(db, {
+      vehicleId: VEHICLE,
+      homeBatteryId: BATTERY,
+      plugTsMs: 1_000,
+    });
+    sessions.closeOpenSession(db, VEHICLE, 61_000);
+
+    expect(
+      sessions.finalizeSession(db, id, {
+        energyKwh: 12.5,
+        energyPercent: 18,
+        elapsedMs: 60_000,
+        houseEnergyKwh: 14.2,
+        efficiency: 12.5 / 14.2,
+      })
+    ).toBe(id);
+
+    const row = sessions.recentSessions(db, 1)[0];
+    expect(row).toMatchObject({
+      id,
+      energyKwh: 12.5,
+      energyPercent: 18,
+      elapsedMs: 61_000 - 1_000,
+      houseEnergyKwh: 14.2,
+    });
+    expect(row.efficiency).toBeCloseTo(0.8803, 4);
+  });
+
+  it('stores nulls for aggregates that were not computable', () => {
+    const id = sessions.openSession(db, {
+      vehicleId: VEHICLE,
+      homeBatteryId: BATTERY,
+      plugTsMs: 1_000,
+    });
+    sessions.finalizeSession(db, id, {
+      energyKwh: null,
+      energyPercent: null,
+      elapsedMs: null,
+      houseEnergyKwh: null,
+      efficiency: null,
+    });
+    const row = sessions.recentSessions(db, 1)[0];
+    expect(row.energyKwh).toBeNull();
+    expect(row.efficiency).toBeNull();
+  });
+
+  it('returns null for an unknown session id', () => {
+    expect(
+      sessions.finalizeSession(db, 9_999, {
+        energyKwh: 1,
+        energyPercent: 1,
+        elapsedMs: 1,
+        houseEnergyKwh: 1,
+        efficiency: 1,
+      })
+    ).toBeNull();
+  });
+});

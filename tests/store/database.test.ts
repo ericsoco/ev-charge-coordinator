@@ -10,8 +10,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import { openStore, storePath } from '../../src/store/database.js';
+import { openStore, storePath, withTransaction } from '../../src/store/database.js';
 import { CURRENT_SCHEMA_VERSION } from '../../src/store/migrations/index.js';
+import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 
 let dir: string;
 let dbPath: string;
@@ -119,6 +120,51 @@ describe('openStore', () => {
           )
           .run()
       ).toThrow(/CHECK constraint failed/);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('withTransaction', () => {
+  it('commits every write on success', () => {
+    const db = openStore(dbPath);
+    try {
+      const ids = withTransaction(db, () => [
+        homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1 }),
+        homeBattery.insertCounters(db, { homeBatteryId: 'GW', tsMs: 1 }),
+      ]);
+      expect(ids).toHaveLength(2);
+      expect(homeBattery.latestSample(db)).not.toBeNull();
+      expect(homeBattery.latestCounters(db)).not.toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('rolls back every write when the body throws, and rethrows', () => {
+    const db = openStore(dbPath);
+    try {
+      expect(() =>
+        withTransaction(db, () => {
+          homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1 });
+          throw new Error('tick failed midway');
+        })
+      ).toThrow('tick failed midway');
+      // The sample must not have survived the rollback.
+      expect(homeBattery.latestSample(db)).toBeNull();
+      // The connection must be usable afterwards (transaction fully cleared).
+      homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2 });
+      expect(homeBattery.latestSample(db)?.tsMs).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('returns the body’s value', () => {
+    const db = openStore(dbPath);
+    try {
+      expect(withTransaction(db, () => 42)).toBe(42);
     } finally {
       db.close();
     }

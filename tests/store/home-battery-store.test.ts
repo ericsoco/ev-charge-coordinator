@@ -136,3 +136,18 @@ describe('prune', () => {
     expect(() => homeBattery.prune(db, -1, 0)).toThrow(/retentionDays/);
   });
 });
+
+describe('countersInRange', () => {
+  it('returns counter snapshots in [from, to], oldest first', () => {
+    homeBattery.insertCounters(db, { homeBatteryId: 'GW', tsMs: 100, batteryDischargeKwh: 1 });
+    homeBattery.insertCounters(db, { homeBatteryId: 'GW', tsMs: 200, batteryDischargeKwh: 2 });
+    homeBattery.insertCounters(db, { homeBatteryId: 'GW', tsMs: 300, batteryDischargeKwh: 3 });
+
+    const rows = homeBattery.countersInRange(db, 150, 250);
+    expect(rows.map((row) => row.tsMs)).toEqual([200]);
+    expect(
+      homeBattery.countersInRange(db, 0, 1_000).map((r) => r.batteryDischargeKwh)
+    ).toEqual([1, 2, 3]);
+    expect(homeBattery.countersInRange(db, 400, 500)).toEqual([]);
+  });
+});
