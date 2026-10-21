@@ -42,9 +42,9 @@
 
 ## P1a — collect-only daemon (active execution plan)
 
-> Status: **Step 3 — Tesla state probe + chargeEnergyAdded + event detector complete
-> (2026-10-20); next: Step 4 — samplers + runDaemon (detail to be planned at execution).**
-> Standing rules:
+> Status: **Step 4 — samplers + runDaemon + `daemon` CLI + store report complete (2026-10-21);
+> next: Step 5 — status / sessions / set-home-location CLI (detail to be planned at
+> execution).** Standing rules:
 > one step at a time; each step green (`npm run check`) + its own commit on the step's branch
 > (step 1: `feat/p1a-collect-daemon`, step 2: `feat/p1a-daemon-runtime`); stop for review after each step; **the user performs the launchd
 > install themselves** (guide below). Design rationale: [design.md](./design.md) §3/§5.
@@ -573,5 +573,62 @@ Branch `feat/p1a-tesla-probe-events` (precondition verified: step 2 landed on `m
   deliberately not staged (human-maintained file).
 - Next: Step 4 — samplers + `runDaemon` (incl. the Open-Meteo response-shape spike and
   live confirmation of the Franklin day-total counter reset).
+
+### 2026-10-21 — P1a step 4 complete: samplers, runDaemon, `daemon` CLI, store report
+
+Branch `feat/p1a-samplers-daemon` (precondition verified: step 3 landed on `main`), six
+commits:
+
+- `4cdd090` foundation: `withTransaction`, `finalizeSession`, `samplesInRange` /
+  `countersInRange`, `get/setHomeLocation` (secret, validated) + 11 tests. (Typecheck caught
+  the range queries still using the pre-refactor `Raw*`/`map*` pattern — fixed to the aliased
+  cast form.)
+- `c7dd738` pure layer: `sessionAggregates.monotonicDelta` (positive-step sum — midnight
+  counter resets and Tesla meter resets drop out as discontinuities, which is what makes
+  Franklin's reset semantics non-critical) + `computeSessionAggregates` + the
+  `shouldSampleRich` cadence predicate. (One test-side boundary bug — inclusive `>=` — fixed
+  and the commit amended; also disclosed: an earlier `npm run check | grep` pipe masked a
+  failure and let a red commit through before the amend. Gate discipline since: full exit
+  codes, no pipes.)
+- `c3a042f` samplers: `BatterySampler` (sample + counters in one transaction),
+  `EvPoller` (adaptive single task: cheap probe → cadence-gated rich read → store →
+  detector → events + session open/close **with closing aggregates**; restart-safe state
+  reconstruction from the store; stale-open-session self-heal on the next plug_in —
+  documented limitation: unplug-through-sleep is bounded-approximate), `WeatherSampler`
+  (injectable fetcher, one-time skip notice without the home-location secret). 12 tests.
+- `eca528c` `runDaemon` (lock → store → tasks → scheduler; owns and disconnects the handed-in
+  services; `daemon_start`/`daemon_stop` lifecycle events; disabled-task warnings) +
+  `runDaemonOnce` (per-task results, ok = no errors) + `startDaemon().stop()` handle (CLI
+  wires SIGINT/SIGTERM — lifecycle testable without process signals) + the thin **`daemon`
+  CLI command with `--once`** (moved forward from step 5 — without it the step could not be
+  verified live) + one-shot REPL whitelist entry (drift-guard forced) + 6 tests.
+- `8362db9` **`scripts/store-report.mjs`** (`npm run store`; `--json`, `--db`): latest row +
+  aggregates per table, exit-1 on a missing store; aggregate SQL deliberately lives in the
+  script (diagnostic view, not production surface); 3 tests including a spawned-script run
+  against a seeded store. (One test-helper bug — unconditional JSON.parse — fixed.)
+- `e6cc62d` **live-spike finding: the franklinwh wire format is kW, not W** (a 0.267 "home
+  load" is 236× too small in watts) — `BatterySampler` now converts ×1000 into the `_w`
+  columns; totals confirmed kWh as named; `types/battery.ts` notes the wire format. Spike
+  deferred earlier (terminal/keychain incidents) completed via the live `--once` runs instead.
+
+- **Spikes resolved:** Open-Meteo live shape confirmed (`hourly.{time, shortwave_radiation,
+  temperature_2m}`, `timezone=UTC`) — the step-1 weather columns fit as provisioned, **no
+  migration needed**. Franklin counter-reset semantics rendered non-critical by
+  `monotonicDelta`; units answered live (above).
+- **Live verification (both runs exit 0, all tasks ✓):** `node dist/index.js daemon --once`
+  twice against real services (proxy spawn, Tesla token refresh); `npm run store` shows real
+  data: 2 battery samples (gateway `10060005A03X25160189`, soc ~21.6%, post-fix
+  `powerW -771 / homeLoadW 271 / solarW 1041`), 2 counter snapshots, `daemon_start/stop`
+  events; `ev_samples: 0` = car asleep (probe-only — correct poll-while-awake behavior);
+  `weather: 0` = home-location secret not set until step 5's `set-home-location`.
+- Gate: `npm run check` green at every commit — **479 passed / 2 skipped** (baseline 458 + 21
+  across the step's commits). Terminal incidents (omz update prompt eating commands; one
+  garbled heredoc) were worked around; one hidden-process keychain hang from the early spike
+  never recurred in the CLI path.
+- Step scope calls (approved in the plan): `daemon` command pulled from step 5; session-close
+  aggregates computed at unplug (collect-only inputs for P1c); README CLI-reference row for
+  `daemon` deferred to step 5/6 with the other CLI docs.
+- Next: Step 5 — `status`, `sessions`, `set-home-location` CLI (+ REPL wiring) — and
+  `set-home-location` is what finally turns the weather sampler on.
 
 
