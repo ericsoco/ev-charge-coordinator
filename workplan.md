@@ -42,9 +42,9 @@
 
 ## P1a — collect-only daemon (active execution plan)
 
-> Status: **Step 2 — daemon config + lockfile + scheduler complete (2026-10-20); next: Step 3 —
-> Tesla state probe + `chargeEnergyAdded` + event detector (detail to be planned at
-> execution).** Standing rules:
+> Status: **Step 3 — Tesla state probe + chargeEnergyAdded + event detector complete
+> (2026-10-20); next: Step 4 — samplers + runDaemon (detail to be planned at execution).**
+> Standing rules:
 > one step at a time; each step green (`npm run check`) + its own commit on the step's branch
 > (step 1: `feat/p1a-collect-daemon`, step 2: `feat/p1a-daemon-runtime`); stop for review after each step; **the user performs the launchd
 > install themselves** (guide below). Design rationale: [design.md](./design.md) §3/§5.
@@ -540,5 +540,38 @@ Branch `feat/p1a-daemon-runtime` (cut from `main` after the user landed step 1),
   to the pin; AGENTS.md Key Files += `src/store/` bullet (user-approved).
 - Gate: `npm run check` green — **417 passed / 2 skipped** (baseline 390 + 27 new).
 - Next: Step 3 — Tesla state probe + `chargeEnergyAdded` + event detector.
+
+### 2026-10-20 — P1a step 3 complete: vehicle probe, chargeEnergyAdded, event detector
+
+Branch `feat/p1a-tesla-probe-events` (precondition verified: step 2 landed on `main` as
+`9eded09`…`2bf2c0e`), commit `843266f` (6 files, +341):
+
+- **`getVehicleState()`** — non-waking probe via `GET /api/1/vehicles/{vin}` on
+  `TeslaService` **and the `EVService` interface** (new `EVVehicleState` type); resolves the
+  VIN through the list endpoint first when unset. By design it cannot 408 (it never waits
+  on the car); the remaining probe-vs-sleep race on `vehicle_data` is covered by
+  pre-existing 408 mapping tests (verified: three cases in
+  `tests/services/tesla-error-reporting.test.ts` — no new test needed).
+- **`chargeEnergyAdded`** — `TeslaChargeState.charge_energy_added` → optional
+  `EVBatteryStats.chargeEnergyAdded` in `getStatus()`. The store columns/types/aliases have
+  been waiting since step 1, so the value is storage-ready for step 4's sampler. No CLI
+  output change (`get-charging-state` untouched).
+- **`src/daemon/eventDetector.ts`** — pure, total transition reducer. Plugged ≡
+  `state !== 'Disconnected'` (state-agnostic: future firmware values classify correctly
+  for free); documented ordering rules `plug_in → charging_start` (entry first) and
+  `charging_stop → unplug` (exit last — charging cannot outlive the cable); unreadable
+  input yields `[]` rather than throwing — deliberately unlike energy.ts, because a
+  mid-tick daemon crash is worse than an unobserved transition and the caller keeps the
+  raw samples.
+- **18 tests:** 14 transition-matrix (ordering pairs, unknown states both directions,
+  no-baseline, same-state, plugged reshuffles, a never-throws sweep) + 4 probe tests on the
+  axios-adapter seam (singular endpoint only — recorded URLs prove no `wake_up`/`vehicle_data`;
+  VIN-unset list-then-singular fallback; `charge_energy_added` passthrough + absent case).
+- Gate: `npm run check` green — **435 passed / 2 skipped** (baseline 417 + 18). One fixture
+  type caught by typecheck (`InternalAxiosRequestConfig` for the adapter seam) and fixed.
+- The user's in-progress `TODO.md` edit rode along uncommitted on the working tree —
+  deliberately not staged (human-maintained file).
+- Next: Step 4 — samplers + `runDaemon` (incl. the Open-Meteo response-shape spike and
+  live confirmation of the Franklin day-total counter reset).
 
 
