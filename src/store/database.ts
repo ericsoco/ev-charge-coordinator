@@ -84,3 +84,20 @@ export function openStoreReadOnly(dbPath: string = storePath()): DatabaseSync {
   db.exec('PRAGMA busy_timeout = 5000');
   return db;
 }
+
+/**
+ * Run fn inside BEGIN IMMEDIATE/COMMIT; roll back and rethrow if it throws.
+ * For multi-row units of work (one sampler tick = sample + counters).
+ * The connection must not already hold a transaction.
+ */
+export function withTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}

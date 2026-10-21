@@ -45,6 +45,12 @@ export interface TeslaCredentialInput {
   callbackPort?: number;
 }
 
+/** The operator's home coordinates — stored as a secret, see CredentialStore.getHomeLocation. */
+export interface HomeLocation {
+  latitude: number;
+  longitude: number;
+}
+
 interface StoredCredentials {
   franklin?: {
     username: string;
@@ -64,6 +70,7 @@ interface StoredCredentials {
     domain?: string;
     callbackPort?: number;
   };
+  homeLocation?: HomeLocation;
 }
 
 /** The only keychain operations this module needs, backed by @napi-rs/keyring. */
@@ -329,6 +336,28 @@ export class CredentialStore {
   async clearTeslaCredentials(): Promise<void> {
     await this.initialize();
     delete this.credentials.tesla;
+    await this.save();
+  }
+
+  /**
+   * Home coordinates — a secret (geofence evaluation + weather fetch), never
+   * written to config.json; raw coordinates are also never persisted to the
+   * store (only the evaluated `at_home` boolean is).
+   */
+  async getHomeLocation(): Promise<HomeLocation | undefined> {
+    await this.initialize();
+    return this.credentials.homeLocation;
+  }
+
+  async setHomeLocation(latitude: number, longitude: number): Promise<void> {
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+      throw new Error(`latitude must be a number between -90 and 90 (got ${latitude})`);
+    }
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      throw new Error(`longitude must be a number between -180 and 180 (got ${longitude})`);
+    }
+    await this.initialize();
+    this.credentials.homeLocation = { latitude, longitude };
     await this.save();
   }
 

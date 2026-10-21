@@ -94,3 +94,17 @@ describe('prune', () => {
     expect(() => ev.prune(db, -1, 0)).toThrow(/retentionDays/);
   });
 });
+
+describe('samplesInRange', () => {
+  it('returns the vehicle’s samples in [from, to], oldest first', () => {
+    ev.insertSample(db, { vehicleId: 'VIN-A', tsMs: 100, socPercent: 10 });
+    ev.insertSample(db, { vehicleId: 'VIN-A', tsMs: 200, socPercent: 20 });
+    ev.insertSample(db, { vehicleId: 'VIN-B', tsMs: 150, socPercent: 99 });
+    ev.insertSample(db, { vehicleId: 'VIN-A', tsMs: 300, socPercent: 30 });
+
+    const rows = ev.samplesInRange(db, 'VIN-A', 150, 250);
+    expect(rows.map((row) => row.tsMs)).toEqual([200]); // bounds inclusive; VIN-B excluded
+    expect(ev.samplesInRange(db, 'VIN-A', 0, 1_000).map((r) => r.tsMs)).toEqual([100, 200, 300]);
+    expect(ev.samplesInRange(db, 'VIN-A', 500, 600)).toEqual([]);
+  });
+});
