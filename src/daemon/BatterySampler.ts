@@ -4,12 +4,13 @@
  * (split tables, same tick — the design's "different measurement classes"
  * rule).
  *
- * Mapping notes: `batteryUse` sign follows the types/battery.ts contract
- * (positive = charging). The `*_kwh` totals are day-so-far counters; their
- * exact midnight-reset semantics are non-critical downstream because
- * sessionAggregates.monotonicDelta skips resets (units: kWh — magnitude
- * verified at live `daemon --once`). `soc_kwh` stays NULL: getStats does not
- * carry available energy (the composite-info read does; revisit if needed).
+ * Mapping notes: live-verified 2026-10-21 — the franklinwh library reports
+ * instantaneous power in kW (a "0.267" home load is 267 W), while the store's
+ * *_w columns are watts, so the sampler converts (×1000). Totals are day-so-far
+ * counters in kWh as named; their midnight-reset semantics are non-critical
+ * downstream because sessionAggregates.monotonicDelta skips resets.
+ * `batteryUse` sign follows the types/battery.ts contract (positive = charging).
+ * `soc_kwh` stays NULL: getStats does not carry available energy.
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { FranklinWHService } from '../services/FranklinWHService.js';
@@ -41,10 +42,11 @@ export function createBatterySampler(deps: BatterySamplerDeps): ScheduledTask {
           tsMs,
           socPercent: stats.current.batterySoc,
           socKwh: null,
-          powerW: stats.current.batteryUse,
-          homeLoadW: stats.current.homeLoad,
-          solarW: stats.current.solarProduction,
-          gridW: stats.current.gridUse,
+          // The library's instantaneous power is kW; the store's columns are W.
+          powerW: stats.current.batteryUse * 1000,
+          homeLoadW: stats.current.homeLoad * 1000,
+          solarW: stats.current.solarProduction * 1000,
+          gridW: stats.current.gridUse * 1000,
         });
         homeBattery.insertCounters(deps.db, {
           homeBatteryId: deps.homeBatteryId,

@@ -39,12 +39,14 @@ afterEach(() => {
 function franklinFixture(): BatteryFullStats {
   return {
     current: {
-      solarProduction: 4200,
+      // The franklinwh wire format is kW (live-verified 2026-10-21);
+      // BatterySampler converts to the store's W columns.
+      solarProduction: 4.2,
       generatorProduction: 0,
       generatorEnabled: false,
-      batteryUse: -500,
+      batteryUse: -0.5,
       gridUse: 0,
-      homeLoad: 3700,
+      homeLoad: 3.7,
       batterySoc: 62.5,
       switch1Load: 0,
       switch2Load: 0,
