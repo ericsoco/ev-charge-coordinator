@@ -43,7 +43,12 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
     name: 'pair-tesla-key',
     description: "Register this application's virtual key with Tesla and print the vehicle pairing link",
   },
-  { name: 'status', description: 'Show current status of all systems' },
+  { name: 'status', description: 'Show daemon, store, proxy, and config status' },
+  { name: 'sessions', description: 'Show recent charging sessions' },
+  {
+    name: 'set-home-location',
+    description: 'Set the home location (secret): from arguments, or from the vehicle',
+  },
   { name: 'exit', description: 'Exit the application' },
 ];
 
@@ -62,12 +67,15 @@ export const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
     'set-efficiency',
   ],
   'pair-tesla-key': ['domain', 'vin'],
+  sessions: ['limit'],
 };
 
 export const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
   config: ['clear-franklin', 'clear-tesla', 'clear-credentials', 'show-public-key', 'help'],
   'pair-tesla-key': ['check-only', 'skip-registration', 'help'],
   'charge-from-battery': ['start', 'dry-run', 'help'],
+  status: ['json', 'help'],
+  sessions: ['open', 'help'],
 };
 
 export interface ParsedArgs {

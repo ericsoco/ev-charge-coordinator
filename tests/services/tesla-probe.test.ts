@@ -119,3 +119,40 @@ describe('getStatus chargeEnergyAdded', () => {
     expect(status.battery.chargeEnergyAdded).toBeUndefined();
   });
 });
+
+describe('getVehicleLocation', () => {
+  /** Adapter answering only the drive_state narrow read. */
+  function driveStateAdapter(client: AxiosInstance, driveState: unknown): Recorded[] {
+    const recorded: Recorded[] = [];
+    client.defaults.adapter = async (config) => {
+      recorded.push({ url: config.url, params: config.params });
+      return ok(config, { response: { drive_state: driveState } });
+    };
+    return recorded;
+  }
+
+  it('maps latitude/longitude from drive_state', async () => {
+    const { tesla } = await service(['online']);
+    const recorded = driveStateAdapter(
+      (tesla as unknown as { client: AxiosInstance }).client,
+      { latitude: 37.7749, longitude: -122.4194, heading: 90 }
+    );
+
+    expect(await tesla.getVehicleLocation()).toEqual({
+      latitude: 37.7749,
+      longitude: -122.4194,
+    });
+    expect(recorded[0].params).toEqual({ endpoints: 'drive_state' });
+  });
+
+  it('fails with scope guidance when the fields are missing', async () => {
+    const { tesla } = await service(['online']);
+    // Scope missing: Tesla returns drive_state without the location fields.
+    driveStateAdapter((tesla as unknown as { client: AxiosInstance }).client, {
+      heading: 90,
+    });
+
+    await expect(tesla.getVehicleLocation()).rejects.toThrow(/vehicle_location scope/);
+    await expect(tesla.getVehicleLocation()).rejects.toThrow(/Re-run `authenticate`/);
+  });
+});

@@ -179,3 +179,57 @@ export function finalizeSession(
     ) as { id: number } | null | undefined;
   return row ? Number(row.id) : null;
 }
+
+/** Aggregate view for the `sessions` CLI footer; NULL averages = no data. */
+export interface SessionStats {
+  total: number;
+  open: number;
+  closed: number;
+  avgEnergyKwh: number | null;
+  avgEfficiency: number | null;
+  avgElapsedMs: number | null;
+}
+
+export function sessionStats(db: DatabaseSync, siteId: SiteId = HOME_SITE): SessionStats {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN unplug_ts_ms IS NULL THEN 1 ELSE 0 END) AS open_count,
+              AVG(energy_kwh) AS avg_energy_kwh,
+              AVG(efficiency) AS avg_efficiency,
+              AVG(elapsed_ms) AS avg_elapsed_ms
+         FROM sessions WHERE site_id = ?`
+    )
+    .get(siteId) as {
+    total: number | bigint;
+    open_count: number | bigint | null;
+    avg_energy_kwh: number | null;
+    avg_efficiency: number | null;
+    avg_elapsed_ms: number | null;
+  };
+  const total = Number(row.total);
+  const open = Number(row.open_count ?? 0);
+  return {
+    total,
+    open,
+    closed: total - open,
+    avgEnergyKwh: row.avg_energy_kwh,
+    avgEfficiency: row.avg_efficiency,
+    avgElapsedMs: row.avg_elapsed_ms,
+  };
+}
+
+/** Sessions still open (unplug_ts_ms NULL), newest first. */
+export function openSessions(
+  db: DatabaseSync,
+  siteId: SiteId = HOME_SITE
+): SessionRow[] {
+  const rows = db
+    .prepare(
+      `SELECT ${SESSION_COLUMNS} FROM sessions
+        WHERE site_id = ? AND unplug_ts_ms IS NULL
+        ORDER BY plug_ts_ms DESC, id DESC`
+    )
+    .all(siteId) as unknown as SessionRow[];
+  return rows;
+}

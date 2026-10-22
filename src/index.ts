@@ -57,10 +57,14 @@ import {
   getChargingState,
   getEvBatterySoc,
   setEvChargeLimit,
-  showStatus,
   startEvCharging,
   stopEvCharging,
 } from './commands/vehicle.js';
+import {
+  setHomeLocationCommand,
+  showSessions,
+  showStatus,
+} from './commands/system.js';
 
 import {
   clearRuntimeState,
@@ -703,8 +707,43 @@ program
           await runAuthenticate();
           break;
 
-        case 'status':
-          await showStatus(currentContext());
+        case 'status': {
+          const { options, error } = parseCommandArgs('status', args);
+          if (error) {
+            console.log(paint.warning(error));
+            break;
+          }
+          if (options.help) {
+            printCommandHelp('status');
+            break;
+          }
+          await showStatus(currentContext(), { json: options.json === true });
+          break;
+        }
+
+        case 'sessions': {
+          const { options, error } = parseCommandArgs('sessions', args);
+          if (error) {
+            console.log(paint.warning(error));
+            break;
+          }
+          if (options.help) {
+            printCommandHelp('sessions');
+            break;
+          }
+          const limit = options.limit === undefined ? 10 : Number(options.limit);
+          await showSessions(currentContext(), {
+            limit,
+            openOnly: options.open === true,
+          });
+          break;
+        }
+
+        case 'set-home-location':
+          // Positional arguments only, no flags: `set-home-location` uses the
+          // vehicle; `set-home-location <lat> <lng>` sets manually. The handler
+          // always confirms before writing (the stored value is otherwise invisible).
+          await setHomeLocationCommand(currentContext(), args[0], args[1]);
           break;
 
         // Everything below dispatches to the same handler the one-shot CLI path
@@ -1048,6 +1087,37 @@ program
       reportDebugDetails(cliOptions.debug, error);
       process.exitCode = 1;
     }
+  });
+
+program
+  .command('status')
+  .description('Show daemon, store, proxy, and config status (reads only — starts nothing)')
+  .option('--json', 'Machine-readable output')
+  .action(async (options) => {
+    await runCommand((ctx) => showStatus(ctx, { json: options.json === true }));
+  });
+
+program
+  .command('sessions')
+  .description('Show recent charging sessions from the store')
+  .option('--limit <n>', 'How many sessions to show (default 10)')
+  .option('--open', 'Only sessions that are still open')
+  .action(async (options) => {
+    const limit = options.limit === undefined ? 10 : Number(options.limit);
+    await runCommand((ctx) => showSessions(ctx, { limit, openOnly: options.open === true }));
+  });
+
+program
+  .command('set-home-location')
+  .description('Set the home location (a secret): from arguments, or from the vehicle when given none')
+  .argument('[latitude]', 'Latitude (-90..90)')
+  .argument('[longitude]', 'Longitude (-180..180)')
+  .action(async (latitude?: string, longitude?: string) => {
+    // Only the vehicle flow needs Tesla; the manual flow stays service-free.
+    if (latitude === undefined && longitude === undefined) {
+      requireService('Tesla', await initializeTesla());
+    }
+    await runCommand((ctx) => setHomeLocationCommand(ctx, latitude, longitude));
   });
 
 program

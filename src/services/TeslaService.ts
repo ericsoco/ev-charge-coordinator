@@ -13,7 +13,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as http from 'http';
 import * as https from 'https';
-import type { EVService, EVCredentials, EVStatus, EVVehicleState, EVBatteryStats, TeslaTokens } from '../types/ev.js';
+import type { EVService, EVCredentials, EVStatus, EVVehicleState, VehicleLocation, EVBatteryStats, TeslaTokens } from '../types/ev.js';
 import { credentialStore } from '../utils/credentials.js';
 import * as paint from '../utils/color.js';
 import {
@@ -800,6 +800,31 @@ export class TeslaService implements EVService {
       `/api/1/vehicles/${this.vin}`
     );
     return { state: response.data.response.state };
+  }
+
+  /**
+   * Position via `vehicle_data?endpoints=drive_state`. The `vehicle_location`
+   * scope gates the location fields; when they are absent the error names the
+   * scope instead of returning a silent undefined. Read-only: never wakes.
+   */
+  async getVehicleLocation(): Promise<VehicleLocation> {
+    if (!this.vin) {
+      await this.resolveVin();
+    }
+    const response = await this.client.get<{
+      response: { drive_state?: { latitude?: number; longitude?: number } };
+    }>(`/api/1/vehicles/${this.vin}/vehicle_data`, {
+      params: { endpoints: 'drive_state' },
+    });
+    const driveState = response.data.response.drive_state;
+    if (typeof driveState?.latitude !== 'number' || typeof driveState?.longitude !== 'number') {
+      throw new Error(
+        'Location is not in the vehicle response — the vehicle_location scope is ' +
+          'probably missing. Re-run `authenticate` (the scope was added 2026-10-21) and ' +
+          'ensure Vehicle Location is selected on developer.tesla.com.'
+      );
+    }
+    return { latitude: driveState.latitude, longitude: driveState.longitude };
   }
 
   async getStatus(): Promise<EVStatus> {

@@ -351,25 +351,5 @@ export async function chargeFromBattery(
   }
 }
 
-export async function showStatus(ctx: CommandContext): Promise<CommandResult> {
-  log(ctx, paint.info('\n--- System Status ---'));
-  log(
-    ctx,
-    `FranklinWH: ${
-      ctx.franklin?.isAuthenticated() ? paint.positive('✓ Connected') : paint.error('✗ Not connected')
-    }`
-  );
-  log(
-    ctx,
-    `Tesla: ${
-      ctx.tesla?.isAuthenticated() ? paint.positive('✓ Connected') : paint.error('✗ Not connected')
-    }`
-  );
-  const energy = ctx.config.resolve();
-  let buffer = '(unset)';
-  if (energy.config) buffer = `${energy.config.bufferPercent}%`;
-  else if (energy.invalid.length > 0) buffer = '(invalid -- see `config`)';
-  log(ctx, `Battery Buffer: ${buffer}`);
-  log(ctx, '');
-  return { ok: true };
-}
+// showStatus moved to ./system.ts — it was never vehicle-specific, and the
+// system-status surface (daemon/store/proxies/config) lives there now.

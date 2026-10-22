@@ -25,6 +25,12 @@ export interface EVVehicleState {
   state: string; // e.g., "online", "asleep", "offline"
 }
 
+/** Vehicle position; requires the `vehicle_location` OAuth scope. */
+export interface VehicleLocation {
+  latitude: number;
+  longitude: number;
+}
+
 export interface EVCredentials {
   clientId: string;
   clientSecret: string;
@@ -86,6 +92,13 @@ export interface EVService {
    * loop gates the expensive read on this result.
    */
   getVehicleState(): Promise<EVVehicleState>;
+
+  /**
+   * Current vehicle position. Requires the `vehicle_location` scope; like
+   * every read this never wakes the vehicle — commands that must work on a
+   * sleeping car wake first (the wake decision belongs to the command).
+   */
+  getVehicleLocation(): Promise<VehicleLocation>;
 
   /**
    * Wake up the vehicle if asleep.
