@@ -100,6 +100,10 @@ JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
      * Vehicle Information (`vehicle_device_data`)
      * Vehicle Commands (`vehicle_cmds`)
      * Vehicle Charging Management (`vehicle_charging_cmds`)
+     * Vehicle Location (`vehicle_location`) — used by `set-home-location`'s
+       vehicle flow and, later, the geofence filter (added 2026-10-21;
+       **existing installs must re-run `authenticate`** — scopes are requested
+       at authorization, so refreshes never gain a new one)
 5. Generate a public/private key pair for command signing. `pair-tesla-key` does this
    for you on first run; to do it by hand instead, the equivalent of what it produces
    is:
@@ -320,6 +324,10 @@ npm start config --clear-credentials
 | `start --daemon` | Start and stay resident without a prompt, for running in the background |
 | `start --debug` | Print full stack traces for service startup failures |
 | `exit` | Terminate all services |
+| `daemon [--once]` | Run the collect daemon in the foreground (battery/EV/weather samplers, session tracking, history); `--once` runs a single collection cycle and exits non-zero if any task failed |
+| `status [--json]` | Show daemon, store, proxy, and config status — reads only, starts nothing (service lines reflect this process; proxies are probed on localhost) |
+| `sessions [--limit <n>] [--open]` | Show recent charging sessions from the store (default 10; `--open` lists only sessions still open) |
+| `set-home-location [<latitude> <longitude>]` | Set the home location (a secret — stored in the keychain, never config.json or the store). With arguments: manual. With none: wakes the vehicle and reads its current position. Both forms confirm with current → new before writing; requires the `vehicle_location` scope |
 | `get-ev-bsoc` | Get the current battery state of charge from the EV |
 | `authenticate` | Sign in to Tesla and store credentials (no other side effects) |
 | `get-battery-soc` | Get the current battery state of charge from the solar battery |
@@ -346,7 +354,12 @@ npm start config --clear-credentials
 When running in interactive mode (`start`), the following commands are available:
 
 - `help` - Show available commands
-- `status` - Show current status of all systems
+- `status` - Show daemon, store, proxy, and config status (reads only; `--json`
+  for machine-readable output)
+- `sessions` - Show recent charging sessions (`--limit <n>`, `--open`)
+- `set-home-location` - Set the home location (secret): with `<lat> <lng>`
+  sets manually; with no arguments wakes the vehicle and uses its current
+  position; both forms confirm with current → new before writing
 - `authenticate` - Sign in to Tesla and store the credentials
 - `get-ev-bsoc` - Get EV battery state of charge
 - `get-battery-soc` - Get solar battery state of charge
