@@ -631,4 +631,28 @@ commits:
 - Next: Step 5 — `status`, `sessions`, `set-home-location` CLI (+ REPL wiring) — and
   `set-home-location` is what finally turns the weather sampler on.
 
+### 2026-10-21 — P1a step-4 addendum: Open-Meteo fetch retries
+
+Branch `feat/p1a-samplers-daemon` (still unlanded; addendum appended), two commits:
+
+- **User-driven scope:** `monotonicDelta` stays as-is (per-step accumulation accepted after
+  the precision review: error bounded by n×ulp ≪ the 0.001 kWh input quantization, and
+  empirically exact at 1e6 steps); only the Open-Meteo resiliency request proceeds.
+- `c31ab68` **deps: axios-retry@4.5.0** (+ `is-retry-allowed@2.2.0`, MIT, zero transitive).
+  Pre-commit verification deviated from expectations — **disclosed and user-approved before
+  coding**: Apache-2.0 (expected MIT) and one tiny runtime dep (expected zero); closure is 2
+  permissive-license packages, axios 1.x peer-compatible.
+- **`WeatherSampler`:** `createOpenMeteoClient()` factory — retries: 3 (daily task, not
+  aggressive), `exponentialDelay` backoff (≈1s/2s/4s + jitter), network/timeout/5xx-only
+  condition (never 4xx — bad requests fail fast), **10 s per-attempt timeout**
+  (`shouldResetTimeout`) — closing a real gap: axios's default is *no* timeout, so a hung
+  connection would never fail and would hold `stop()`'s drain open. `fetchOpenMeteo` takes an
+  injectable client (house DI pattern).
+- **4 tests** (adapter seam, real timers, zero-delay backoff): 5xx×2 then success (3 calls),
+  network errors retried, persistent 5xx rejects after configured attempts, 400 → exactly 1
+  call. Skipped timesteps remain safe by design: append-only forecast vintages + null-tolerant
+  hour rows + a failed day simply yields to tomorrow's fetch.
+- Gate: `npm run check` green — **483 passed / 2 skipped** (baseline 479 + 4).
+- Next: Step 5 — `status`, `sessions`, `set-home-location` CLI (unchanged).
+
 
