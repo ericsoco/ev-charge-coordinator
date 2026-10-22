@@ -9,8 +9,14 @@
  *
  * Without the home-location secret the task skips with a one-time notice —
  * collection degrades gracefully until `set-home-location` runs (step 5).
+ *
+ * Resiliency (step-4 addendum): transient failures (network, timeout, 5xx)
+ * are retried with axios-retry — modest backoff, never on 4xx. A per-attempt
+ * timeout is set because axios's default is *no* timeout: a hung connection
+ * would otherwise never fail and never retry.
  */
-import axios from 'axios';
+import axios, { type AxiosInstance } from 'axios';
+import axiosRetry, { exponentialDelay } from 'axios-retry';
 import type { DatabaseSync } from 'node:sqlite';
 import type { HomeLocation } from '../utils/credentials.js';
 import * as weather from '../store/WeatherForecastStore.js';
@@ -24,13 +30,48 @@ export interface ForecastHour extends NewWeatherForecast {
 
 export type FetchForecast = (latitude: number, longitude: number) => Promise<ForecastHour[]>;
 
-/** Default fetcher: Open-Meteo, 3 days of hourly data, UTC. */
-export async function fetchOpenMeteo(latitude: number, longitude: number): Promise<ForecastHour[]> {
+/** Tunables for the Open-Meteo client; defaults are the production policy. */
+export interface OpenMeteoClientOptions {
+  /** Extra attempts after the first (default 3 — a daily task, not aggressive). */
+  retries?: number;
+  /** Per-attempt timeout in ms (default 10s). */
+  timeoutMs?: number;
+  /** Backoff between attempts (default axios-retry's exponentialDelay ≈1s/2s/4s + jitter). */
+  retryDelay?: (retryNumber: number, error: unknown) => number;
+}
+
+/**
+ * The retry-aware Open-Meteo client. GET is idempotent, so axios-retry's
+ * default condition retries network errors, timeouts and 5xx — never 4xx (a
+ * genuinely bad request fails fast instead of burning retries).
+ */
+export function createOpenMeteoClient(options: OpenMeteoClientOptions = {}): AxiosInstance {
+  const client = axios.create({
+    baseURL: 'https://api.open-meteo.com',
+    timeout: options.timeoutMs ?? 10_000,
+  });
+  axiosRetry(client, {
+    retries: options.retries ?? 3,
+    retryDelay: options.retryDelay ?? exponentialDelay,
+    shouldResetTimeout: true, // each attempt gets its own full timeout budget
+    retryCondition: axiosRetry.isNetworkOrIdempotentRequestError,
+  });
+  return client;
+}
+
+const defaultOpenMeteoClient = createOpenMeteoClient();
+
+/** Default fetcher: Open-Meteo, 3 days of hourly data, UTC, retries transient failures. */
+export async function fetchOpenMeteo(
+  latitude: number,
+  longitude: number,
+  client: AxiosInstance = defaultOpenMeteoClient
+): Promise<ForecastHour[]> {
   const url =
-    'https://api.open-meteo.com/v1/forecast' +
+    '/v1/forecast' +
     `?latitude=${latitude}&longitude=${longitude}` +
     '&hourly=shortwave_radiation,temperature_2m&forecast_days=3&timezone=UTC';
-  const response = await axios.get(url);
+  const response = await client.get(url);
   const hourly = (response.data as { hourly?: unknown }).hourly as
     | { time?: unknown; shortwave_radiation?: unknown; temperature_2m?: unknown }
     | undefined;
