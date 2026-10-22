@@ -42,9 +42,9 @@
 
 ## P1a — collect-only daemon (active execution plan)
 
-> Status: **Step 4 — samplers + runDaemon + `daemon` CLI + store report complete (2026-10-21);
-> next: Step 5 — status / sessions / set-home-location CLI (detail to be planned at
-> execution).** Standing rules:
+> Status: **Step 5 — status / sessions / set-home-location CLI + REPL wiring complete
+> (2026-10-21); next: Step 6 — launchd assets + README daemon section (guide already in this
+> file).** Standing rules:
 > one step at a time; each step green (`npm run check`) + its own commit on the step's branch
 > (step 1: `feat/p1a-collect-daemon`, step 2: `feat/p1a-daemon-runtime`); stop for review after each step; **the user performs the launchd
 > install themselves** (guide below). Design rationale: [design.md](./design.md) §3/§5.
@@ -654,5 +654,47 @@ Branch `feat/p1a-samplers-daemon` (still unlanded; addendum appended), two commi
   hour rows + a failed day simply yields to tomorrow's fetch.
 - Gate: `npm run check` green — **483 passed / 2 skipped** (baseline 479 + 4).
 - Next: Step 5 — `status`, `sessions`, `set-home-location` CLI (unchanged).
+
+### 2026-10-21 — P1a step 5 complete: status/sessions/set-home-location CLI + REPL
+
+Branch `feat/p1a-store-cli` (precondition verified: step 4 + addendum on `main`), three
+commits:
+
+- `49f16a1` **feat** (14 files, +1192):
+  - **Scope change (prerequisite, disclosed):** `vehicle_location` added to `TESLA_SCOPES` —
+    existing installs must re-run `authenticate` (scopes are minted at authorization).
+    The oauth scope-exactness test updated; a pin now guards the new scope. This retires
+    design.md's P1b spike #3 early.
+  - **`EVService.getVehicleLocation()`** — `vehicle_data?endpoints=drive_state`; missing
+    location fields throw with re-auth guidance; read never wakes (the command decides).
+  - **`showStatus` moved `vehicle.ts` → `commands/system.ts`** (never vehicle-specific) and
+    extended: daemon lock state (running/stale/stopped/unreadable), store path/schema/size/
+    counts/last-sample ages, Franklin proxy health probe (runtime.json pid + localhost
+    /health, 1s), Tesla command proxy TCP probe (:4443), effective daemon config, home
+    location set/not-set (coordinates never printed), `--json` output. Hard no-side-effects
+    rule: no service init, no spawns, no writes. One-shot service lines now probe-based
+    instead of the misleading "(not connected)".
+  - **`sessions [--limit <n>] [--open]`** — newest-first lines with energy/house/efficiency
+    + aggregates footer (new `SessionStore.sessionStats` / `openSessions`).
+  - **`set-home-location [<lat> <lng>]`** — flag-free two-mode API (user's Option 1): no
+    args = vehicle flow (wake → read → confirm `Vehicle reports … Current … Set?`), args =
+    manual; **every write confirms with current → new**; REPL command too (`authenticate`
+    precedent), positional args flow raw past `parseCommandArgs`; drift-guard satisfied with
+    no tables/whitelist (no options).
+  - REPL wiring: `status --json`, `sessions` (+flag tables, completer follows), 20 new tests.
+    Fixes en route: `nowMs` invoked-not-assigned bug (typecheck), 5 test-expectation updates
+    (requireService pin 8→9, completer now offers status flags, config-in-vitest-env null
+    buffer, formatAge day form, closeOpenSession newest-plug ordering), one label fix
+    (`daemon defaults:` when no daemon.json exists — live-checked).
+- `46a3155` **docs:** README CLI Reference rows (daemon, status, sessions, set-home-location),
+  Interactive Mode entries, and the scope step + re-auth note.
+- **Live verification (read-only):** `node dist/index.js status` renders all five sections
+  against the real store (schema v1, 60 KB, 2 battery rows, 4 events, effective config);
+  `sessions` shows the friendly empty message; `status --json` parses. **Deliberately not run
+  live:** `set-home-location` (writes the real secret + needs the re-auth first — user
+  performs both).
+- Gate: `npm run check` green — **503 passed / 2 skipped** (baseline 483 + 20).
+- Next: Step 6 — launchd assets (`scripts/evcc-daemon.plist`, install/uninstall scripts) +
+  README daemon section; **user installs and bootstraps** (guide above this log).
 
 
