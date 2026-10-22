@@ -115,10 +115,12 @@ describe('completeCommand', () => {
     expect(completeCommand('config --set-buffer 2')).toEqual([[], '2']);
   });
 
-  it('offers nothing for unknown commands, non-flag tokens, and flagless commands', () => {
+  it('offers nothing for unknown commands and non-flag tokens; flags for flagged commands', () => {
     expect(completeCommand('nope --')).toEqual([[], '--']);
     expect(completeCommand('config foo')).toEqual([[], 'foo']);
-    expect(completeCommand('status --')).toEqual([[], '--']);
+    // status gained --json with the store-aware rewrite; the completer follows
+    // the flag tables, so it now offers the flags.
+    expect(completeCommand('status --')).toEqual([['--json', '--help'], '--']);
   });
 
   it('offers command names as help topics', () => {

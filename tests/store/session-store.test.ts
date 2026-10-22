@@ -222,3 +222,59 @@ describe('finalizeSession', () => {
     ).toBeNull();
   });
 });
+
+describe('sessionStats / openSessions', () => {
+  it('aggregates totals and averages across closed sessions', () => {
+    for (const [i, plug] of [1_000, 2_000].entries()) {
+      const id = sessions.openSession(db, {
+        vehicleId: VEHICLE,
+        homeBatteryId: BATTERY,
+        plugTsMs: plug,
+      });
+      sessions.closeOpenSession(db, VEHICLE, plug + 60_000);
+      sessions.finalizeSession(db, id, {
+        energyKwh: 10 + i,
+        energyPercent: 10,
+        elapsedMs: 60_000,
+        houseEnergyKwh: 12 + i,
+        efficiency: (10 + i) / (12 + i),
+      });
+    }
+    sessions.openSession(db, { vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 3_000 });
+
+    const stats = sessions.sessionStats(db);
+    expect(stats).toMatchObject({ total: 3, open: 1, closed: 2 });
+    expect(stats.avgEnergyKwh).toBeCloseTo(10.5, 10);
+    expect(stats.avgElapsedMs).toBe(60_000);
+    expect(stats.avgEfficiency).toBeCloseTo((10 / 12 + 11 / 13) / 2, 10);
+  });
+
+  it('reports zeros and nulls on an empty store', () => {
+    expect(sessions.sessionStats(db)).toEqual({
+      total: 0,
+      open: 0,
+      closed: 0,
+      avgEnergyKwh: null,
+      avgEfficiency: null,
+      avgElapsedMs: null,
+    });
+    expect(sessions.openSessions(db)).toEqual([]);
+  });
+
+  it('openSessions returns only open sessions, newest plug first', () => {
+    sessions.openSession(db, { vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 100 });
+    sessions.openSession(db, { vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 200 });
+    // closeOpenSession closes the newest-plug session (plug order = open order
+    // in real flows), so the closed one is the last opened here.
+    const closedId = sessions.openSession(db, {
+      vehicleId: VEHICLE,
+      homeBatteryId: BATTERY,
+      plugTsMs: 300,
+    });
+    sessions.closeOpenSession(db, VEHICLE, 350);
+
+    const open = sessions.openSessions(db);
+    expect(open.map((row) => row.id)).not.toContain(closedId);
+    expect(open.map((row) => row.plugTsMs)).toEqual([200, 100]);
+  });
+});

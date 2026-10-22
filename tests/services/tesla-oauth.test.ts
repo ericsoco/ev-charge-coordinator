@@ -403,8 +403,9 @@ describe('endpoint and region resolution', () => {
   it('requests the scopes the commands need plus offline_access', () => {
     expect(TESLA_SCOPES).toContain('offline_access');
     expect(TESLA_SCOPES).toContain('vehicle_charging_cmds');
+    expect(TESLA_SCOPES).toContain('vehicle_location');
     expect(TESLA_SCOPE_STRING).toBe(
-      'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds'
+      'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds vehicle_location'
     );
   });
 

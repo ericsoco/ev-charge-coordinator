@@ -24,8 +24,9 @@ describe('one-shot service initialization', () => {
     expect(INDEX_SOURCE).toContain('if (init.ok) return;');
 
     const sites = INDEX_SOURCE.match(/requireService\('(Tesla|FranklinWH)', await initialize/g) ?? [];
-    // Six single-service actions plus charge-from-battery, which needs both.
-    expect(sites).toHaveLength(8);
+    // Six single-service actions, charge-from-battery (both services), and
+    // set-home-location's vehicle flow (Tesla, only when no arguments given).
+    expect(sites).toHaveLength(9);
   });
 
   it('skips the credential prompt when the proxy itself failed to start', () => {
