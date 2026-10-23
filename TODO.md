@@ -5,6 +5,7 @@ FEATURES
     [-] Switch to Fleet Telemetry to receive pushes?
     [ ] Add analytics to ensure the poll-while-awake algo does not regress and cause
         unintended vehicle wake (watch for lack of poll requests returning 'asleep')
+    [ ] enable long-running process during sleep via /usr/bin/caffeinate (in plist, with `-is` flags)
 [ ] Host application online somewhere
     Ideally this is part of the install + build process, and can leverage publicly available tooling for hosting (GH pages?)
     Need to think about what other functionality we'll need in the future,
