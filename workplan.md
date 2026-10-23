@@ -42,9 +42,8 @@
 
 ## P1a — collect-only daemon (active execution plan)
 
-> Status: **Step 5 — status / sessions / set-home-location CLI + REPL wiring complete
-> (2026-10-21); next: Step 6 — launchd assets + README daemon section (guide already in this
-> file).** Standing rules:
+> Status: **Step 6 — launchd assets + README daemon section complete (2026-10-21); next:
+> Step 7 — validation checklist (user installs the LaunchAgent, live checks).** Standing rules:
 > one step at a time; each step green (`npm run check`) + its own commit on the step's branch
 > (step 1: `feat/p1a-collect-daemon`, step 2: `feat/p1a-daemon-runtime`); stop for review after each step; **the user performs the launchd
 > install themselves** (guide below). Design rationale: [design.md](./design.md) §3/§5.
@@ -256,8 +255,8 @@ keychain session and would fall back to encrypted-file credentials.
 `/Users/ericsoco/Documents/lab/code/ev-charge-coordinator` · config `~/.ev-charge-coordinator`
 · uid 501.
 
-**Plist** → `~/Library/LaunchAgents/com.ericsoco.ev-charge-coordinator.daemon.plist`
-(template ships as `scripts/evcc-daemon.plist` in step 6):
+**Plist** → `~/Library/LaunchAgents/com.transmote.ev-charge-coordinator.daemon.plist`
+(rendered from the `scripts/evcc-daemon.plist` template by `scripts/install-daemon.sh`):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -265,7 +264,7 @@ keychain session and would fall back to encrypted-file credentials.
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.ericsoco.ev-charge-coordinator.daemon</string>
+  <string>com.transmote.ev-charge-coordinator.daemon</string>
   <key>ProgramArguments</key>
   <array>
     <string>/Users/ericsoco/.nvm/versions/node/v24.14.0/bin/node</string>
@@ -288,20 +287,21 @@ keychain session and would fall back to encrypted-file credentials.
 </plist>
 ```
 
-**Install** (step 6's `scripts/install-daemon.sh` automates 1–4):
+**Install** (`scripts/install-daemon.sh` automates 1–4; `--dry-run` renders and prints without
+touching anything):
 1. `npm run build` (dist must be current)
 2. `mkdir -p ~/.ev-charge-coordinator/logs`
 3. Write the plist → `plutil -lint <plist>`
-4. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ericsoco.ev-charge-coordinator.daemon.plist`
-5. Verify: `launchctl print gui/$(id -u)/com.ericsoco.ev-charge-coordinator.daemon | grep -E
+4. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.transmote.ev-charge-coordinator.daemon.plist`
+5. Verify: `launchctl print gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon | grep -E
    'state|pid'` · `tail -f ~/.ev-charge-coordinator/logs/daemon.log` · (from step 5)
    `node dist/index.js status`
 6. **First-run keychain prompt:** macOS may ask to allow `node` to access the
    `ev-charge-coordinator` keychain item — "Always Allow" once.
 
-**Operate:** stop `launchctl bootout gui/$(id -u)/com.ericsoco.ev-charge-coordinator.daemon` ·
-restart in place `launchctl kickstart -k gui/$(id -u)/com.ericsoco.ev-charge-coordinator.daemon`
-· uninstall = bootout + `rm` the plist (`scripts/uninstall-daemon.sh`, step 6) · auto-loads at
+**Operate:** stop `launchctl bootout gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon` ·
+restart in place `launchctl kickstart -k gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon`
+· uninstall = bootout + `rm` the plist (`scripts/uninstall-daemon.sh`) · auto-loads at
 login via `RunAtLoad` (`launchctl enable` if ever disabled).
 
 **Caveats (documented, nothing automated):**
@@ -314,7 +314,8 @@ login via `RunAtLoad` (`launchctl enable` if ever disabled).
   schedule on charging nights is the user's call — not automated.
 - **Logs:** launchd doesn't rotate; the daemon logs sparsely — truncate with `: > <logfile>`.
 - **`exit` interplay:** `node dist/index.js exit` stops the Franklin proxy the daemon owns; the
-  daemon health-checks and restarts it.
+  next battery tick re-attaches (respawning it if needed) and re-authenticates via
+  `FranklinWHService.reconnect()` — implemented in step 6 as this guide promised.
 
 ### Validation checklist (step 7)
 
@@ -696,5 +697,48 @@ commits:
 - Gate: `npm run check` green — **503 passed / 2 skipped** (baseline 483 + 20).
 - Next: Step 6 — launchd assets (`scripts/evcc-daemon.plist`, install/uninstall scripts) +
   README daemon section; **user installs and bootstraps** (guide above this log).
+
+### 2026-10-21 — P1a step 6 complete: launchd assets, README daemon section, franklin self-heal
+
+Branch `feat/p1a-launchd` (precondition verified: step 5 + review fix had landed on `main` as
+`35f4c13`/`2592a41`). Four commits:
+- `b1e7a66` **carry-over:** the staged `.agents/skills/github-pr-reply/SKILL.md` one-liner
+  (step 1 runs gh as shell commands), committed first as its own commit per user request.
+- `eed0176` **feat — launchd assets + self-heal:**
+  - `scripts/evcc-daemon.plist` — template: **`com.transmote.ev-charge-coordinator.daemon`**
+    Label first, `ProgramArguments` = pinned node → `dist/index.js` → `daemon`,
+    `RunAtLoad` + `KeepAlive`, logs under the config dir, PATH seeded with the node bin dir;
+    four placeholders (`__NODE_BIN__`, `__NODE_BIN_DIR__`, `__REPO_DIR__`, `__CONFIG_DIR__`).
+  - `scripts/install-daemon.sh` / `scripts/uninstall-daemon.sh` — `set -euo pipefail`,
+    `--dry-run` renders + prints every action without writing or calling launchctl; the label
+    is derived from the template (single source of truth, drift-proofed by test); install
+    idempotency via bootout-then-bootstrap. Exec bits set.
+  - **Franklin proxy self-heal (disclosed scope addition):** the guide's `exit`-interplay
+    caveat was design intent, not code — `FranklinWHService` now retains credentials **in
+    memory only** (keychain stays the sole at-rest store) and exposes `reconnect()`
+    (attach/respawn — `startProxy()` mints the fresh X-Proxy-Token — then re-auth via the
+    extracted `authenticateWithProxy`). `BatterySampler` catches a failed read → `reconnect()`
+    → one retry; a second failure propagates to the scheduler's isolation. `disconnect()`
+    clears the in-memory credentials.
+  - Tests: 3 battery (retry-succeeds / retry-still-fails / reconnect-fails), 3 franklin
+    `reconnect` (never-initialized refusal, double `/auth` with remembered creds, cleared on
+    disconnect), 7 launchd (template contract, dry-run renders with zero placeholder residue
+    and no writes under a throwaway `HOME`, plutil lint darwin-gated, `bash -n` both scripts).
+  - Decisions: namespace `com.transmote.*` for future reverse-DNS identifiers (transmote.com);
+    keychain service name, config dir, package `author` deliberately unchanged.
+    **LaunchAgent (gui domain), not LaunchDaemon** — login-keychain access + user-visible
+    control while developing; on a server the question dissolves (systemd/containers,
+    env-injected secrets per design.md Phase 3).
+- **docs — README:** new `## Collect Daemon` section (what it collects, foreground + `--once`,
+  install/uninstall, verify/operate commands, first-run keychain + `vehicle_location` re-auth
+  notes, caveats incl. self-heal) + project-tree `scripts/` line.
+- **docs — workplan (this entry):** status flip + the install guide above retargeted to
+  `com.transmote` and truthful `exit`-interplay wording.
+- Gate: `npm run check` green — **515 passed / 2 skipped** (baseline 503 + 12); both scripts
+  `bash -n` clean; both `--dry-run` invocations exit 0 on this Mac.
+- **User performs (step 7):** `scripts/install-daemon.sh` (or `--dry-run` first) → verify →
+  re-auth for `vehicle_location` + `set-home-location` if not yet done → optional live
+  self-heal check (`exit` in one terminal; battery rows resume within ~2 min).
+- Next: Step 7 — validation checklist (below) + landing review.
 
 
