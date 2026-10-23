@@ -316,6 +316,67 @@ npm start config
 npm start config --clear-credentials
 ```
 
+## Collect Daemon
+
+`evcc daemon` is the long-running, collect-only process: it samples the home
+battery (every 2 min), polls EV state (a non-waking status probe every minute;
+rich reads only while the car is awake), fetches a daily weather forecast,
+aggregates charging sessions, and prunes old rows — all into the local SQLite
+store. Observe it with `status`, `sessions`, and `npm run store` (see
+[Data Storage & Schema](#data-storage--schema)).
+
+`daemon` here is collect-only; `start --daemon` (see CLI Reference) is the
+separate "stay resident" mode that keeps the interactive services running.
+
+```bash
+node dist/index.js daemon        # foreground
+node dist/index.js daemon --once # one cycle, then exit (non-zero if any task failed)
+```
+
+### Run at login (macOS launchd)
+
+To keep it running without an open terminal, install it as a per-user
+**LaunchAgent**:
+
+```bash
+scripts/install-daemon.sh           # build + render plist + bootstrap into your gui domain
+scripts/install-daemon.sh --dry-run # show exactly what it would do; changes nothing
+scripts/uninstall-daemon.sh         # bootout + remove the plist (keeps store, logs, credentials)
+```
+
+Why an agent and not a LaunchDaemon: agents run inside your login session,
+which login-keychain access (`@napi-rs/keyring`) requires — a LaunchDaemon
+starts as root before login, where the keychain session does not exist.
+
+Verify and operate (label `com.transmote.ev-charge-coordinator.daemon`):
+
+```bash
+launchctl print gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon | grep -E 'state =|pid ='
+tail -f ~/.ev-charge-coordinator/logs/daemon.log
+launchctl kickstart -k gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon  # restart in place
+launchctl bootout gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon       # stop (until reinstall/login)
+node dist/index.js status                                                       # daemon + store summary
+```
+
+First run: choose **Always Allow** if macOS asks whether `node` may access the
+`ev-charge-coordinator` keychain item. If you have not re-authenticated since
+the `vehicle_location` scope was added, run `node dist/index.js authenticate`.
+
+Caveats:
+
+- **nvm pinning:** the plist embeds the absolute path of the node that ran the
+  install script. After a node upgrade, re-run `scripts/install-daemon.sh`
+  (it re-resolves `command -v node`).
+- **Sleep:** launchd suspends the agent while the Mac sleeps; the first poll
+  after wake catches up (a car is usually awake then).
+- **Logs:** launchd does not rotate them; the daemon logs sparsely — truncate
+  with `: > ~/.ev-charge-coordinator/logs/daemon.log`.
+- **`exit` interplay:** `node dist/index.js exit` stops the Franklin proxy the
+  daemon owns; the next battery tick re-attaches (respawning it if needed) and
+  re-authenticates, so sampling self-heals. The daemon itself keeps running.
+- **Weather** collects only after `set-home-location` has stored the home
+  location; **EV rows** accumulate only while the car is awake (by design).
+
 ## CLI Reference
 
 | Command | Description |
@@ -532,7 +593,7 @@ ev-charge-coordinator/
 ├── python/
 │   ├── franklin_proxy.py         # Flask proxy around the franklinwh package
 │   └── requirements.txt
-├── scripts/                      # dev checks (check-franklin-auth.py, …)
+├── scripts/                      # launchd install/uninstall (install-daemon.sh, …) + dev checks
 ├── tests/                        # vitest suites; live tests gated by RUN_LIVE_TESTS=1
 ├── dist/                         # Compiled JavaScript (npm run build)
 ├── package.json
