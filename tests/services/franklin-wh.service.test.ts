@@ -400,4 +400,40 @@ describe('FranklinWHService proxy lifecycle when authentication is rejected', ()
 
     expect(calls).not.toContain('/shutdown');
   });
+
+  describe('reconnect', () => {
+    it('refuses when the service was never initialized', async () => {
+      const service = new FranklinWHService();
+      await expect(service.reconnect()).rejects.toThrow('Not authenticated with FranklinWH');
+    });
+
+    it('re-posts the remembered credentials after attaching to a healthy proxy', async () => {
+      const service = new FranklinWHService();
+      const calls = withFakeClient(service, {
+        '/health': { status: 'ok' },
+        '/auth': { success: true },
+      });
+
+      await service.initialize({ username: 'u@example.com', password: 'pw', gatewayId: 'GW1' });
+      await service.reconnect();
+
+      const authPosts = calls.filter((c) => c.method === 'post' && c.url === '/auth');
+      expect(authPosts).toHaveLength(2);
+      expect(authPosts[1].body).toEqual({
+        username: 'u@example.com',
+        password: 'pw',
+        gateway_id: 'GW1',
+      });
+      expect(service.isAuthenticated()).toBe(true);
+    });
+
+    it('forgets credentials once disconnect() runs', async () => {
+      const service = new FranklinWHService();
+      withFakeClient(service, { '/health': { status: 'ok' }, '/auth': { success: true } });
+      await service.initialize({ username: 'u@example.com', password: 'pw', gatewayId: 'GW1' });
+
+      await service.disconnect();
+      await expect(service.reconnect()).rejects.toThrow('Not authenticated with FranklinWH');
+    });
+  });
 });

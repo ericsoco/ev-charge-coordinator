@@ -115,7 +115,7 @@ describe('BatterySampler', () => {
   it('writes the instantaneous sample and the counter snapshot from one read', async () => {
     const task = createBatterySampler({
       db,
-      franklin: { getStats: async () => franklinFixture() },
+      franklin: { getStats: async () => franklinFixture(), reconnect: async () => {} },
       homeBatteryId: GW,
       sampleSec: 120,
       nowMs: () => 5_000,
@@ -145,18 +145,64 @@ describe('BatterySampler', () => {
     });
   });
 
-  it('a failing read rejects and writes nothing', async () => {
+  it('a failed read reconnects, retries, and lands the row', async () => {
+    let reads = 0;
+    let reconnects = 0;
+    const task = createBatterySampler({
+      db,
+      franklin: {
+        getStats: async () => {
+          reads += 1;
+          if (reads === 1) throw new Error('gateway unreachable');
+          return franklinFixture();
+        },
+        reconnect: async () => {
+          reconnects += 1;
+        },
+      },
+      homeBatteryId: GW,
+      sampleSec: 120,
+      nowMs: () => 7_000,
+    });
+    await task.run();
+
+    expect(reconnects).toBe(1);
+    expect(homeBattery.latestSample(db)).toMatchObject({ tsMs: 7_000, socPercent: 62.5 });
+    expect(homeBattery.latestCounters(db)).not.toBeNull();
+  });
+
+  it('a read failure whose retry still fails rejects and writes nothing', async () => {
     const task = createBatterySampler({
       db,
       franklin: {
         getStats: async () => {
           throw new Error('gateway unreachable');
         },
+        reconnect: async () => {},
       },
       homeBatteryId: GW,
       sampleSec: 120,
     });
     await expect(task.run()).rejects.toThrow('gateway unreachable');
+    expect(homeBattery.latestSample(db)).toBeNull();
+    expect(homeBattery.latestCounters(db)).toBeNull();
+  });
+
+  it('a failed reconnect rejects (the proxy cannot be recovered) and writes nothing', async () => {
+    const task = createBatterySampler({
+      db,
+      franklin: {
+        getStats: async () => {
+          throw new Error('gateway unreachable');
+        },
+        reconnect: async () => {
+          throw new Error('proxy respawn failed');
+        },
+      },
+      homeBatteryId: GW,
+      sampleSec: 120,
+    });
+    await expect(task.run()).rejects.toThrow('proxy respawn failed');
     expect(homeBattery.latestSample(db)).toBeNull();
     expect(homeBattery.latestCounters(db)).toBeNull();
   });

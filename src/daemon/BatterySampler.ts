@@ -13,6 +13,7 @@
  * `soc_kwh` stays NULL: getStats does not carry available energy.
  */
 import type { DatabaseSync } from 'node:sqlite';
+import type { BatteryFullStats } from '../types/battery.js';
 import type { FranklinWHService } from '../services/FranklinWHService.js';
 import { withTransaction } from '../store/database.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
@@ -20,8 +21,8 @@ import type { ScheduledTask } from './scheduler.js';
 
 export interface BatterySamplerDeps {
   db: DatabaseSync;
-  /** Only getStats is used; tests pass fakes. */
-  franklin: Pick<FranklinWHService, 'getStats'>;
+  /** Reads and the recovery path after a failed read; tests pass fakes. */
+  franklin: Pick<FranklinWHService, 'getStats' | 'reconnect'>;
   /** Franklin gateway id — every row is attributed to it. */
   homeBatteryId: string;
   sampleSec: number;
@@ -34,7 +35,17 @@ export function createBatterySampler(deps: BatterySamplerDeps): ScheduledTask {
     name: 'battery-sample',
     everyMs: deps.sampleSec * 1000,
     run: async () => {
-      const stats = await deps.franklin.getStats();
+      let stats: BatteryFullStats;
+      try {
+        stats = await deps.franklin.getStats();
+      } catch {
+        // The proxy can die under us (`exit` in another terminal) or arrive
+        // with a stale Franklin session: reconnect respawns/attaches and
+        // re-auths once, then the retry. A second failure propagates; the
+        // scheduler isolates it.
+        await deps.franklin.reconnect();
+        stats = await deps.franklin.getStats();
+      }
       const tsMs = nowMs();
       withTransaction(deps.db, () => {
         homeBattery.insertSample(deps.db, {
