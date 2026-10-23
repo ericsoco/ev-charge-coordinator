@@ -224,6 +224,12 @@ export class FranklinWHService implements BatteryService {
    * terminal and later attach rounds can present it.
    */
   private proxyToken: string | null = null;
+  /**
+   * Franklin credentials from initialize(), kept in memory only (never
+   * persisted — the keychain remains the sole at-rest store) so reconnect()
+   * can re-authenticate a respawned proxy without re-prompting.
+   */
+  private credentials: BatteryCredentials | null = null;
 
   constructor(proxyPort = 3001) {
     this.proxyPort = proxyPort;
@@ -472,10 +478,35 @@ export class FranklinWHService implements BatteryService {
   }
 
   async initialize(credentials: BatteryCredentials): Promise<void> {
+    this.credentials = credentials;
     // Ensure a proxy is running, and record whether we own it so that
     // disconnect() can leave someone else's proxy running.
     const started = await this.attachOrStartProxy();
+    await this.authenticateWithProxy(credentials, started);
+  }
 
+  /**
+   * Re-establish a broken proxy link: attach or respawn the proxy, then
+   * re-authenticate against it.
+   *
+   * A respawned proxy has no Franklin session of its own — the X-Proxy-Token
+   * only authenticates to the local process — so reads stay broken until /auth
+   * runs again. The daemon's battery tick reaches this after a failed read (an
+   * `exit` in another terminal is the canonical case).
+   */
+  async reconnect(): Promise<void> {
+    if (!this.credentials) {
+      throw new Error('Not authenticated with FranklinWH');
+    }
+    const started = await this.attachOrStartProxy();
+    await this.authenticateWithProxy(this.credentials, started);
+  }
+
+  /** POST /auth against an already-running proxy; shared by initialize and reconnect. */
+  private async authenticateWithProxy(
+    credentials: BatteryCredentials,
+    started: 'spawned' | 'attached'
+  ): Promise<void> {
     // Authenticate with the proxy.
     //
     // The proxy is already running by this point, so a failure here -- a wrong
@@ -576,5 +607,6 @@ export class FranklinWHService implements BatteryService {
 
   async disconnect(): Promise<void> {
     await this.stopProxy();
+    this.credentials = null;
   }
 }

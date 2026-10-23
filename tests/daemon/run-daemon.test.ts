@@ -75,6 +75,10 @@ function fakeFranklin(shouldThrow = false) {
       if (shouldThrow) throw new Error('gateway down');
       return franklinStats();
     },
+    async reconnect() {
+      // Recovery itself succeeds; the retry below still fails, so the task's
+      // reported error stays the read failure the assertion pins.
+    },
     async disconnect() {
       this.disconnected = true;
     },
