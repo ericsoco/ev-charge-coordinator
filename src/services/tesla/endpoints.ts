@@ -70,14 +70,11 @@ export const TESLA_TOKEN_URL =
   process.env.ECC_TESLA_TOKEN_URL ?? 'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token';
 
 /**
- * Scopes this application needs. Kept identical to the set the CLI requested
- * before this module existed, so authorization prompts do not change shape:
- * device data for SoC reads, charging commands for start/stop/limit, cmds for
- * wake-up, location for `set-home-location`'s vehicle flow and the P1b geofence
- * (added 2026-10-21 — existing installs must re-run `authenticate` to have it
- * minted into a token), and offline_access so a refresh token is issued at all
- * (without it Tesla returns only a short-lived access token and the app must
- * re-pair hourly).
+ * Scopes this application needs: device data for SoC reads, charging commands
+ * for start/stop/limit, cmds for wake-up, location for `set-home-location`'s
+ * vehicle flow and automated session start, and offline_access so a refresh
+ * token is issued at all (without it Tesla returns only a short-lived access
+ * token and the app must re-pair hourly).
  */
 export const TESLA_SCOPES = [
   'openid',
