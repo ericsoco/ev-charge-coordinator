@@ -820,7 +820,7 @@ export class TeslaService implements EVService {
     if (typeof driveState?.latitude !== 'number' || typeof driveState?.longitude !== 'number') {
       throw new Error(
         'Location is not in the vehicle response — the vehicle_location scope is ' +
-          'probably missing. Re-run `authenticate` (the scope was added 2026-10-21) and ' +
+          'probably missing. Re-run `authenticate` and ' +
           'ensure Vehicle Location is selected on developer.tesla.com.'
       );
     }
