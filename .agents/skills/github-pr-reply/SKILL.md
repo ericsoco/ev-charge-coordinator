@@ -19,7 +19,7 @@ Use this skill when invoked directly by name.
 
 ## Steps
 
-1. Use the GitHub CLI to view the metadata and diff:
+1. Use the GitHub CLI (shell commands) to view the metadata and diff:
     * gh pr view {PR_NUMBER} --json title,body,author
     * gh pr diff {PR_NUMBER}
 2. Read all open reviews + comments on the PR.
