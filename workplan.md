@@ -817,6 +817,20 @@ surfaced in the browser. Branch `feat/tesla-auth-probe`, gate green **533 passed
   virtual key. Environment note for future sessions: this terminal garbles
   heredocs and stalls on double-quoted `!` (interactive bang history) — shell
   edits must avoid both; the `editor` tool works in act mode.
+- **Ground truth (user-run live curls, both sides):** dead client → HTTP 400
+  `{"error":"client_not_found","error_description":"The specified client was not
+  found."}`; live client + dummy refresh → HTTP 401
+  `{"error":"login_required","error_description":"The refresh_token is invalid"}`.
+  Tesla deviates from RFC 6749's `invalid_client`/`invalid_grant` naming, which is
+  why v1 of the probe classified `unknown` — the reuse question appeared and `y`
+  reused the dead ID (the observed bug). `classifyTokenErrorCode` now keys on the
+  observed codes with the RFC values as belts; both payloads are pinned verbatim
+  in tests (`cbcea84`). Lesson recorded: curl the endpoint before coding its
+  error contract.
+- **Rename (user): `--force` → `--reauth`** — Commander option, REPL flag table
+  (drift-guard mirror), `runAuthenticate` internals, the "Re-authorize anyway"
+  hint, the consent-status and `refreshTokens` advice strings, and the parse/wiring
+  tests. No alias kept; single-dash `-reauth` rejects like the one-shot.
 - Next: Step 7 — validation checklist + landing review.
 
 
