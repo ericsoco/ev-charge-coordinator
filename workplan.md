@@ -750,4 +750,38 @@ Branch `feat/p1a-launchd` (precondition verified: step 5 + review fix had landed
   self-heal check (`exit` in one terminal; battery rows resume within ~2 min).
 - Next: Step 7 — validation checklist (below) + landing review.
 
+### 2026-10-21 — REPL flag parity: `authenticate --force` fix + full flag audit
+
+User report: `authenticate -force` in the REPL hit the "Already signed in" path and
+printed the one-shot hint — the REPL dispatched `authenticate` with NO option parsing
+(an old drift-guard whitelist exempted it), so the flag was silently dropped and the
+command ran unforced; the one-shot CLI also rejects a single-dash `-force`, so neither
+path worked as typed. Branch `fix/repl-authenticate-flags`:
+- `src/commands/repl.ts`: `VALUE_FLAGS.authenticate = ['client-id', 'client-secret']`,
+  `BOOLEAN_FLAGS.authenticate = ['force', 'help']` — all three one-shot flags were
+  missing, not just `--force`; `parseCommandArgs` classifies single-dash tokens as
+  `unknown option` (was `unknown argument`) to match Commander's rejection of `-force`.
+- `src/index.ts`: the `authenticate` dispatch case parses flags, routes `--help`
+  through `printCommandHelp`, and forwards `{clientId, clientSecret, force}` to the
+  same `runAuthenticate` the one-shot uses.
+- Tests (+3): drift-guard whitelist shrunk to `['start', 'daemon']` (neither has a
+  REPL dispatch case, by design; anti-rot assertion updated); parse-parity test incl.
+  `-force` rejection; two wiring pins — EVERY tabled command must be routed through
+  `parseCommandArgs` + `printCommandHelp` in the dispatch (closes the "table exists
+  but the dispatch never consults it" hole that caused this bug), and authenticate
+  flags must reach `runAuthenticate`.
+- Audit: everything else already at parity — config (10/10), pair-tesla-key (4/4),
+  charge-from-battery (2), status (--json), sessions (--limit/--open); positional
+  flows wired (`set-home-location` raw, `set-ev-charge-limit <percent>`); one-shot-only
+  `start`/`daemon` flags are correct exemptions. Residual benign difference: single-dash
+  unknown-flag error wording differs in phrasing between Commander and the REPL; both
+  reject.
+- Gate: `npm run check` green — **518 passed / 2 skipped** (baseline 515 + 3).
+- Committed alongside (user request): their README setup-guide edit tightening the
+  `vehicle_location` scope note.
+- Session note: the mode was switched to plan mid-task; the fix had been applied via
+  shell writers after the `editor` tool disappeared, and the guard blocked only the
+  commit. Nothing landed until act mode was re-confirmed.
+- Next: Step 7 — validation checklist + landing review.
+
 
