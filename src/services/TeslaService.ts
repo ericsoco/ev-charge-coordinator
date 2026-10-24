@@ -27,6 +27,7 @@ import {
   buildAuthorizeUrl,
   buildAuthorizationCodeTokenForm,
   buildRefreshTokenForm,
+  classifyTokenEndpointError,
   createNonce,
   createOAuthState,
   createPkcePair,
@@ -423,9 +424,31 @@ export class TeslaService implements EVService {
       refreshToken: this.tokens.refreshToken,
     });
 
-    const response = await axios.post(TESLA_TOKEN_URL, form, {
-      headers: TOKEN_FORM_HEADERS,
-    });
+    let response;
+    try {
+      response = await axios.post(TESLA_TOKEN_URL, form, {
+        headers: TOKEN_FORM_HEADERS,
+      });
+    } catch (error) {
+      // Two ways this grant dies, with opposite remedies: a recreated/rotated
+      // app (invalid_client — new client credentials needed) vs a dead
+      // refresh token (invalid_grant — just re-authenticate). Same error
+      // field the CLI's client-credential probe reads.
+      const kind = classifyTokenEndpointError(error);
+      if (kind === 'invalid-client') {
+        throw new Error(
+          'Tesla no longer recognizes this application (client ID/secret invalid - app recreated or rotated?). Run `authenticate --force` and enter the new client credentials.',
+          { cause: error }
+        );
+      }
+      if (kind === 'invalid-grant') {
+        throw new Error(
+          'Tesla rejected the refresh token (expired or revoked). Re-run `authenticate`.',
+          { cause: error }
+        );
+      }
+      throw error;
+    }
 
     // Same parse path as the code exchange, so the 30s expiry margin and the
     // access_token presence check are not silently reimplemented here. Tesla
