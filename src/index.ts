@@ -50,6 +50,8 @@ import {
 } from './commands/context.js';
 import { pendingQuestion, prompt, promptNumeric, promptSecret, setReplReadline } from './commands/prompt.js';
 import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from './commands/repl.js';
+import { selectAppCredentials } from './commands/authenticate.js';
+import { probeClientCredentials } from './services/tesla/oauth.js';
 import * as paint from './utils/color.js';
 import {
   chargeFromBattery,
@@ -1256,11 +1258,32 @@ async function runAuthenticate(
     return true;
   }
 
-  // Reuse stored app credentials unless overridden, so a re-auth does not force
-  // the user to re-paste the secret they already saved.
-  const clientId = options.clientId ?? existing?.clientId ?? (await prompt('Client ID: '));
-  const clientSecret =
-    options.clientSecret ?? existing?.clientSecret ?? (await promptSecret('Client Secret: '));
+  // Selection rules (see commands/authenticate.ts): flags win and are never
+  // paired with a stored counterpart; stored credentials are reused only on an
+  // explicit yes; a stored pair Tesla no longer recognizes (app recreated or
+  // secret rotated) is detected by the token-endpoint probe instead of failing
+  // at the browser.
+  const selected = await selectAppCredentials({
+    existing: existing ?? undefined,
+    flags: { clientId: options.clientId, clientSecret: options.clientSecret },
+    io: { ask: prompt, askSecret: promptSecret },
+    probe: (clientId) =>
+      probeClientCredentials({
+        clientId,
+        post: (url, form, headers) =>
+          axios.post(url, form, { headers, validateStatus: () => true }),
+      }),
+    note: (message) => console.log(paint.info(message)),
+  });
+  if ('rejected' in selected) {
+    console.error(
+      paint.error(
+        'Tesla rejected these client credentials too; check them and run authenticate again.'
+      )
+    );
+    return false;
+  }
+  const { clientId, clientSecret } = selected;
 
   if (!clientId.trim() || !clientSecret.trim()) {
     console.error(paint.warning('A Client ID and Client Secret are both required.'));
