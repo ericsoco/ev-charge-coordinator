@@ -1283,7 +1283,7 @@ async function runAuthenticate(
     );
     return false;
   }
-  const { clientId, clientSecret } = selected;
+  const { clientId, clientSecret, source } = selected;
 
   if (!clientId.trim() || !clientSecret.trim()) {
     console.error(paint.warning('A Client ID and Client Secret are both required.'));
@@ -1322,6 +1322,19 @@ async function runAuthenticate(
             '  Register it with: node dist/index.js pair-tesla-key --domain <your-domain>'
         )
       );
+    }
+    if (source !== 'stored') {
+      const next = existing?.domain
+        ? `node dist/index.js pair-tesla-key --domain ${existing.domain}`
+        : 'node dist/index.js pair-tesla-key --domain <your-domain>';
+      console.log(
+        paint.info(
+          '\nYour application key pair (~/.ev-charge-coordinator/private-key.pem) is unchanged\n' +
+            'and reusable - it is not tied to the client ID (--rotate-key is the rare exception\n' +
+            'and re-pairs every vehicle).'
+        )
+      );
+      console.log(paint.info(`Next: ${next}`));
     }
     return true;
   } catch (error) {
