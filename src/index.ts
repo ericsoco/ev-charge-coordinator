@@ -1516,6 +1516,7 @@ interface PairTeslaKeyOptions {
   vin?: string;
   checkOnly?: boolean;
   skipRegistration?: boolean;
+  rotateKey?: boolean;
   [key: string]: unknown;
 }
 
@@ -1561,6 +1562,17 @@ async function runPairTeslaKey(options: PairTeslaKeyOptions): Promise<boolean> {
   if (options.checkOnly) {
     await reportKeyState(virtualKeys, domain, { verifyWithTesla: true, credentials: stored });
     return true;
+  }
+
+  if (options.rotateKey) {
+    console.log(
+      paint.warning(
+        '\nRotating the application key pair: every vehicle that has approved this key\n' +
+          'must re-approve the new one.'
+      )
+    );
+    await virtualKeys.rotateKeyPair();
+    console.log(paint.positive(`✓ New key pair written to ${virtualKeys.privateKeyPath}`));
   }
 
   // Step 1: the key must exist locally before anything is published or sent.
@@ -1614,6 +1626,7 @@ program
   .option('--vin <vin>', 'Vehicle to pair (defaults to the stored VIN)')
   .option('--check-only', 'Only report the current key/registration state; change nothing')
   .option('--skip-registration', 'Do not call Tesla; only verify the hosted key and print the link')
+  .option('--rotate-key', 'Generate a fresh key pair (invalidates every already-paired vehicle)')
   .action(async (options) => {
     // exitCode stays here so a REPL session cannot inherit it.
     if (!(await runPairTeslaKey(options))) process.exitCode = 1;

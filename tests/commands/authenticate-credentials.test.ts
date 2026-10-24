@@ -198,4 +198,10 @@ describe('wiring', () => {
     expect(INDEX_SOURCE).toContain('is unchanged');
     expect(INDEX_SOURCE).toContain('pair-tesla-key --domain ${existing.domain}');
   });
+
+  it('wires --rotate-key through the warning, rotation, and Commander option', () => {
+    expect(INDEX_SOURCE).toContain("option('--rotate-key'");
+    expect(INDEX_SOURCE).toContain('Rotating the application key pair');
+    expect(INDEX_SOURCE).toContain('await virtualKeys.rotateKeyPair()');
+  });
 });

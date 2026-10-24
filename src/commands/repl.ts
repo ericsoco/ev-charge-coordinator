@@ -74,7 +74,7 @@ export const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
 export const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
   authenticate: ['reauth', 'help'],
   config: ['clear-franklin', 'clear-tesla', 'clear-credentials', 'show-public-key', 'help'],
-  'pair-tesla-key': ['check-only', 'skip-registration', 'help'],
+  'pair-tesla-key': ['check-only', 'skip-registration', 'rotate-key', 'help'],
   'charge-from-battery': ['start', 'dry-run', 'help'],
   status: ['json', 'help'],
   sessions: ['open', 'help'],

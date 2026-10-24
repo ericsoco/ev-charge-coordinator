@@ -239,6 +239,19 @@ export class VirtualKeyStore {
     return created;
   }
 
+  /**
+   * Remove the stored pair. The next loadOrCreate generates a fresh one, which
+   * replaces the key Tesla holds — every vehicle that approved the old key must
+   * re-approve, so the CLI only reaches this via --rotate-key.
+   */
+  async discard(): Promise<void> {
+    this.cached = null;
+    await Promise.all([
+      fs.rm(this.privateKeyPath, { force: true }),
+      fs.rm(this.publicKeyPath, { force: true }),
+    ]);
+  }
+
   private async persist(pair: VirtualKeyPair): Promise<void> {
     await fs.mkdir(this.dir, { recursive: true, mode: 0o700 });
     // The mode option only applies when the file is created, so chmod explicitly
@@ -314,6 +327,12 @@ export class VirtualKeyService {
       localPublicKeyPath: this.store.publicKeyPath,
       publicKeyPem: pair.publicKeyPem,
     };
+  }
+
+  /** Replace the stored key pair; see VirtualKeyStore.discard for the cost. */
+  async rotateKeyPair(): Promise<VirtualKeyPair> {
+    await this.store.discard();
+    return this.store.loadOrCreate();
   }
 
   /**

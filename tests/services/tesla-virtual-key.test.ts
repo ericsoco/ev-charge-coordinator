@@ -447,4 +447,30 @@ describe('VirtualKeyStore', () => {
       /does not match the private PEM/
     );
   });
+
+  it('discard removes the pair so the next load creates a fresh one (rotation)', async () => {
+    const store = new VirtualKeyStore(dir);
+    const first = await store.loadOrCreate();
+
+    await store.discard();
+    expect(fs.existsSync(path.join(dir, PRIVATE_KEY_FILENAME))).toBe(false);
+    expect(fs.existsSync(path.join(dir, PUBLIC_KEY_FILENAME))).toBe(false);
+    expect(await store.load()).toBeNull();
+
+    const rotated = await store.loadOrCreate();
+    expect(rotated.publicKeyPem).not.toBe(first.publicKeyPem);
+    // The cache must not hand out the old key after discard.
+    await expect(store.loadOrCreate()).resolves.toEqual(rotated);
+  });
+
+  it('service.rotateKeyPair replaces the pair the CLI will publish', async () => {
+    const store = new VirtualKeyStore(dir);
+    const service = new VirtualKeyService({ store, apiBaseUrl: 'https://example.invalid' });
+    const before = await service.getPublicKeyPem();
+
+    const rotated = await service.rotateKeyPair();
+
+    expect(rotated.publicKeyPem).not.toBe(before);
+    expect(await service.getPublicKeyPem()).toBe(rotated.publicKeyPem);
+  });
 });
