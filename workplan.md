@@ -39,6 +39,15 @@
 - **Battery-buffer product evolution** (`requirements.md` Oct 10 / Oct 14 entries:
   trigger on charger-plug-in event, sub-50% target handling with polling stop) is open
   product work — record design decisions here when it is picked up.
+- **P1b Tesla resilience pointer (noted 2026-10-21, from P1a step 6):** the Franklin
+  self-heal (`FranklinWHService.reconnect()`, wired into the battery tick) has **no Tesla
+  analog in P1a** — EV polling is direct Fleet API HTTPS over OAuth (access-token refresh
+  is automatic; un-refreshable auth is a degrade-and-surface case for the human to
+  `authenticate`, not a retry loop). When the daemon starts issuing signed commands in
+  P1b, the `tesla-http-proxy` sidecar enters its path: give the command executor an
+  alive-check/respawn before each command (`ProcessManager`), which is simpler than
+  Franklin's reconnect — the sidecar is a stateless signer (app key on disk), so there is
+  no re-auth session to restore.
 
 ## P1a — collect-only daemon (active execution plan)
 
