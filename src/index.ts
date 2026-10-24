@@ -38,7 +38,7 @@ import {
   setEnergyConfigField,
 } from './utils/config.js';
 import type { EnergyConfig } from './utils/energy.js';
-import { daemonConfigPath, resolveDaemonConfig } from './utils/daemonConfig.js';
+import { daemonConfigPath, ensureDaemonConfigFile, resolveDaemonConfig } from './utils/daemonConfig.js';
 import { runDaemonOnce, startDaemon } from './daemon/runDaemon.js';
 
 import {
@@ -1036,6 +1036,17 @@ program
   .option('--once', 'Run every sampler once and exit (non-zero if any failed)')
   .option('--debug', 'Print full stack traces for startup failures')
   .action(async (cliOptions) => {
+    // Single source of truth: the file exists after the first daemon start.
+    const ensured = ensureDaemonConfigFile();
+    if (ensured === 'created') {
+      console.log(
+        paint.info(`daemon-config.json not found — created with defaults (${daemonConfigPath()})`)
+      );
+    } else if (ensured === 'migrated') {
+      console.log(
+        paint.info(`migrated legacy daemon.json → daemon-config.json (${daemonConfigPath()})`)
+      );
+    }
     const resolved = resolveDaemonConfig();
     if (!resolved.config) {
       for (const problem of resolved.problems) console.log(paint.error(problem));

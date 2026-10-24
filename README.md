@@ -611,7 +611,7 @@ ev-charge-coordinator/
 │   ├── types/                    # BatteryService / EVService interfaces
 │   └── utils/
 │       ├── config.ts             # ~/.ev-charge-coordinator/config.json
-│       ├── daemonConfig.ts       # ~/.ev-charge-coordinator/daemon.json (daemon tunables)
+│       ├── daemonConfig.ts       # ~/.ev-charge-coordinator/daemon-config.json (daemon tunables)
 │       ├── credentials.ts        # keychain (@napi-rs/keyring) / encrypted-file storage
 │       ├── energy.ts             # charge-from-battery math (pure)
 │       └── color.ts              # output theming
