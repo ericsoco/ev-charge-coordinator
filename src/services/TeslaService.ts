@@ -29,6 +29,7 @@ import {
   buildRefreshTokenForm,
   classifyTokenEndpointError,
   describeAxiosHttpError as describeAxiosError,
+  rateLimitedRetrySeconds,
   createNonce,
   createOAuthState,
   createPkcePair,
@@ -228,6 +229,13 @@ export interface TeslaCommandProxyRoute {
   port: number;
   caPem: string;
 }
+
+/** Wake budget: honest-failure ceiling for wakeUp (matches the charge path's ~3 min). */
+const WAKE_WALL_BUDGET_MS = 180_000;
+/** Bounded wake cycles (each = wake POST + light state poll); rate-limit waits do not count. */
+const WAKE_MAX_CYCLES = 10;
+/** Pause between wake cycles while the car is not yet online. */
+const WAKE_POLL_MS = 2_000;
 
 export class TeslaService implements EVService {
   private client: AxiosInstance;
@@ -782,32 +790,63 @@ export class TeslaService implements EVService {
     }
   }
 
+  /**
+   * Wake the car and wait honestly for it to come online.
+   *
+   * Rate limits are honored, not hammered: a 429 sleeps exactly as long as
+   * Tesla asked (retry-after header or the "Retry in N seconds" body) WITHOUT
+   * consuming a wake cycle — the pre-rework loop waited a flat 2 s and
+   * re-fired, turning one command into ~10 rejected POSTs. Confirmation polls
+   * the light state probe: this loop only reads `state`, and the full
+   * vehicle_data read it used to pull is the heaviest call Tesla offers. A
+   * car that never comes online now FAILS (the old loop resolved silently).
+   */
   async wakeUp(): Promise<void> {
     if (!this.vin) {
       throw new Error('No VIN configured');
     }
 
-    // Wake up can take a while
-    const maxAttempts = 10;
-    for (let i = 0; i < maxAttempts; i++) {
+    const deadlineMs = Date.now() + WAKE_WALL_BUDGET_MS;
+    const budgetLabel = `${Math.round(WAKE_WALL_BUDGET_MS / 60_000)}-minute wake budget`;
+    let lastError: unknown = null;
+    let cycle = 0;
+
+    while (cycle < WAKE_MAX_CYCLES) {
       try {
         await this.client.post(`/api/1/vehicles/${this.vin}/wake_up`);
-        
-        // Check if vehicle is online
-        const response = await this.client.get<{ response: TeslaVehicleData }>(
-          `/api/1/vehicles/${this.vin}/vehicle_data`
-        );
-        
-        if (response.data.response.state === 'online') {
-          return;
-        }
+        const vehicle = await this.getVehicleState();
+        if (vehicle.state === 'online') return;
       } catch (error) {
-        if (i === maxAttempts - 1) throw error;
+        const retrySec = rateLimitedRetrySeconds(error);
+        if (retrySec !== null) {
+          const waitMs = retrySec * 1000;
+          if (Date.now() + waitMs >= deadlineMs) {
+            throw new Error(
+              `Rate-limited for longer than the ${budgetLabel}; wait a minute and re-run.`,
+              { cause: error }
+            );
+          }
+          console.log(
+            paint.info(`  Rate limited by Tesla; waiting ${retrySec}s before retrying the wake`)
+          );
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue; // the rate limit did not burn a wake cycle
+        }
+        lastError = error;
       }
-      
-      // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      cycle += 1;
+      if (cycle >= WAKE_MAX_CYCLES) break;
+      if (Date.now() + WAKE_POLL_MS >= deadlineMs) {
+        throw new Error(`Vehicle did not come online within the ${budgetLabel}.`, {
+          cause: lastError,
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, WAKE_POLL_MS));
     }
+
+    if (lastError !== null) throw lastError;
+    throw new Error(`Vehicle did not come online after ${WAKE_MAX_CYCLES} wake attempts`);
   }
 
   /**

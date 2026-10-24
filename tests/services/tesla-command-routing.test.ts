@@ -6,8 +6,8 @@
  * exactly where axios was about to send each request, including which client
  * (Fleet vs proxy) and which https agent, without opening a socket.
  */
-import { AxiosError, type AxiosInstance } from 'axios';
-import { describe, expect, it } from 'vitest';
+import { AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   assertVehicleCommandAccepted,
   TeslaService,
@@ -118,11 +118,11 @@ describe('vehicle command routing', () => {
 
     await service.setChargeLimit(60);
 
-    // wake_up rode the direct Fleet client: the wake POST, then the
-    // vehicle_data poll that confirms the car came online.
+    // wake_up rode the direct Fleet client: the wake POST, then the light
+    // state probe that confirms the car came online.
     expect(main.map((entry) => entry.url)).toEqual([
       `/api/1/vehicles/${VIN}/wake_up`,
-      `/api/1/vehicles/${VIN}/vehicle_data`,
+      `/api/1/vehicles/${VIN}`,
     ]);
     for (const entry of main) {
       expect(entry.base).toBe(service.apiBaseUrl);
@@ -178,7 +178,7 @@ describe('vehicle command routing', () => {
 
     expect(main.map((entry) => entry.url)).toEqual([
       `/api/1/vehicles/${VIN}/wake_up`,
-      `/api/1/vehicles/${VIN}/vehicle_data`,
+      `/api/1/vehicles/${VIN}`,
       `/api/1/vehicles/${VIN}/command/set_charge_limit`,
     ]);
     expect(main[2].base).toBe(service.apiBaseUrl);
@@ -335,5 +335,132 @@ describe('charging-state confirmation', () => {
 
     await expect(service.startCharging()).rejects.toThrow(/car could not execute command: vehicle error/);
     expect(chargeStateReads(main)).toHaveLength(0);
+  });
+});
+
+describe('wakeUp rate limiting and budget', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function ok(config: InternalAxiosRequestConfig, data: unknown) {
+    return { status: 200, statusText: 'OK', data, headers: {}, config };
+  }
+
+  function limited(body: string, headers: Record<string, string> = {}) {
+    return Object.assign(new AxiosError('Request failed with status code 429'), {
+      response: { status: 429, data: body, headers, config: {} },
+    });
+  }
+
+  async function wakeService() {
+    const service = new TeslaService({ region: 'na' });
+    await service.initialize({
+      clientId: 'cid',
+      clientSecret: 'secret',
+      accessToken: 'at',
+      refreshToken: 'rt',
+      expiresAt: Date.now() + 3_600_000,
+    });
+    (service as unknown as { vin: string }).vin = VIN;
+    return service;
+  }
+
+  /** Wakes POSTs counted; wake answers 429 per `wakeFailures`, state per `state`. */
+  function armWake(
+    service: TeslaService,
+    opts: { wakeFailures?: () => Error | null; state?: () => string } = {}
+  ) {
+    const urls: string[] = [];
+    (service as unknown as { client: AxiosInstance }).client.defaults.adapter = async (config) => {
+      urls.push(config.url ?? '');
+      if (config.url?.endsWith('/wake_up')) {
+        const failure = opts.wakeFailures?.() ?? null;
+        if (failure) throw failure;
+        return ok(config, { result: true });
+      }
+      return ok(config, { response: { state: opts.state?.() ?? 'online' } });
+    };
+    return urls;
+  }
+
+  it('sleeps the stated 429 delay without burning a wake cycle, then succeeds', async () => {
+    const service = await wakeService();
+    let limitedCount = 0;
+    const urls = armWake(service, {
+      wakeFailures: () => (limitedCount < 2 ? ((limitedCount += 1), limited('Retry in 5 seconds')) : null),
+    });
+
+    const start = Date.now();
+    const waking = service.wakeUp();
+    await vi.runAllTimersAsync();
+    await waking;
+
+    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(3);
+    // Two rate-limit waits of the stated 5s each — not the old flat 2s hammer.
+    expect(Date.now() - start).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it('prefers the retry-after header over the body', async () => {
+    const service = await wakeService();
+    let limitedCount = 0;
+    const urls = armWake(service, {
+      wakeFailures: () =>
+        limitedCount < 1 ? ((limitedCount += 1), limited('', { 'retry-after': '7' })) : null,
+    });
+
+    const start = Date.now();
+    const waking = service.wakeUp();
+    await vi.runAllTimersAsync();
+    await waking;
+
+    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(2);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(7_000);
+    expect(Date.now() - start).toBeLessThan(10_000);
+  });
+
+  it('gives up with a budget error when rate-limited beyond the wake budget', async () => {
+    const service = await wakeService();
+    const urls = armWake(service, {
+      wakeFailures: () => limited('Retry in 100 seconds'),
+    });
+
+    const waking = service.wakeUp();
+    const expectation = expect(waking).rejects.toThrow(/Rate-limited for longer than the .* wake budget/);
+    await vi.runAllTimersAsync();
+    await expectation;
+    // 100s clamps to the 60s cap: waits at t=0, t=60 land POSTs at 0/60/120;
+    // the third wait (120+60=180) crosses the budget. Three POSTs, no burst.
+    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(3);
+  });
+
+  it('bounds non-429 errors to the wake cycles and rethrows the original', async () => {
+    const service = await wakeService();
+    const urls: string[] = [];
+    // A plain 500: not a rate limit, so every cycle is consumed.
+    (service as unknown as { client: AxiosInstance }).client.defaults.adapter = async (config) => {
+      urls.push(config.url ?? '');
+      throw Object.assign(new AxiosError('boom'), {
+        response: { status: 500, data: 'boom', headers: {}, config: {} },
+      });
+    };
+
+    const waking = service.wakeUp();
+    const expectation = expect(waking).rejects.toThrow('boom');
+    await vi.runAllTimersAsync();
+    await expectation;
+    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(10);
+  });
+
+  it('fails loudly when the car never comes online (the old loop resolved silently)', async () => {
+    const service = await wakeService();
+    const urls = armWake(service, { state: () => 'asleep' });
+
+    const waking = service.wakeUp();
+    const expectation = expect(waking).rejects.toThrow(/did not come online after 10 wake attempts/);
+    await vi.runAllTimersAsync();
+    await expectation;
+    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(10);
+    // The confirmation poll is the light probe, never full vehicle_data.
+    expect(urls.some((url) => url.endsWith('/vehicle_data'))).toBe(false);
   });
 });

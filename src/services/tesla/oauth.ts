@@ -435,6 +435,15 @@ export function describeTeslaError(status: number | undefined, raw: string): str
       '(e.g. https://example.com) and that the app is configured like the original app.'
     );
   }
+  if (status === 429) {
+    // Observed live from wake_up: "Retry in 12 seconds" as the plain body.
+    // The wake loop honors this; interactive callers should just wait and
+    // re-run — firing again immediately only deepens the limit.
+    return (
+      `${statusText}${safeRaw} - Tesla rate limit; wait the stated time before ` +
+      'retrying (wake loops honor it automatically)'
+    );
+  }
   if (status === 421) return `${statusText}${safeRaw} - wrong region for this account; check the region setting`;
   if (status === 401) return `${statusText}${safeRaw} - token expired or revoked`;
   return `${statusText}${safeRaw}`;
@@ -464,5 +473,61 @@ export function describeAxiosHttpError(error: unknown): string {
           .filter((part): part is string => typeof part === 'string' && part.length > 0)
           .join(': ');
   return describeTeslaError(response.status, raw || (error instanceof Error ? error.message : String(error)));
+}
+
+/** Fallback wait when Tesla 429s with no parseable delay — back off, never hammer. */
+export const RATE_LIMIT_FALLBACK_SEC = 15;
+/** An absurd retry-after is more likely broken telemetry than a real schedule. */
+export const RATE_LIMIT_MAX_SLEEP_SEC = 60;
+
+/**
+ * Seconds Tesla asked us to wait on a 429, or null when the error is not one.
+ *
+ * Honors the `retry-after` header first, then the plain-text body Tesla
+ * actually sends ("Retry in 12 seconds"); an unparseable 429 still yields the
+ * conservative fallback so callers sleep instead of retrying blind. Walks one
+ * `cause` hop because the Fleet client's error interceptor re-wraps axios
+ * errors as `Error(describeTeslaError(...), { cause })` — the response lives
+ * on the cause, not on the thrown value.
+ */
+export function rateLimitedRetrySeconds(error: unknown): number | null {
+  const direct = retrySecondsFromResponse(error);
+  if (direct !== null) return direct;
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  if (cause !== undefined && cause !== error) {
+    return retrySecondsFromResponse(cause);
+  }
+  return null;
+}
+
+function retrySecondsFromResponse(error: unknown): number | null {
+  const response = (
+    error as {
+      response?: { status?: number; headers?: Record<string, unknown>; data?: unknown };
+    } | null
+  )?.response;
+  if (response?.status !== 429) return null;
+
+  const clamp = (seconds: number): number =>
+    Math.min(Math.max(Math.ceil(seconds), 1), RATE_LIMIT_MAX_SLEEP_SEC);
+
+  const header = Number(response.headers?.['retry-after']);
+  if (Number.isFinite(header) && header >= 0) {
+    return clamp(header);
+  }
+
+  const data = response.data as
+    | { error?: unknown; error_description?: unknown; description?: unknown }
+    | string
+    | undefined;
+  const text =
+    typeof data === 'string'
+      ? data
+      : [data?.error, data?.error_description ?? data?.description]
+          .filter((part): part is string => typeof part === 'string' && part.length > 0)
+          .join(': ');
+  const match = /retry in (\d+)\s*second/i.exec(text);
+  if (match) return clamp(Number(match[1]));
+  return RATE_LIMIT_FALLBACK_SEC;
 }
 
