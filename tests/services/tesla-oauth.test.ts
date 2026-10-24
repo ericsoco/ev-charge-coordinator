@@ -14,12 +14,15 @@ import {
   buildAuthorizeUrl,
   buildClientCredentialsTokenForm,
   buildRefreshTokenForm,
+  classifyTokenEndpointError,
   createNonce,
   createOAuthState,
   createPkcePair,
   describeTeslaError,
   isValidPkceVerifier,
   parseTokenResponse,
+  probeClientCredentials,
+  PROBE_REFRESH_TOKEN,
   TOKEN_FORM_HEADERS,
 } from '../../src/services/tesla/oauth.js';
 import {
@@ -413,6 +416,76 @@ describe('endpoint and region resolution', () => {
     expect(buildRevokeConsentUrl('cid', 'eu')).toBe(
       'https://fleet-api.prd.eu.vn.cloud.tesla.com/oauth2/v3/consent?client_id=cid'
     );
+  });
+});
+
+describe('client-credential probe (dead app detection)', () => {
+  it('classifies thrown token-endpoint errors by the OAuth error field', () => {
+    expect(classifyTokenEndpointError({ response: { data: { error: 'invalid_client' } } })).toBe(
+      'invalid-client'
+    );
+    expect(classifyTokenEndpointError({ response: { data: { error: 'invalid_grant' } } })).toBe(
+      'invalid-grant'
+    );
+    expect(classifyTokenEndpointError(new Error('network down'))).toBe('unknown');
+    expect(classifyTokenEndpointError({ response: { data: { error: 'server_error' } } })).toBe(
+      'unknown'
+    );
+    expect(classifyTokenEndpointError(undefined)).toBe('unknown');
+  });
+
+  it('probe sends only grant_type / client_id / a dummy refresh token', async () => {
+    const calls: Array<{ url: string; form: string; headers: Record<string, string> }> = [];
+    const result = await probeClientCredentials({
+      clientId: 'cid',
+      post: async (url, form, headers) => {
+        calls.push({ url, form, headers });
+        return { data: { error: 'invalid_grant' } };
+      },
+    });
+
+    expect(result).toBe('ok');
+    expect(calls).toHaveLength(1);
+    const form = new URLSearchParams(calls[0].form);
+    expect([...form.keys()].sort()).toEqual(['client_id', 'grant_type', 'refresh_token']);
+    // The probe must never carry a real (single-use) refresh token.
+    expect(form.get('refresh_token')).toBe(PROBE_REFRESH_TOKEN);
+    expect(calls[0].url).toBe(TESLA_TOKEN_URL);
+    expect(calls[0].headers).toEqual(TOKEN_FORM_HEADERS);
+  });
+
+  it('maps invalid_client to invalid and invalid_grant to ok', async () => {
+    const verdict = (data: unknown) =>
+      probeClientCredentials({ clientId: 'cid', post: async () => ({ data }) });
+    expect(await verdict({ error: 'invalid_client' })).toBe('invalid');
+    expect(await verdict({ error: 'invalid_grant' })).toBe('ok');
+  });
+
+  it('reports unknown (never blocks) on network failure or unexpected bodies', async () => {
+    const failing = await probeClientCredentials({
+      clientId: 'cid',
+      post: async () => {
+        throw new Error('ECONNREFUSED');
+      },
+    });
+    expect(failing).toBe('unknown');
+    expect(await probeClientCredentials({ clientId: 'cid', post: async () => ({}) })).toBe('unknown');
+    expect(
+      await probeClientCredentials({ clientId: 'cid', post: async () => ({ data: {} }) })
+    ).toBe('unknown');
+  });
+
+  it('honors the tokenUrl override (hermetic tests / endpoint changes)', async () => {
+    let seen = '';
+    await probeClientCredentials({
+      clientId: 'cid',
+      tokenUrl: 'http://localhost:1/token',
+      post: async (url) => {
+        seen = url;
+        return { data: {} };
+      },
+    });
+    expect(seen).toBe('http://localhost:1/token');
   });
 });
 

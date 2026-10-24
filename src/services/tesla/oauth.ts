@@ -19,7 +19,7 @@
  */
 
 import { randomBytes, createHash } from 'node:crypto';
-import { TESLA_AUTHORIZE_URL } from './endpoints.js';
+import { TESLA_AUTHORIZE_URL, TESLA_TOKEN_URL } from './endpoints.js';
 
 /** RFC 7636 4.1: 43..128 characters from the unreserved set. */
 const PKCE_VERIFIER_RE = /^[A-Za-z0-9\-._~]{43,128}$/;
@@ -174,6 +174,64 @@ export function buildRefreshTokenForm(options: {
   // grant, and the refresh token is already bound to the original audience.
   form.set('refresh_token', options.refreshToken);
   return form;
+}
+
+/**
+ * Probe: does Tesla still recognize this client ID/secret?
+ *
+ * A recreated or rotated application leaves stale credentials in the store,
+ * and the failure only surfaces in the browser (a dead authorize page) unless
+ * the CLI notices first. The token endpoint distinguishes the cases:
+ * `invalid_client` = the app credentials are not accepted; `invalid_grant` =
+ * the app credentials are fine and the grant itself is what failed — so a
+ * refresh_token grant with a deliberately bogus token probes app-credential
+ * liveness without touching (or burning) the real, single-use refresh token.
+ */
+export type ClientCredentialsProbe = 'ok' | 'invalid' | 'unknown';
+
+/** The never-real token the probe sends; see PROBE_REFRESH_TOKEN's rationale. */
+export const PROBE_REFRESH_TOKEN = 'invalid-ecc-probe';
+
+/** Axios-shaped POST, injected so this module stays network-free. */
+export type ProbePost = (url: string, form: string, headers: Record<string, string>) => Promise<{ data?: unknown }>;
+
+/** Classify a THROWN token-endpoint error (the refresh path's shape). */
+export function classifyTokenEndpointError(
+  error: unknown
+): 'invalid-client' | 'invalid-grant' | 'unknown' {
+  const data = (error as { response?: { data?: { error?: unknown } } } | null)?.response?.data;
+  const code = typeof data?.error === 'string' ? data.error : undefined;
+  if (code === 'invalid_client') return 'invalid-client';
+  if (code === 'invalid_grant') return 'invalid-grant';
+  return 'unknown';
+}
+
+/**
+ * Best-effort client-credential probe. 'unknown' (network trouble, unexpected
+ * body) must never block a caller: it only means "no early detection".
+ */
+export async function probeClientCredentials(options: {
+  clientId: string;
+  post: ProbePost;
+  tokenUrl?: string;
+}): Promise<ClientCredentialsProbe> {
+  const form = new URLSearchParams();
+  form.set('grant_type', 'refresh_token');
+  form.set('client_id', options.clientId);
+  form.set('refresh_token', PROBE_REFRESH_TOKEN);
+  try {
+    const response = await options.post(
+      options.tokenUrl ?? TESLA_TOKEN_URL,
+      form.toString(),
+      TOKEN_FORM_HEADERS
+    );
+    const data = response.data as { error?: unknown } | undefined;
+    if (data?.error === 'invalid_client') return 'invalid';
+    if (data?.error === 'invalid_grant') return 'ok';
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 /** Raw token response as Tesla returns it (snake_case, seconds-based expiry). */
