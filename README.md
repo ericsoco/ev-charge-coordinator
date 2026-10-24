@@ -211,6 +211,7 @@ Options:
 | `--vin <vin>` | Vehicle to pair (defaults to the stored VIN) |
 | `--check-only` | Report key/registration state; change nothing |
 | `--skip-registration` | Verify the hosted key and print the link, without calling Tesla |
+| `--rotate-key` | Generate a fresh key pair (every already-paired vehicle must re-approve) |
 
 **Pairing cannot be verified from the command line.** Tesla documents no endpoint
 that reports whether a given VIN holds an application key — the only documented
@@ -218,6 +219,26 @@ signal is `key_paired` in a fleet-telemetry response, which requires a signed
 request and a configured telemetry server. To confirm afterwards, run a command; a
 vehicle that rejects the key answers
 `your public key has not been paired with the vehicle`.
+
+### Recreated your Tesla application?
+
+Deleting and recreating the app on developer.tesla.com invalidates the client
+ID/secret but **not** your application key pair (`private-key.pem` never left
+this machine). To get back to a working state:
+
+1. `node dist/index.js authenticate --reauth` — the CLI detects the dead client
+   ID at the token endpoint and prompts for the new ID/secret (or pass
+   `--client-id` / `--client-secret`).
+2. On developer.tesla.com, set the new app's **Allowed Origins** to include
+   `https://<your-domain>` — domain registration fails with HTTP 422 without it.
+3. `node dist/index.js pair-tesla-key --domain <your-domain>` — re-registers the
+   domain under the new app (same key pair) and prints the pairing link.
+4. Open the printed `https://tesla.com/_ak/<domain>` link and approve in the
+   Tesla app; confirm with `pair-tesla-key --check-only`.
+
+Only replace the key pair itself if it was lost or compromised:
+`pair-tesla-key --rotate-key` regenerates it — every already-paired vehicle
+must re-approve, and the new public key must be re-uploaded to the hosting path.
 
 ### Signed commands (Vehicle Command Proxy)
 
@@ -387,7 +408,7 @@ Caveats:
 | `sessions [--limit <n>] [--open]` | Show recent charging sessions from the store (default 10; `--open` lists only sessions still open) |
 | `set-home-location [<latitude> <longitude>]` | Set the home location (a secret — stored in the keychain, never config.json or the store). With arguments: manual. With none: wakes the vehicle and reads its current position. Both forms confirm with current → new before writing; requires the `vehicle_location` scope |
 | `get-ev-bsoc` | Get the current battery state of charge from the EV |
-| `authenticate` | Sign in to Tesla and store credentials (no other side effects) |
+| `authenticate [--client-id <id>] [--client-secret <secret>] [--reauth]` | Sign in to Tesla and store credentials (no other side effects); `--reauth` re-authorizes, detecting a rejected (recreated) app and prompting for the new pair |
 | `get-battery-soc` | Get the current battery state of charge from the solar battery |
 | `get-charging-state` | Get the EV's charging state, battery level, and charge limit (`charge_state`; does not wake the vehicle — a sleeping car returns HTTP 408 with asleep/offline advice) |
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%) |
@@ -405,7 +426,7 @@ Caveats:
 | `config --set-ev-kwh <n>` | Set EV battery capacity in `config.json` |
 | `config --set-efficiency <0-1>` | Set charge efficiency in `config.json` |
 | `config --set-buffer <percent>` | Set the battery buffer reserve, 0-100%, in `config.json` |
-| `pair-tesla-key` | Register the virtual key with Tesla and print the vehicle pairing link |
+| `pair-tesla-key [--domain <d>] [--vin <vin>] [--check-only] [--skip-registration] [--rotate-key]` | Register the virtual key with Tesla and print the vehicle pairing link |
 
 ### Interactive Mode Commands
 
@@ -418,7 +439,8 @@ When running in interactive mode (`start`), the following commands are available
 - `set-home-location` - Set the home location (secret): with `<lat> <lng>`
   sets manually; with no arguments wakes the vehicle and uses its current
   position; both forms confirm with current → new before writing
-- `authenticate` - Sign in to Tesla and store the credentials
+- `authenticate` - Sign in to Tesla and store the credentials (`--reauth` to
+  re-authorize; `--client-id` / `--client-secret` to override the stored app pair)
 - `get-ev-bsoc` - Get EV battery state of charge
 - `get-battery-soc` - Get solar battery state of charge
 - `get-charging-state` - Get the EV's charging state (does not wake the vehicle)
@@ -434,7 +456,7 @@ When running in interactive mode (`start`), the following commands are available
   one-shot command (e.g. `config --set-efficiency 0.9`); `config --help`
   prints the flag list
 - `pair-tesla-key` - Register the virtual key with Tesla; accepts `--domain`,
-  `--vin`, `--check-only`, `--skip-registration`; `--help` prints the flag list
+  `--vin`, `--check-only`, `--skip-registration`, `--rotate-key`; `--help` prints the flag list
 - `exit` - Exit the application
 
 `help <command>` inside the REPL prints that command's help, matching the
@@ -706,6 +728,7 @@ npm run check:franklin -- --email you@example.com
   | `invalid_auth_code` | the code was already used or expired; sign in again (`authenticate`) |
   | `login_required` | password reset or the refresh token was already consumed; re-authenticate |
   | HTTP 412 | app not registered with Tesla in this region; run `pair-tesla-key` |
+  | HTTP 422 | request invalid — for domain registration, Allowed Origins on developer.tesla.com must include the domain's origin |
   | HTTP 421 | right credentials, wrong region; set `--tesla-region` |
   | `your public key has not been paired with the vehicle` | the key was never
     approved on the phone, or Tesla holds a different key; re-run
