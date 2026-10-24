@@ -952,4 +952,23 @@ discovered). Branch `fix/wake-backoff`, gate green **550 passed / 3 skipped**:
   "Vehicle reports 37.76289, -122.504895 …".
 - Next: Step 7 — validation checklist + landing review.
 
+### 2026-10-24 — PR #36 review (self): dead revoke chain + comment hygiene
+
+Two inline comments on PR #36, addressed in `0d150e5` (gate **550 passed /
+2 skipped** — the real-proxy boot test ran (not skipped) once the user's live
+session released :4443):
+- "useless test pinning a static string" (`buildRevokeConsentUrl` test) →
+  deeper fix: the whole chain was dead code (`getRevokeConsentUrl` had zero
+  consumers in src or tests); removed function + getter + test + import — the
+  revoke URL now lives only in the user-facing error message and README.
+- README historical notes → section trimmed to current state exactly as the
+  comment specified ("…endpoint selector." ends the sentence); the same
+  AGENTS.md comment rule applied proactively to the docstrings and test
+  comments this branch added (wakeUp "pre-rework" history, getVehicleLocation
+  community links/dates, "old flat 2s hammer" phrasing) — all removed history
+  lives in these workplan entries instead.
+- Note for the human: PR body says "419 rate limit" — it is 429; GitHub writes
+  stay with the user (skill rule).
+- Next: Step 7 — validation checklist + landing review.
+
 
