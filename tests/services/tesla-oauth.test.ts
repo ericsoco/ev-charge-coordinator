@@ -295,6 +295,9 @@ describe('describeTeslaError', () => {
   it('maps the region and registration status codes Tesla only documents in passing', () => {
     expect(describeTeslaError(412, 'Precondition Failed')).toContain('pair-tesla-key');
     expect(describeTeslaError(422, 'Unprocessable')).toContain('Allowed Origins');
+    expect(
+      describeTeslaError(422, 'Validation failed: Public key hash has already been taken')
+    ).toContain('--rotate-key');
     expect(describeTeslaError(421, 'Misdirected Request')).toContain('region');
     expect(describeTeslaError(401, 'nope')).toContain('token expired or revoked');
   });

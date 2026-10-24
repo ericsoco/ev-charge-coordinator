@@ -195,7 +195,8 @@ describe('wiring', () => {
 
   it('prints key-pair guidance when credentials changed (source !== stored)', () => {
     expect(INDEX_SOURCE).toContain("source !== 'stored'");
-    expect(INDEX_SOURCE).toContain('is unchanged');
+    expect(INDEX_SOURCE).toContain('usually');
+    expect(INDEX_SOURCE).toContain('has already been taken');
     expect(INDEX_SOURCE).toContain('pair-tesla-key --domain ${existing.domain}');
   });
 
@@ -203,5 +204,6 @@ describe('wiring', () => {
     expect(INDEX_SOURCE).toContain("option('--rotate-key'");
     expect(INDEX_SOURCE).toContain('Rotating the application key pair');
     expect(INDEX_SOURCE).toContain('await virtualKeys.rotateKeyPair()');
+    expect(INDEX_SOURCE).toContain('WITHOUT --rotate-key');
   });
 });

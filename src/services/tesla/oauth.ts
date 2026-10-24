@@ -392,10 +392,14 @@ export function describeTeslaError(status: number | undefined, raw: string): str
     mobile_access_disabled: 'remote access is switched off in the vehicle',
     login_required:
       'Tesla account password reset, this refresh token already consumed, or access revoked; run `authenticate` to sign in again',
+    'public key hash has already been taken':
+      'this public key is already registered (usually by the application you recreated); rotate with `pair-tesla-key --rotate-key`, upload the printed public key, re-run WITHOUT --rotate-key, and re-approve on each vehicle',
   };
   const statusText = status === undefined ? '' : `HTTP ${status}: `;
   for (const [code, advice] of Object.entries(known)) {
-    if (safeRaw.includes(code)) return `${statusText}${safeRaw} - ${advice}`;
+    // Case-insensitive: Tesla's sentences vary in case ("Public key hash has
+    // already been taken") while the keys stay lowercase.
+    if (safeRaw.toLowerCase().includes(code)) return `${statusText}${safeRaw} - ${advice}`;
   }
   if (status === 408) {
     // Observed live from vehicle_data reads: an asleep or offline car answers
