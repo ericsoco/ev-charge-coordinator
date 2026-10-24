@@ -17,7 +17,6 @@ import type { EVService, EVCredentials, EVStatus, EVVehicleState, VehicleLocatio
 import { credentialStore } from '../utils/credentials.js';
 import * as paint from '../utils/color.js';
 import {
-  buildRevokeConsentUrl,
   resolveRegion,
   TESLA_SCOPE_STRING,
   TESLA_TOKEN_URL,
@@ -354,11 +353,6 @@ export class TeslaService implements EVService {
   /** The OAuth redirect URI; must match the one registered on developer.tesla.com. */
   get redirectUri(): string {
     return `http://localhost:${this.callbackPort}/callback`;
-  }
-
-  /** URL a user visits to withdraw this application's access. */
-  getRevokeConsentUrl(): string {
-    return buildRevokeConsentUrl();
   }
 
   getName(): string {
@@ -794,12 +788,10 @@ export class TeslaService implements EVService {
    * Wake the car and wait honestly for it to come online.
    *
    * Rate limits are honored, not hammered: a 429 sleeps exactly as long as
-   * Tesla asked (retry-after header or the "Retry in N seconds" body) WITHOUT
-   * consuming a wake cycle — the pre-rework loop waited a flat 2 s and
-   * re-fired, turning one command into ~10 rejected POSTs. Confirmation polls
-   * the light state probe: this loop only reads `state`, and the full
-   * vehicle_data read it used to pull is the heaviest call Tesla offers. A
-   * car that never comes online now FAILS (the old loop resolved silently).
+   * Tesla asked (retry-after header or the "Retry in N seconds" body) without
+   * consuming a wake cycle. Confirmation polls the light state probe — the
+   * loop only reads `state`, the cheapest read available. A car that never
+   * comes online fails within a 3-minute budget.
    */
   async wakeUp(): Promise<void> {
     if (!this.vin) {
@@ -868,12 +860,9 @@ export class TeslaService implements EVService {
   /**
    * Position via `vehicle_data?endpoints=location_data`.
    *
-   * `location_data` is the selector that gates latitude/longitude — confirmed
-   * live 2026-10-24 against this account: `drive_state` alone returns only
-   * power/shift_state/speed/timestamp, while `location_data` restores the full
-   * GPS set (community-documented: timdorr/tesla-api#786, fleet-telemetry#460).
-   * The fields still land under `drive_state` in the response. Read-only:
-   * never wakes.
+   * `location_data` is the selector that gates latitude/longitude; `drive_state`
+   * alone omits them. Fields still land under `drive_state` in the response.
+   * Read-only: never wakes.
    */
   async getVehicleLocation(): Promise<VehicleLocation> {
     if (!this.vin) {

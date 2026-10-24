@@ -104,11 +104,6 @@ export const TESLA_PARTNER_SCOPES = [
 
 export const TESLA_PARTNER_SCOPE_STRING = TESLA_PARTNER_SCOPES.join(' ');
 
-/** Where a human revokes a third-party grant: the account's Third-party apps page. */
-export function buildRevokeConsentUrl(): string {
-  return 'https://accounts.tesla.com/en_us/account-settings/security?tab=tpty-apps';
-}
-
 export function isTeslaRegion(value: unknown): value is TeslaRegion {
   return value === 'na' || value === 'eu' || value === 'cn';
 }

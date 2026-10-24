@@ -142,8 +142,7 @@ describe('getVehicleLocation', () => {
       latitude: 37.7749,
       longitude: -122.4194,
     });
-    // Live-verified 2026-10-24: drive_state alone omits lat/lng; the
-    // location_data selector is what gates it.
+    // drive_state alone omits lat/lng; location_data is the gating selector.
     expect(recorded[0].params).toEqual({ endpoints: 'location_data' });
   });
 

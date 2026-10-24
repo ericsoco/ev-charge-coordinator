@@ -30,7 +30,6 @@ import {
   TOKEN_FORM_HEADERS,
 } from '../../src/services/tesla/oauth.js';
 import {
-  buildRevokeConsentUrl,
   isTeslaRegion,
   resolveRegion,
   TESLA_AUTHORIZE_URL,
@@ -418,12 +417,6 @@ describe('endpoint and region resolution', () => {
     expect(TESLA_SCOPES).toContain('vehicle_location');
     expect(TESLA_SCOPE_STRING).toBe(
       'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds vehicle_location'
-    );
-  });
-
-  it('points at the account Third-party apps page (region- and client-independent)', () => {
-    expect(buildRevokeConsentUrl()).toBe(
-      'https://accounts.tesla.com/en_us/account-settings/security?tab=tpty-apps'
     );
   });
 });
