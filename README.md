@@ -748,6 +748,18 @@ npm run check:franklin -- --email you@example.com
   authorize request (Tesla does not document PKCE, so this restores the strictly
   documented request shape)
 
+### `set-home-location`: "Location is not in the vehicle response"
+
+Location fields live behind Tesla's **`location_data`** endpoint selector — `drive_state`
+alone returns only power/shift_state/speed/timestamp (live-verified 2026-10-24 against a
+fresh token; community-documented in [timdorr/tesla-api#786](https://github.com/timdorr/tesla-api/issues/786)
+and [fleet-telemetry#460](https://github.com/teslamotors/fleet-telemetry/issues/460)).
+The CLI requests `location_data`, so a missing location after a successful wake means the
+`vehicle_location` scope is missing from the **account grant** (checking it on
+developer.tesla.com is not enough): revoke the app at
+`https://accounts.tesla.com/en_us/account-settings/security?tab=tpty-apps`, then re-run
+`authenticate` and approve Vehicle Location on the consent screen.
+
 ### `✓ EV charging started` but nothing happens
 
 - Older versions trusted the HTTP status of a charging command. Tesla's command
