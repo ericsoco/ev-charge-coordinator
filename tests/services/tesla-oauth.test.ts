@@ -589,5 +589,14 @@ describe('rateLimitedRetrySeconds', () => {
       rateLimitedRetrySeconds({ response: { status: 400, data: 'client_not_found' } })
     ).toBeNull();
   });
+
+  it('follows one cause hop: the Fleet interceptor re-wraps axios errors', () => {
+    const wrapped = new Error('HTTP 429: Retry in 12 seconds - Tesla rate limit', {
+      cause: limited({ data: 'Retry in 12 seconds' }),
+    });
+    expect(rateLimitedRetrySeconds(wrapped)).toBe(12);
+    // ...and a wrapped non-429 stays null even when its message mentions 429.
+    expect(rateLimitedRetrySeconds(new Error('HTTP 429: Retry in 12 seconds'))).toBeNull();
+  });
 });
 
