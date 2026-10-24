@@ -232,13 +232,19 @@ this machine). To get back to a working state:
 2. On developer.tesla.com, set the new app's **Allowed Origins** to include
    `https://<your-domain>` — domain registration fails with HTTP 422 without it.
 3. `node dist/index.js pair-tesla-key --domain <your-domain>` — re-registers the
-   domain under the new app (same key pair) and prints the pairing link.
+   domain under the new app and prints the pairing link.
+   - **`Public key hash has already been taken`?** The recreated app cannot claim
+     the old key (confirmed live 2026-10-24): re-run with `--rotate-key`, upload
+     the printed public key to the hosting path, re-run **without** the flag,
+     then re-approve on every vehicle.
 4. Open the printed `https://tesla.com/_ak/<domain>` link and approve in the
    Tesla app; confirm with `pair-tesla-key --check-only`.
 
-Only replace the key pair itself if it was lost or compromised:
-`pair-tesla-key --rotate-key` regenerates it — every already-paired vehicle
-must re-approve, and the new public key must be re-uploaded to the hosting path.
+Rotation is required exactly when Tesla reports the hash conflict above — the
+common case after recreating an app — and is otherwise unnecessary (the private
+key never left this machine). Whenever it runs, `--rotate-key` re-uploads the
+new public key to the hosting path and re-pairs every vehicle, and the flag must
+be dropped from the re-run so the key is not rotated twice.
 
 ### Signed commands (Vehicle Command Proxy)
 
