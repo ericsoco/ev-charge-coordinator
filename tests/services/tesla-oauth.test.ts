@@ -20,6 +20,9 @@ import {
   createPkcePair,
   describeAxiosHttpError,
   describeTeslaError,
+  rateLimitedRetrySeconds,
+  RATE_LIMIT_FALLBACK_SEC,
+  RATE_LIMIT_MAX_SLEEP_SEC,
   isValidPkceVerifier,
   parseTokenResponse,
   probeClientCredentials,
@@ -300,6 +303,7 @@ describe('describeTeslaError', () => {
     ).toContain('--rotate-key');
     expect(describeTeslaError(421, 'Misdirected Request')).toContain('region');
     expect(describeTeslaError(401, 'nope')).toContain('token expired or revoked');
+    expect(describeTeslaError(429, 'Retry in 12 seconds')).toContain('rate limit');
   });
 
   it('explains the not-registered error Tesla actually returns', () => {
@@ -540,6 +544,50 @@ describe('describeAxiosHttpError', () => {
   it('falls back to the plain message without a response', () => {
     expect(describeAxiosHttpError(new Error('socket hang up'))).toBe('socket hang up');
     expect(describeAxiosHttpError('weird')).toBe('weird');
+  });
+});
+
+describe('rateLimitedRetrySeconds', () => {
+  const limited = (over: { status?: number; data?: unknown; headers?: Record<string, unknown> }) => ({
+    response: { status: 429, data: undefined, headers: {}, ...over },
+  });
+
+  it('prefers the retry-after header when present', () => {
+    expect(rateLimitedRetrySeconds(limited({ headers: { 'retry-after': '7' } }))).toBe(7);
+    // Fractional seconds round up; zero is a floor of one.
+    expect(rateLimitedRetrySeconds(limited({ headers: { 'retry-after': '0.5' } }))).toBe(1);
+    expect(rateLimitedRetrySeconds(limited({ headers: { 'retry-after': '0' } }))).toBe(1);
+    // Broken telemetry (huge or garbage) clamps instead of sleeping for a year.
+    expect(rateLimitedRetrySeconds(limited({ headers: { 'retry-after': '99999' } }))).toBe(
+      RATE_LIMIT_MAX_SLEEP_SEC
+    );
+    expect(rateLimitedRetrySeconds(limited({ headers: { 'retry-after': 'soon' } }))).toBe(15);
+  });
+
+  it('parses the plain-text body Tesla actually sends', () => {
+    expect(rateLimitedRetrySeconds(limited({ data: 'Retry in 12 seconds' }))).toBe(12);
+    expect(
+      rateLimitedRetrySeconds(
+        limited({ data: { error: 'too_many_requests', description: 'Retry in 30 seconds' } })
+      )
+    ).toBe(30);
+  });
+
+  it('falls back (never hammers) on an unparseable 429', () => {
+    expect(rateLimitedRetrySeconds(limited({ data: { error: 'slow_down' } }))).toBe(
+      RATE_LIMIT_FALLBACK_SEC
+    );
+    expect(rateLimitedRetrySeconds(limited({ data: undefined }))).toBe(RATE_LIMIT_FALLBACK_SEC);
+  });
+
+  it('returns null for everything that is not a 429', () => {
+    expect(rateLimitedRetrySeconds(new Error('nope'))).toBeNull();
+    expect(
+      rateLimitedRetrySeconds({ response: { status: 500, data: 'Retry in 12 seconds' } })
+    ).toBeNull();
+    expect(
+      rateLimitedRetrySeconds({ response: { status: 400, data: 'client_not_found' } })
+    ).toBeNull();
   });
 });
 
