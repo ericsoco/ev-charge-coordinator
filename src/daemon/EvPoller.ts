@@ -58,14 +58,21 @@ export interface EvPollerDeps {
   samplePluggedSec: number;
   sampleIdleSec: number;
   nowMs?: () => number;
+  /** Diagnostic lines (probe transitions, cadence gates); tests pass collectors. */
+  log?: (message: string) => void;
 }
 
 export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
   const nowMs = deps.nowMs ?? Date.now;
+  const log = deps.log ?? (() => {});
   // Restart-safe state reconstruction: the store, not memory, owns history.
   const seed = evStore.latestSample(deps.db, deps.vehicleId);
   let lastChargingState: string | null = seed?.chargingState ?? null;
   let lastRichSampleMs: number | null = null;
+  // Probe baseline is established by the first probe (silently): a boot-time
+  // transition against a stale seed would be noise, not information.
+  let lastProbeState: string | null = null;
+  let lastDueLoggedAt: number | null = null;
 
   function finalize(sessionId: number, plugTsMs: number, unplugTsMs: number): void {
     sessionStore.finalizeSession(
@@ -85,6 +92,10 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
     everyMs: deps.statusPollSec * 1000,
     run: async () => {
       const vehicle = await deps.ev.getVehicleState();
+      if (lastProbeState !== null && vehicle.state !== lastProbeState) {
+        log(`[ev-poll] vehicle ${lastProbeState} → ${vehicle.state}`);
+      }
+      lastProbeState = vehicle.state;
       if (vehicle.state !== 'online') return; // probe-only tick: no rich read, no wake
 
       const plugged = lastChargingState !== null && lastChargingState !== 'Disconnected';
@@ -98,8 +109,20 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
           sampleIdleSec: deps.sampleIdleSec,
         })
       ) {
+        // One due-line per cadence window: the standing answer to "why is
+        // there no row yet".
+        const intervalSec = plugged ? deps.samplePluggedSec : deps.sampleIdleSec;
+        const dueAt = (lastRichSampleMs ?? now) + intervalSec * 1000;
+        if (lastDueLoggedAt !== dueAt) {
+          lastDueLoggedAt = dueAt;
+          log(
+            `[ev-poll] rich read due ${new Date(dueAt).toISOString()} ` +
+              `(cadence ${intervalSec}s, ${plugged ? 'plugged' : 'idle'})`
+          );
+        }
         return;
       }
+      lastDueLoggedAt = null;
 
       const status = await deps.ev.getStatus();
       const tsMs = nowMs();
