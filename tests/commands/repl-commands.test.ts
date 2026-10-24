@@ -65,7 +65,7 @@ describe('completeCommand', () => {
       '--',
     ]);
     expect(completeCommand('pair-tesla-key --')).toEqual([
-      ['--domain', '--vin', '--check-only', '--skip-registration', '--help'],
+      ['--domain', '--vin', '--check-only', '--skip-registration', '--rotate-key', '--help'],
       '--',
     ]);
     expect(completeCommand('charge-from-battery -')).toEqual([
