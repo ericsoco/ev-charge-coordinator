@@ -952,6 +952,51 @@ discovered). Branch `fix/wake-backoff`, gate green **550 passed / 3 skipped**:
   "Vehicle reports 37.76289, -122.504895 …".
 - Next: Step 7 — validation checklist + landing review.
 
+### 2026-10-24 — daemon observability round (store report, ev-poll visibility, daemon-config.json, status probes, runtime ownership)
+
+Inputs: (a) user's first manual plug-in test missed the event (car asleep at
+the one due rich read; probes invisible — diagnosed from `ev_samples` = 1 row
+and the 300 s idle cadence math); (b) promise of a longer run, which then
+**performed exactly as expected** — plug_in detected, session written with
+manual charge start/stop from the Tesla app, unplug finalized (verified live:
+session 1, 1.86 kWh, efficiency 2.925); the log's `/auth 200`s were the battery
+self-heal and its `/auth 401`s the stale-runtime attach gap (fixed below); the
+single 408 was correct honest isolation. (c) `daemon.json` had no creation path
+— `DAEMON_CONFIG_TEMPLATE` was exported but never surfaced. Branch
+`feat/daemon-observability`, gates per commit (baseline 550/2 → **560/2**):
+- `313ba72` **store-report humanize:** `*tsMs/*TsMs` keys → ISO strings under
+  `Ms`-stripped keys (`ts`, `plugTs`); duration fields (`elapsedMs`) exempt by
+  pattern; events latest5 reshaped to `{ts, kind, from, to}`. Live-verified.
+- `41454e8` **ev-poll visibility:** `[ev-poll] vehicle asleep → online`
+  transitions (first probe establishes baseline silently) + ONE
+  `rich read due <ISO> (cadence Ns, plugged|idle)` line per cadence window —
+  the standing answer to "why is there no row"; runDaemon passes its log.
+- `a60a223` **daemon-config.json (user's design):** rename `daemon.json` →
+  `daemon-config.json`; `ensureDaemonConfigFile()` runs on DAEMON START ONLY
+  (status never creates — pinned): creates with `DAEMON_CONFIG_TEMPLATE`
+  (defaults remain the code reference), migrates a legacy `daemon.json`
+  preserving hand-edits, never overwrites the existing file — the file is the
+  single source of truth for effective config. 5 new tests.
+- `bd00923` **status probes:** `Vehicle:` line from a live non-waking state
+  probe (stored creds, 5 s budget, injectable; states: online/asleep/no-
+  creds/probe-failed) + Franklin proxy now probes the PORT regardless of
+  record, adding the honest `running but unrecorded — likely the daemon or
+  another session; one-shot commands cannot attach` state (the exact lie the
+  user hit: "not running" while the daemon's proxy served /health 200).
+- `26bb5af` **runtime.json ownership:** `runDaemon` records the franklin proxy
+  IT spawned (`pid/port/startedAt/token` — single-slot file, spawner-writes
+  rule; attached proxies leave others' records alone) and clears only a record
+  whose pid is still its own. One-shot attach (`charge-from-battery --dry-run`,
+  `exit`) now works beside a running daemon; stale-record 401s die on the next
+  daemon start. Seam-injected in tests (real config dir untouched); the
+  `undefined !== null` ownership bug was caught by the attached-case test
+  before commit.
+- Deferred (explicit): store-backed `--dry-run` (offline battery read).
+- User validation: next daemon run prints the creation line + ev-poll lines;
+  `status` shows `Vehicle: … (live probe)` and honest proxy state; a daemon run
+  rewrites the stale runtime.json (your current one is from an old session).
+- Next: Step 7 — validation checklist + landing review.
+
 ### 2026-10-24 — PR #36 review (self): dead revoke chain + comment hygiene
 
 Two inline comments on PR #36, addressed in `0d150e5` (gate **550 passed /
