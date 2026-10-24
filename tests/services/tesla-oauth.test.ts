@@ -421,6 +421,14 @@ describe('endpoint and region resolution', () => {
 
 describe('client-credential probe (dead app detection)', () => {
   it('classifies thrown token-endpoint errors by the OAuth error field', () => {
+    // Tesla's observed values (live probes 2026-10-24).
+    expect(classifyTokenEndpointError({ response: { data: { error: 'client_not_found' } } })).toBe(
+      'invalid-client'
+    );
+    expect(classifyTokenEndpointError({ response: { data: { error: 'login_required' } } })).toBe(
+      'invalid-grant'
+    );
+    // RFC 6749 values kept as belts for other deployments.
     expect(classifyTokenEndpointError({ response: { data: { error: 'invalid_client' } } })).toBe(
       'invalid-client'
     );
@@ -454,9 +462,24 @@ describe('client-credential probe (dead app detection)', () => {
     expect(calls[0].headers).toEqual(TOKEN_FORM_HEADERS);
   });
 
-  it('maps invalid_client to invalid and invalid_grant to ok', async () => {
+  it('maps the observed Tesla token-endpoint payloads (live probes 2026-10-24)', async () => {
     const verdict = (data: unknown) =>
       probeClientCredentials({ clientId: 'cid', post: async () => ({ data }) });
+    // Dead client: HTTP 400, verbatim response body.
+    expect(
+      await verdict({
+        error: 'client_not_found',
+        error_description: 'The specified client was not found.',
+      })
+    ).toBe('invalid');
+    // Live client + dummy refresh: HTTP 401, verbatim response body.
+    expect(
+      await verdict({
+        error: 'login_required',
+        error_description: 'The refresh_token is invalid',
+      })
+    ).toBe('ok');
+    // RFC 6749 values kept as belts.
     expect(await verdict({ error: 'invalid_client' })).toBe('invalid');
     expect(await verdict({ error: 'invalid_grant' })).toBe('ok');
   });
