@@ -421,8 +421,44 @@ export function describeTeslaError(status: number | undefined, raw: string): str
       'Allowed Origin on developer.tesla.com, and its public key must be hosted first.'
     );
   }
+  if (status === 422) {
+    // Observed live from POST /api/1/partner_accounts after the developer app
+    // was recreated: the body names no field, and the usual cause is the domain
+    // check -- Allowed Origins on developer.tesla.com must list the origin.
+    return (
+      `${statusText}${safeRaw} - Tesla rejected the request as invalid. For partner-account ` +
+      'registration, check that developer.tesla.com lists this domain under Allowed Origins ' +
+      '(e.g. https://example.com) and that the app is configured like the original app.'
+    );
+  }
   if (status === 421) return `${statusText}${safeRaw} - wrong region for this account; check the region setting`;
   if (status === 401) return `${statusText}${safeRaw} - token expired or revoked`;
   return `${statusText}${safeRaw}`;
+}
+
+/**
+ * Reduce an axios-shaped failure to the single line worth showing a user, using
+ * describeTeslaError as the funnel. Extracted from TeslaService so the pairing
+ * flow's registration calls report their body too instead of axios's bare
+ * "Request failed with status code N".
+ */
+export function describeAxiosHttpError(error: unknown): string {
+  const response = (error as { response?: { status?: number; data?: unknown } } | null)?.response;
+  if (!response) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  const data = response.data as
+    | { error?: unknown; error_description?: unknown; description?: unknown }
+    | string
+    | undefined;
+  // A body that never got a JSON content type arrives as a string; pass it
+  // through intact so describeTeslaError can unwrap (or quote) it.
+  const raw =
+    typeof data === 'string'
+      ? data
+      : [data?.error, data?.error_description ?? data?.description]
+          .filter((part): part is string => typeof part === 'string' && part.length > 0)
+          .join(': ');
+  return describeTeslaError(response.status, raw || (error instanceof Error ? error.message : String(error)));
 }
 

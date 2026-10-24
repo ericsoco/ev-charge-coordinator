@@ -18,6 +18,7 @@ import {
   createNonce,
   createOAuthState,
   createPkcePair,
+  describeAxiosHttpError,
   describeTeslaError,
   isValidPkceVerifier,
   parseTokenResponse,
@@ -293,6 +294,7 @@ describe('describeTeslaError', () => {
 
   it('maps the region and registration status codes Tesla only documents in passing', () => {
     expect(describeTeslaError(412, 'Precondition Failed')).toContain('pair-tesla-key');
+    expect(describeTeslaError(422, 'Unprocessable')).toContain('Allowed Origins');
     expect(describeTeslaError(421, 'Misdirected Request')).toContain('region');
     expect(describeTeslaError(401, 'nope')).toContain('token expired or revoked');
   });
@@ -509,6 +511,32 @@ describe('client-credential probe (dead app detection)', () => {
       },
     });
     expect(seen).toBe('http://localhost:1/token');
+  });
+});
+
+describe('describeAxiosHttpError', () => {
+  it('surfaces status and body through the describeTeslaError funnel', () => {
+    const error = {
+      response: {
+        status: 422,
+        data: { error: 'validation_error', description: 'Allowed Origins must include the origin' },
+      },
+    };
+    const line = describeAxiosHttpError(error);
+    expect(line).toContain('HTTP 422');
+    expect(line).toContain('validation_error: Allowed Origins must include the origin');
+    expect(line).toContain('Allowed Origins'); // the 422 advice from the funnel
+  });
+
+  it('passes a string body through intact', () => {
+    const line = describeAxiosHttpError({ response: { status: 500, data: 'boom {not json}' } });
+    expect(line).toContain('HTTP 500');
+    expect(line).toContain('boom');
+  });
+
+  it('falls back to the plain message without a response', () => {
+    expect(describeAxiosHttpError(new Error('socket hang up'))).toBe('socket hang up');
+    expect(describeAxiosHttpError('weird')).toBe('weird');
   });
 });
 

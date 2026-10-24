@@ -28,6 +28,7 @@ import {
   buildAuthorizationCodeTokenForm,
   buildRefreshTokenForm,
   classifyTokenEndpointError,
+  describeAxiosHttpError as describeAxiosError,
   createNonce,
   createOAuthState,
   createPkcePair,
@@ -1036,32 +1037,6 @@ function errorPage(message: string): string {
     .replace(/"/g, '&quot;');
   return `<html><body style="font-family: system-ui; text-align: center; padding: 50px;">
     <h1>Authorization Failed</h1><p>${safe}</p></body></html>`;
-}
-
-/**
- * Reduce an axios failure to the single line worth showing a user. Tesla reports
- * OAuth failures as `{ error, error_description }` and Fleet API failures as
- * `{ error, response }`, both in the response body, and describeTeslaError turns
- * the documented codes into advice instead of leaving a bare status code.
- */
-function describeAxiosError(error: unknown): string {
-  if (axios.isAxiosError(error)) {
-    const data = error.response?.data as
-      | { error?: unknown; error_description?: unknown; description?: unknown }
-      | string
-      | undefined;
-    // A body that never got a JSON content type arrives as a string; pass it
-    // through intact so describeTeslaError can unwrap (or quote) it, instead of
-    // falling back to axios's generic "Request failed with status code N".
-    const raw =
-      typeof data === 'string'
-        ? data
-        : [data?.error, data?.error_description ?? data?.description]
-            .filter((part): part is string => typeof part === 'string' && part.length > 0)
-            .join(': ');
-    return describeTeslaError(error.response?.status, raw || error.message);
-  }
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

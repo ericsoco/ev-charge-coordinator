@@ -171,4 +171,9 @@ describe('wiring', () => {
     expect(SERVICE_SOURCE).toContain('app recreated or rotated');
     expect(SERVICE_SOURCE).toContain('rejected the refresh token');
   });
+
+  it('registration failures surface Tesla body and stop the pairing flow', () => {
+    expect(INDEX_SOURCE).toContain('Registration failed while trying to ${phase}');
+    expect(INDEX_SOURCE).toContain('if (!(await registerDomainWithTesla');
+  });
 });

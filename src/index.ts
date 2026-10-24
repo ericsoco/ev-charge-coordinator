@@ -51,7 +51,7 @@ import {
 import { pendingQuestion, prompt, promptNumeric, promptSecret, setReplReadline } from './commands/prompt.js';
 import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from './commands/repl.js';
 import { selectAppCredentials } from './commands/authenticate.js';
-import { probeClientCredentials } from './services/tesla/oauth.js';
+import { describeAxiosHttpError, probeClientCredentials } from './services/tesla/oauth.js';
 import * as paint from './utils/color.js';
 import {
   chargeFromBattery,
@@ -1589,7 +1589,7 @@ async function runPairTeslaKey(options: PairTeslaKeyOptions): Promise<boolean> {
     return true;
   }
 
-  await registerDomainWithTesla(virtualKeys, domain, stored);
+  if (!(await registerDomainWithTesla(virtualKeys, domain, stored))) return false;
   await printPairingLinkIfReady(virtualKeys, domain, vin);
   return true;
 }
@@ -1659,11 +1659,14 @@ async function registerDomainWithTesla(
     }
   }
 
+  let phase = 'mint a partner token';
   try {
     const partnerToken = await virtualKeys.fetchPartnerToken(clientId, clientSecret);
+    phase = 'register the domain (POST /api/1/partner_accounts)';
     await virtualKeys.registerKey(partnerToken.accessToken, domain);
     console.log(paint.positive(`✓ Registered ${domain}`));
 
+    phase = 'confirm the registration';
     const verification = await virtualKeys.verifyRegistration(partnerToken.accessToken, domain);
     if (!verification.registered) {
       console.error(paint.error('✗ Tesla did not return a registered key for this domain.'));
@@ -1694,7 +1697,11 @@ async function registerDomainWithTesla(
     }
     return true;
   } catch (error) {
-    console.error(paint.error(`Registration failed: ${error instanceof Error ? error.message : error}`));
+    console.error(
+      paint.error(
+        `Registration failed while trying to ${phase}: ${describeAxiosHttpError(error)}`
+      )
+    );
     process.exitCode = 1;
     return false;
   }
