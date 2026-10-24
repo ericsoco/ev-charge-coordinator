@@ -485,9 +485,22 @@ export const RATE_LIMIT_MAX_SLEEP_SEC = 60;
  *
  * Honors the `retry-after` header first, then the plain-text body Tesla
  * actually sends ("Retry in 12 seconds"); an unparseable 429 still yields the
- * conservative fallback so callers sleep instead of retrying blind.
+ * conservative fallback so callers sleep instead of retrying blind. Walks one
+ * `cause` hop because the Fleet client's error interceptor re-wraps axios
+ * errors as `Error(describeTeslaError(...), { cause })` — the response lives
+ * on the cause, not on the thrown value.
  */
 export function rateLimitedRetrySeconds(error: unknown): number | null {
+  const direct = retrySecondsFromResponse(error);
+  if (direct !== null) return direct;
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  if (cause !== undefined && cause !== error) {
+    return retrySecondsFromResponse(cause);
+  }
+  return null;
+}
+
+function retrySecondsFromResponse(error: unknown): number | null {
   const response = (
     error as {
       response?: { status?: number; headers?: Record<string, unknown>; data?: unknown };
