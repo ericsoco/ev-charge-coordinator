@@ -20,6 +20,7 @@ import * as paint from '../utils/color.js';
 import { resolveDaemonConfig, daemonConfigPath } from '../utils/daemonConfig.js';
 import { resolveEnergyConfig } from '../utils/config.js';
 import { credentialStore, type HomeLocation } from '../utils/credentials.js';
+import { TeslaService } from '../services/TeslaService.js';
 import { storePath, openStoreReadOnly } from '../store/database.js';
 import { readLock, lockPath, isPidAlive, type LockInfo } from '../daemon/lockfile.js';
 import { readRuntimeState, isProcessAlive } from '../services/ProcessManager.js';
@@ -52,8 +53,14 @@ export interface StatusReport {
       event: string | null;
     };
   };
+  /** Live probe of the vehicle itself; null state + null error = not probed (no credentials). */
+  vehicle: { state: string | null; error: string | null };
   proxies: {
-    franklin: { state: 'running' | 'unhealthy' | 'not running'; pid: number | null; port: number | null };
+    franklin: {
+      state: 'running' | 'unhealthy' | 'unrecorded' | 'not running';
+      pid: number | null;
+      port: number | null;
+    };
     teslaCommand: { state: 'running' | 'not running' };
   };
   config: {
@@ -76,6 +83,8 @@ export interface StatusOptions {
     live: { pid: number; port: number } | null
   ) => Promise<StatusReport['proxies']['franklin']>;
   teslaProxyState?: () => Promise<StatusReport['proxies']['teslaCommand']>;
+  /** Live vehicle-state probe injected for tests; default reads stored creds (5s budget). */
+  vehicleStateProbe?: () => Promise<{ state: string } | null>;
 }
 
 const iso = (ts: number | bigint | null | undefined): string | null =>
@@ -97,16 +106,28 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(ms / 86_400_000)}d ${Math.floor((ms % 86_400_000) / 3_600_000)}h`;
 }
 
-/** Recorded Franklin proxy → health probe (GET /health, 1s budget). */
+/**
+ * Franklin proxy health — probed on the recorded port, or the default 3001
+ * when nothing is recorded: a daemon-owned proxy has no runtime.json record
+ * and must not read as "not running".
+ */
 async function defaultFranklinProxyState(
   live: { pid: number; port: number } | null
 ): Promise<StatusReport['proxies']['franklin']> {
-  if (!live) return { state: 'not running', pid: null, port: null };
+  const port = live?.port ?? 3001;
   try {
-    await axios.get(`http://127.0.0.1:${live.port}/health`, { timeout: 1_000 });
-    return { state: 'running', pid: live.pid, port: live.port };
-  } catch {
-    return { state: 'unhealthy', pid: live.pid, port: live.port };
+    await axios.get(`http://127.0.0.1:${port}/health`, { timeout: 1_000 });
+    return live
+      ? { state: 'running', pid: live.pid, port: live.port }
+      : { state: 'unrecorded', pid: null, port };
+  } catch (error) {
+    // No response at all = nothing listening; any other answer means something
+    // IS on the port (answering badly).
+    if (axios.isAxiosError(error) && !error.response) {
+      return { state: 'not running', pid: live?.pid ?? null, port: live ? live.port : null };
+    }
+    if (live) return { state: 'unhealthy', pid: live.pid, port: live.port };
+    return { state: 'unrecorded', pid: null, port };
   }
 }
 
@@ -122,6 +143,31 @@ async function defaultTeslaProxyState(): Promise<StatusReport['proxies']['teslaC
     socket.once('connect', () => done('running'));
     socket.once('error', () => done('not running'));
   });
+}
+
+/**
+ * Live vehicle state from stored credentials — the non-waking probe, so status
+ * stays read-only-by-behavior. Null = not probed (no stored credentials).
+ */
+async function defaultVehicleState(): Promise<{ state: string } | null> {
+  const creds = await credentialStore.getTeslaCredentials();
+  if (!creds?.accessToken || !creds?.refreshToken) return null;
+  if (!creds.vin) throw new Error('no stored VIN (run `get-ev-bsoc` once)');
+  const service = new TeslaService({ region: creds.region });
+  await service.initialize({
+    clientId: creds.clientId ?? '',
+    clientSecret: creds.clientSecret ?? '',
+    accessToken: creds.accessToken,
+    refreshToken: creds.refreshToken,
+    expiresAt: creds.expiresAt,
+    vin: creds.vin,
+  });
+  return await Promise.race([
+    service.getVehicleState(),
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('vehicle probe timed out (5s)')), 5_000).unref();
+    }),
+  ]);
 }
 
 async function collectStatus(options: StatusOptions): Promise<StatusReport> {
@@ -209,12 +255,21 @@ async function collectStatus(options: StatusOptions): Promise<StatusReport> {
     ? await options.teslaProxyState()
     : await defaultTeslaProxyState();
 
+  let vehicle: StatusReport['vehicle'];
+  try {
+    const probed = await (options.vehicleStateProbe ?? defaultVehicleState)();
+    vehicle = probed === null ? { state: null, error: null } : { state: probed.state, error: null };
+  } catch (error) {
+    vehicle = { state: null, error: error instanceof Error ? error.message : String(error) };
+  }
+
   const daemonCfg = resolveDaemonConfig();
   const energyCfg = resolveEnergyConfig();
   const home = await (options.getHomeLocation ?? (() => credentialStore.getHomeLocation()))();
 
   return {
     daemon,
+    vehicle,
     store: { path: dbPath, exists, schemaVersion, sizeBytes, counts, lastSample },
     proxies: { franklin, teslaCommand },
     config: {
@@ -255,6 +310,19 @@ export async function showStatus(
         : paint.info('(not signed in this process)')
     }`
   );
+  const vehicle = report.vehicle;
+  log(
+    ctx,
+    `Vehicle: ${
+      vehicle.state !== null
+        ? vehicle.state === 'online'
+          ? paint.positive(`${vehicle.state} (live probe)`)
+          : paint.warning(`${vehicle.state} (live probe)`)
+        : vehicle.error === null
+          ? paint.info('not probed (no stored credentials)')
+          : paint.warning(`probe failed (${vehicle.error})`)
+    }`
+  );
   const energy = ctx.config.resolve();
   let buffer = '(unset)';
   if (energy.config) buffer = `${energy.config.bufferPercent}%`;
@@ -283,7 +351,12 @@ export async function showStatus(
         ? paint.positive(`running (port ${franklin.port}, pid ${franklin.pid})`)
         : franklin.state === 'unhealthy'
           ? paint.warning(`running but unhealthy (port ${franklin.port}, pid ${franklin.pid})`)
-          : paint.info('not running')
+          : franklin.state === 'unrecorded'
+            ? paint.warning(
+                `running but unrecorded — likely the daemon or another session; ` +
+                  `one-shot commands cannot attach (port ${franklin.port})`
+              )
+            : paint.info('not running')
     }`
   );
   log(
