@@ -865,4 +865,22 @@ dropped) plus a confusing "not registered in this region" cascade. Branch
   Tesla's own error body plus the advice.
 - Next: Step 7 — validation checklist + landing review.
 
+**Resolved live (user, same evening):** with the fidelity fix in place the 422
+read `Validation failed: Public key hash has already been taken` — Tesla enforces
+global uniqueness of the public-key hash, and the old app's registration already
+claimed it (registrations are per-application, so the recreated app inherits
+nothing but also cannot re-claim the same hash). `pair-tesla-key --rotate-key`
+then ran end-to-end: new key published → `✓ Registered transmote.com` → consent
+confirmed → pairing link with VIN → **`get-ev-bsoc` answered 16%** (signed
+command path verified against the re-paired vehicle). This corrected the earlier
+guidance: after an app recreation, rotation is the COMMON case, not the
+exception. Follow-up commit `a838def` (gate 541/2): hash-taken advice added to
+`describeTeslaError`'s known map with a **case-insensitive** match (Tesla's
+sentence starts with a capital `P` — the first attempt missed it, caught by the
+new test before commit), an explicit "re-run WITHOUT --rotate-key" hint after
+rotation (double-rotation footgun), corrected `runAuthenticate` key-pair wording
+("usually reusable … if hash-taken, rotate"), and the README checklist updated
+to match. The guarded gate chain refused to commit the red first attempt —
+commit discipline holding.
+
 
