@@ -209,7 +209,12 @@ describe('BatterySampler', () => {
 });
 
 describe('EvPoller', () => {
-  function poller(ev: ReturnType<typeof fakeEv>, nowMs: () => number, idleSec = 0) {
+  function poller(
+    ev: ReturnType<typeof fakeEv>,
+    nowMs: () => number,
+    idleSec = 0,
+    log?: (message: string) => void
+  ) {
     return createEvPoller({
       db,
       ev,
@@ -219,8 +224,45 @@ describe('EvPoller', () => {
       samplePluggedSec: 0,
       sampleIdleSec: idleSec,
       nowMs,
+      log,
     });
   }
+
+  it('logs probe transitions and exactly one due-line per cadence window', async () => {
+    const lines: string[] = [];
+    let now = 1_000_000;
+    const ev = fakeEv();
+    ev.probe = 'asleep';
+    const task = poller(ev, () => now, 300, (message) => lines.push(message));
+
+    await task.run(); // first probe establishes the baseline silently
+    expect(lines).toEqual([]);
+    expect(ev.reads).toBe(0);
+
+    ev.probe = 'online';
+    now += 60_000;
+    await task.run(); // transition logged, first rich read runs (seed)
+    expect(lines).toEqual(['[ev-poll] vehicle asleep → online']);
+    expect(ev.reads).toBe(1);
+
+    now += 60_000;
+    await task.run(); // gated: due-line for this window
+    now += 60_000;
+    await task.run(); // gated: same window — no duplicate
+    const dueLines = lines.filter((message) => message.includes('rich read due'));
+    expect(dueLines).toHaveLength(1);
+    expect(dueLines[0]).toContain(
+      new Date(1_000_000 + 60_000 + 300_000).toISOString()
+    );
+    expect(dueLines[0]).toContain('cadence 300s, idle');
+
+    ev.probe = 'asleep';
+    now += 60_000;
+    await task.run();
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toBe('[ev-poll] vehicle online → asleep');
+    expect(ev.reads).toBe(1); // gating never reached the rich read
+  });
 
   it('the first online tick seeds a baseline sample with no events', async () => {
     const ev = fakeEv('Disconnected');

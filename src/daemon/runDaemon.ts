@@ -107,6 +107,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         samplePluggedSec: options.config.evSamplePluggedSec,
         sampleIdleSec: options.config.evSampleIdleSec,
         nowMs,
+        log,
       })
     );
   } else {
