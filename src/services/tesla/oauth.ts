@@ -195,15 +195,30 @@ export const PROBE_REFRESH_TOKEN = 'invalid-ecc-probe';
 /** Axios-shaped POST, injected so this module stays network-free. */
 export type ProbePost = (url: string, form: string, headers: Record<string, string>) => Promise<{ data?: unknown }>;
 
+/**
+ * Classify a token-endpoint OAuth error code.
+ *
+ * Empirically grounded (live probes 2026-10-24, both directions):
+ *  - dead client on fleet-auth: HTTP 400 {"error":"client_not_found"}
+ *  - live client + bogus refresh: HTTP 401 {"error":"login_required"}
+ * Tesla deviates from RFC 6749's `invalid_client`/`invalid_grant` naming, so
+ * those spec values are kept as belts for other deployments; anything else is
+ * `unknown` and must never block a caller.
+ */
+export function classifyTokenErrorCode(
+  code: string | undefined
+): 'invalid-client' | 'invalid-grant' | 'unknown' {
+  if (code === 'client_not_found' || code === 'invalid_client') return 'invalid-client';
+  if (code === 'login_required' || code === 'invalid_grant') return 'invalid-grant';
+  return 'unknown';
+}
+
 /** Classify a THROWN token-endpoint error (the refresh path's shape). */
 export function classifyTokenEndpointError(
   error: unknown
 ): 'invalid-client' | 'invalid-grant' | 'unknown' {
   const data = (error as { response?: { data?: { error?: unknown } } } | null)?.response?.data;
-  const code = typeof data?.error === 'string' ? data.error : undefined;
-  if (code === 'invalid_client') return 'invalid-client';
-  if (code === 'invalid_grant') return 'invalid-grant';
-  return 'unknown';
+  return classifyTokenErrorCode(typeof data?.error === 'string' ? data.error : undefined);
 }
 
 /**
@@ -226,8 +241,9 @@ export async function probeClientCredentials(options: {
       TOKEN_FORM_HEADERS
     );
     const data = response.data as { error?: unknown } | undefined;
-    if (data?.error === 'invalid_client') return 'invalid';
-    if (data?.error === 'invalid_grant') return 'ok';
+    const kind = classifyTokenErrorCode(typeof data?.error === 'string' ? data.error : undefined);
+    if (kind === 'invalid-client') return 'invalid';
+    if (kind === 'invalid-grant') return 'ok';
     return 'unknown';
   } catch {
     return 'unknown';
