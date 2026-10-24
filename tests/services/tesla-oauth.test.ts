@@ -421,9 +421,9 @@ describe('endpoint and region resolution', () => {
     );
   });
 
-  it('builds the consent-manager revoke URL for the selected region', () => {
-    expect(buildRevokeConsentUrl('cid', 'eu')).toBe(
-      'https://fleet-api.prd.eu.vn.cloud.tesla.com/oauth2/v3/consent?client_id=cid'
+  it('points at the account Third-party apps page (region- and client-independent)', () => {
+    expect(buildRevokeConsentUrl()).toBe(
+      'https://accounts.tesla.com/en_us/account-settings/security?tab=tpty-apps'
     );
   });
 });
