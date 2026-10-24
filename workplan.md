@@ -833,4 +833,36 @@ surfaced in the browser. Branch `feat/tesla-auth-probe`, gate green **533 passed
   tests. No alias kept; single-dash `-reauth` rejects like the one-shot.
 - Next: Step 7 — validation checklist + landing review.
 
+### 2026-10-24 — pairing UX: 422 transparency, changed-credentials guidance, --rotate-key
+
+User hit it live after recreating the app: `pair-tesla-key --domain transmote.com`
+verified the hosted key (steps 1-2 — key pair correctly reused) then failed at
+registration with a bare "Request failed with status code 422" (Tesla's body
+dropped) plus a confusing "not registered in this region" cascade. Branch
+`feat/tesla-auth-probe`, gate green **541 passed / 2 skipped** (baseline 533 + 8):
+- `14c3d33` **error fidelity + flow:** `describeAxiosHttpError` extracted into
+  `services/tesla/oauth.ts` (TeslaService's private copy aliased over to it —
+  same funnel, no duplication); `describeTeslaError` gains a 422 branch with
+  Allowed-Origin advice (the live cause class after an app recreation);
+  `registerDomainWithTesla` names the failing phase (partner-token mint vs
+  partner_accounts POST vs confirm); `runPairTeslaKey` now honors the failure
+  instead of cascading into the pairing section.
+- `f84a3bf` **changed-credentials guidance:** `selectAppCredentials` returns
+  `source: stored | entered | flags`; a successful sign-in with entered
+  credentials prints that the key pair is unchanged/reusable (not tied to the
+  client ID) plus the exact `pair-tesla-key --domain <stored>` next step.
+- `d29e0b3` **`--rotate-key`:** `VirtualKeyStore.discard()` +
+  `VirtualKeyService.rotateKeyPair()`; the CLI warns every paired vehicle must
+  re-approve; REPL table + completer + drift guard updated (the completer's
+  exact-list pin caught the new flag — the guard working as designed). Process
+  note: the first commit attempt went out red and was immediately amended green —
+  future gate chains must refuse to commit on non-zero, not just echo it.
+- README: "Recreated your Tesla application?" checklist (reauth → Allowed
+  Origins → pair-tesla-key → approve → check-only), HTTP 422 troubleshooting
+  row, updated CLI/interactive rows for both commands.
+- Live validation for the user: set Allowed Origins on the new app, re-run
+  `pair-tesla-key --domain transmote.com` — any remaining 422 now prints
+  Tesla's own error body plus the advice.
+- Next: Step 7 — validation checklist + landing review.
+
 
