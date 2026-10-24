@@ -179,6 +179,98 @@ describe('runDaemonOnce', () => {
     expect(fs.existsSync(lockFile)).toBe(false);
   });
 
+  it('records its spawned franklin proxy and clears its own record on teardown', async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const cleared: number[] = [];
+    const franklin = {
+      ...fakeFranklin(),
+      spawnedProxyPid: 4321,
+      sharedToken: 'tok',
+      listeningPort: 3001,
+    };
+
+    const outcome = await runDaemonOnce({
+      services: {
+        franklin: franklin as unknown as FranklinWHService,
+        tesla: null,
+      },
+      homeBatteryId: GW,
+      config: CONFIG,
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      nowMs: () => 1_000_000,
+      log: () => {},
+      runtimeState: {
+        write: (state) => writes.push(state),
+        read: () => ({ pid: 4321 }),
+        clear: () => cleared.push(1),
+      },
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(writes).toEqual([{ pid: 4321, port: 3001, startedAt: 1_000_000, token: 'tok' }]);
+    expect(cleared).toEqual([1]);
+    expect(fs.existsSync(lockFile)).toBe(false);
+  });
+
+  it('writes no record when it did not spawn the proxy (attached)', async () => {
+    const writes: number[] = [];
+    const cleared: number[] = [];
+    const franklin = fakeFranklin(); // no spawnedProxyPid → attached or none
+
+    await runDaemonOnce({
+      services: {
+        franklin: franklin as unknown as FranklinWHService,
+        tesla: null,
+      },
+      homeBatteryId: GW,
+      config: CONFIG,
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      log: () => {},
+      runtimeState: {
+        write: () => writes.push(1),
+        read: () => ({ pid: 999 }),
+        clear: () => cleared.push(1),
+      },
+    });
+
+    expect(writes).toEqual([]);
+    expect(cleared).toEqual([]);
+  });
+
+  it('leaves a record someone else has since written (never clears theirs)', async () => {
+    const cleared: number[] = [];
+    const franklin = {
+      ...fakeFranklin(),
+      spawnedProxyPid: 4321,
+      sharedToken: 'tok',
+      listeningPort: 3001,
+    };
+
+    await runDaemonOnce({
+      services: {
+        franklin: franklin as unknown as FranklinWHService,
+        tesla: null,
+      },
+      homeBatteryId: GW,
+      config: CONFIG,
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      log: () => {},
+      runtimeState: {
+        write: () => undefined,
+        read: () => ({ pid: 999 }), // someone re-recorded the slot
+        clear: () => cleared.push(1),
+      },
+    });
+
+    expect(cleared).toEqual([]);
+  });
+
   it('refuses both-services-missing and missing ids', async () => {
     const base = {
       config: CONFIG,
