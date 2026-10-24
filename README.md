@@ -98,12 +98,9 @@ JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
    `allowed_origins`, and pairing fails without it.
 4. Select the vehicle scopes on developer.tesla.com:
      * Vehicle Information (`vehicle_device_data`)
+     * Vehicle Location (`vehicle_location`) — used to detect vehicle at home
      * Vehicle Commands (`vehicle_cmds`)
      * Vehicle Charging Management (`vehicle_charging_cmds`)
-     * Vehicle Location (`vehicle_location`) — used by `set-home-location`'s
-       vehicle flow and, later, the geofence filter (added 2026-10-21;
-       **existing installs must re-run `authenticate`** — scopes are requested
-       at authorization, so refreshes never gain a new one)
 5. Generate a public/private key pair for command signing. `pair-tesla-key` does this
    for you on first run; to do it by hand instead, the equivalent of what it produces
    is:
