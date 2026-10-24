@@ -50,6 +50,22 @@ const iso = (ts) => (ts === null || ts === undefined ? null : new Date(Number(ts
 const round = (value, digits = 3) =>
   value === null || value === undefined ? null : Number(Number(value).toFixed(digits));
 
+/**
+ * Timestamp-shaped keys (*tsMs / *TsMs) → ISO strings under a key without the
+ * `Ms` suffix, so `npm run store` reads as time not epoch. Duration-shaped
+ * fields (elapsedMs, avgElapsedMs) do not match the pattern and stay numbers.
+ */
+const humanize = (row) => {
+  if (row === null || row === undefined || typeof row !== 'object') return row;
+  return Object.fromEntries(
+    Object.entries(row).map(([key, value]) =>
+      /[tT]sMs$/.test(key) && typeof value === 'number'
+        ? [key.replace(/Ms$/, ''), iso(value)]
+        : [key, value]
+    )
+  );
+};
+
 const batteryAgg = one(
   'SELECT COUNT(*) AS rows, MIN(ts_ms) AS firstTs, MAX(ts_ms) AS lastTs, AVG(soc_percent) AS avgSoc ' +
     'FROM home_battery_samples'
@@ -84,13 +100,21 @@ const report = {
     rows: Number(batteryAgg.rows),
     window: { from: iso(batteryAgg.firstTs), to: iso(batteryAgg.lastTs) },
     avgSocPercent: round(batteryAgg.avgSoc, 2),
-    latest: store.homeBattery.latestSample(db),
+    latest: humanize(store.homeBattery.latestSample(db)),
   },
-  home_energy_counters: { rows: Number(countersAgg.rows), latest: store.homeBattery.latestCounters(db) },
-  ev_samples: { rows: Number(evAgg.rows), latest: evLatest },
+  home_energy_counters: {
+    rows: Number(countersAgg.rows),
+    latest: humanize(store.homeBattery.latestCounters(db)),
+  },
+  ev_samples: { rows: Number(evAgg.rows), latest: humanize(evLatest) },
   events: {
     byKind: Object.fromEntries(eventCounts.map((row) => [row.kind, Number(row.n)])),
-    latest5: latestEvents.map((row) => ({ ...row, ts: iso(row.ts_ms) })),
+    latest5: latestEvents.map((row) => ({
+      ts: iso(row.ts_ms),
+      kind: row.kind,
+      from: row.from_state,
+      to: row.to_state,
+    })),
   },
   sessions: {
     total: Number(sessionsAgg.total ?? 0),
@@ -99,7 +123,7 @@ const report = {
     avgEnergyKwh: round(sessionsAgg.avgEnergyKwh),
     avgEfficiency: round(sessionsAgg.avgEfficiency),
     avgElapsedMs: round(sessionsAgg.avgElapsedMs, 0),
-    latest: store.sessions.recentSessions(db, 1)[0] ?? null,
+    latest: humanize(store.sessions.recentSessions(db, 1)[0] ?? null),
   },
   weather_forecasts: {
     rows: Number(weatherAgg.rows),
@@ -131,7 +155,7 @@ for (const [table, data] of Object.entries(report)) {
   if (data.window) line('window', `${data.window.from ?? '—'} → ${data.window.to ?? '—'}`);
   if (data.avgSocPercent !== undefined) line('avg soc', data.avgSocPercent === null ? '—' : `${data.avgSocPercent}%`);
   if (data.byKind) line('by kind', Object.entries(data.byKind).map(([k, n]) => `${k}=${n}`).join(' ') || '(none)');
-  if (data.latest5?.length) for (const event of data.latest5) line('event', `${event.ts} ${event.kind} ${event.from_state}→${event.to_state}`);
+  if (data.latest5?.length) for (const event of data.latest5) line('event', `${event.ts} ${event.kind} ${event.from}→${event.to}`);
   if (data.total !== undefined) {
     line('sessions', `${data.total} total, ${data.open} open, ${data.closed} closed`);
     line('avg energy / efficiency / elapsed', `${data.avgEnergyKwh ?? '—'} kWh / ${data.avgEfficiency ?? '—'} / ${data.avgElapsedMs ?? '—'} ms`);
