@@ -1329,9 +1329,10 @@ async function runAuthenticate(
         : 'node dist/index.js pair-tesla-key --domain <your-domain>';
       console.log(
         paint.info(
-          '\nYour application key pair (~/.ev-charge-coordinator/private-key.pem) is unchanged\n' +
-            'and reusable - it is not tied to the client ID (--rotate-key is the rare exception\n' +
-            'and re-pairs every vehicle).'
+          '\nYour application key pair (~/.ev-charge-coordinator/private-key.pem) is usually\n' +
+            'reusable and not tied to the client ID. If registration answers "public key hash\n' +
+            'has already been taken", the recreated app cannot claim the old key: rotate with\n' +
+            'pair-tesla-key --rotate-key (re-uploads the new public key and re-pairs every vehicle).'
         )
       );
       console.log(paint.info(`Next: ${next}`));
@@ -1573,6 +1574,12 @@ async function runPairTeslaKey(options: PairTeslaKeyOptions): Promise<boolean> {
     );
     await virtualKeys.rotateKeyPair();
     console.log(paint.positive(`✓ New key pair written to ${virtualKeys.privateKeyPath}`));
+    console.log(
+      paint.info(
+        'Upload the public key printed below to the well-known URL, then re-run\n' +
+          'pair-tesla-key WITHOUT --rotate-key (rotating again replaces the key yet again).'
+      )
+    );
   }
 
   // Step 1: the key must exist locally before anything is published or sent.
