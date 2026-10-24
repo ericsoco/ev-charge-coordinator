@@ -21,6 +21,7 @@ import { createScheduler, type ScheduledTask } from './scheduler.js';
 import { createBatterySampler } from './BatterySampler.js';
 import { createEvPoller } from './EvPoller.js';
 import { createWeatherSampler, type FetchForecast } from './WeatherSampler.js';
+import { clearRuntimeState, readRuntimeState, writeRuntimeState } from '../services/ProcessManager.js';
 
 export interface RunDaemonOptions {
   services: { franklin: FranklinWHService | null; tesla: TeslaService | null };
@@ -36,6 +37,16 @@ export interface RunDaemonOptions {
   log?: (message: string) => void;
   errorLog?: (message: string) => void;
   nowMs?: () => number;
+  /**
+   * runtime.json seam — defaults to the real ProcessManager file so one-shot
+   * commands can attach to the daemon's proxy; tests inject fakes so the real
+   * config dir stays untouched.
+   */
+  runtimeState?: {
+    write: (state: { pid: number; port: number; startedAt: number; token?: string }) => void;
+    read: () => { pid: number } | null;
+    clear: () => void;
+  };
 }
 
 export interface DaemonOutcome {
@@ -50,6 +61,9 @@ interface Prepared {
   db: DatabaseSync;
   tasks: ScheduledTask[];
   eventVehicleId: string;
+  runtime: NonNullable<RunDaemonOptions['runtimeState']>;
+  /** Pid of the franklin proxy THIS run spawned, or null (attached/no franklin). */
+  ownedProxyPid: number | null;
 }
 
 /** Retention prunes daily; the interval only needs to be "roughly a day". */
@@ -81,6 +95,31 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
 
   const eventVehicleId = options.vehicleId ?? 'daemon';
   const tasks: ScheduledTask[] = [];
+
+  // Record the proxy WE spawned so one-shot commands (status attach,
+  // charge-from-battery, exit) can find and authenticate against it. Attached
+  // proxies keep whoever spawned them's record — only the spawner writes.
+  const runtime = options.runtimeState ?? {
+    write: writeRuntimeState,
+    read: readRuntimeState,
+    clear: clearRuntimeState,
+  };
+  let ownedProxyPid: number | null = null;
+  if (franklin) {
+    // `?? null` matters: fakes (and any partial double) may omit the getter
+    // entirely, and `undefined !== null` would wrongly claim ownership.
+    const spawnedPid = franklin.spawnedProxyPid ?? null;
+    if (spawnedPid !== null) {
+      ownedProxyPid = spawnedPid;
+      runtime.write({
+        pid: spawnedPid,
+        port: franklin.listeningPort,
+        startedAt: nowMs(),
+        token: franklin.sharedToken ?? undefined,
+      });
+      log(`[daemon] recorded spawned franklin proxy (pid ${spawnedPid}) in runtime.json`);
+    }
+  }
 
   if (franklin && options.homeBatteryId) {
     tasks.push(
@@ -143,7 +182,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
     tsMs: nowMs(),
     kind: 'daemon_start',
   });
-  return { lock, db, tasks, eventVehicleId };
+  return { lock, db, tasks, eventVehicleId, runtime, ownedProxyPid };
 }
 
 async function teardown(
@@ -165,6 +204,15 @@ async function teardown(
     // they spawned (only theirs — disconnect respects ownership).
     await options.services.franklin?.disconnect().catch(() => undefined);
     await options.services.tesla?.disconnect().catch(() => undefined);
+    // Clear OUR runtime.json record — and only ours: if anything re-recorded
+    // the slot meanwhile, that record belongs to someone else now.
+    if (
+      prepared.ownedProxyPid !== null &&
+      prepared.runtime.read()?.pid === prepared.ownedProxyPid
+    ) {
+      prepared.runtime.clear();
+      log('[daemon] cleared our runtime.json record on shutdown');
+    }
   }
 }
 

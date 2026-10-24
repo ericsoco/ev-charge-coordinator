@@ -449,6 +449,11 @@ export class FranklinWHService implements BatteryService {
     return this.ownsProxyProcess && this.proxyProcess?.pid ? this.proxyProcess.pid : null;
   }
 
+  /** The port this service talks to its proxy on (runtime.json records need it). */
+  get listeningPort(): number {
+    return this.proxyPort;
+  }
+
   /**
    * The running proxy's X-Proxy-Token as this instance knows it, or null.
    *
