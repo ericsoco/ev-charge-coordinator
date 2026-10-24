@@ -437,7 +437,7 @@ export class TeslaService implements EVService {
       const kind = classifyTokenEndpointError(error);
       if (kind === 'invalid-client') {
         throw new Error(
-          'Tesla no longer recognizes this application (client ID/secret invalid - app recreated or rotated?). Run `authenticate --force` and enter the new client credentials.',
+          'Tesla no longer recognizes this application (client ID/secret invalid - app recreated or rotated?). Run `authenticate --reauth` and enter the new client credentials.',
           { cause: error }
         );
       }

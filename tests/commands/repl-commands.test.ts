@@ -214,7 +214,7 @@ describe('index.ts wiring', () => {
     expect(INDEX_SOURCE).toContain("parseCommandArgs('authenticate', args)");
     expect(INDEX_SOURCE).toContain('clientId: typeof options.clientId');
     expect(INDEX_SOURCE).toContain('typeof options.clientSecret');
-    expect(INDEX_SOURCE).toContain('force: options.force === true');
+    expect(INDEX_SOURCE).toContain('reauth: options.reauth === true');
   });
 
   it('gates non-local commands before they reach the dispatcher', () => {
@@ -385,18 +385,18 @@ describe('parseCommandArgs - REPL inline flags match Commander', () => {
   });
 
   it('parses the authenticate flags like the one-shot command', () => {
-    expect(parseCommandArgs('authenticate', ['--force'])).toEqual({
-      options: { force: true },
+    expect(parseCommandArgs('authenticate', ['--reauth'])).toEqual({
+      options: { reauth: true },
       error: null,
     });
     expect(
-      parseCommandArgs('authenticate', ['--client-id', 'abc', '--client-secret', 'xyz', '--force'])
-    ).toEqual({ options: { clientId: 'abc', clientSecret: 'xyz', force: true }, error: null });
-    // A single-dash `-force` (the user's literal typo) must error like the
-    // one-shot CLI, not be silently dropped and run unforced.
-    expect(parseCommandArgs('authenticate', ['-force'])).toEqual({
+      parseCommandArgs('authenticate', ['--client-id', 'abc', '--client-secret', 'xyz', '--reauth'])
+    ).toEqual({ options: { clientId: 'abc', clientSecret: 'xyz', reauth: true }, error: null });
+    // Single-dash typos must error like the one-shot CLI, not be silently
+    // dropped and run without the flag.
+    expect(parseCommandArgs('authenticate', ['-reauth'])).toEqual({
       options: {},
-      error: "error: unknown option '-force'",
+      error: "error: unknown option '-reauth'",
     });
     expect(parseCommandArgs('authenticate', ['--nope'])).toEqual({
       options: {},
