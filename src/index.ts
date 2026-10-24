@@ -701,11 +701,27 @@ program
           break;
         }
           
-        case 'authenticate':
+        case 'authenticate': {
           // Same helper the standalone command uses, so the REPL and
-          // `ev-charge-coordinator authenticate` cannot drift apart.
-          await runAuthenticate();
+          // `ev-charge-coordinator authenticate` cannot drift apart — flags
+          // included: parseCommandArgs mirrors Commander's definitions.
+          const { options, error } = parseCommandArgs('authenticate', args);
+          if (error) {
+            console.log(paint.warning(error));
+            break;
+          }
+          if (options.help) {
+            printCommandHelp('authenticate');
+            break;
+          }
+          await runAuthenticate({
+            clientId: typeof options.clientId === 'string' ? options.clientId : undefined,
+            clientSecret:
+              typeof options.clientSecret === 'string' ? options.clientSecret : undefined,
+            force: options.force === true,
+          });
           break;
+        }
 
         case 'status': {
           const { options, error } = parseCommandArgs('status', args);

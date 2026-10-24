@@ -58,6 +58,7 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
  * flags consume the next token; boolean flags stand alone.
  */
 export const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  authenticate: ['client-id', 'client-secret'],
   config: [
     'tesla-region',
     'tesla-domain',
@@ -71,6 +72,7 @@ export const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
 };
 
 export const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  authenticate: ['force', 'help'],
   config: ['clear-franklin', 'clear-tesla', 'clear-credentials', 'show-public-key', 'help'],
   'pair-tesla-key': ['check-only', 'skip-registration', 'help'],
   'charge-from-battery': ['start', 'dry-run', 'help'],
@@ -109,7 +111,14 @@ export function parseCommandArgs(name: string, tokens: string[]): ParsedArgs {
       continue;
     }
     if (!token.startsWith('--')) {
-      return { options: {}, error: `error: unknown argument '${token}'` };
+      // Single-dash (`-force`) is a mistyped flag, not a positional —
+      // Commander rejects it as an unknown option too.
+      return {
+        options: {},
+        error: token.startsWith('-')
+          ? `error: unknown option '${token}'`
+          : `error: unknown argument '${token}'`,
+      };
     }
     const flag = token.slice(2);
     if (valueFlags.has(flag)) {

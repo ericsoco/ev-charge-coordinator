@@ -135,10 +135,9 @@ describe('flag tables mirror Commander definitions', () => {
   // CLI accepts (which is exactly what happened to --set-buffer).
   it('has no command whose flags diverge from Commander', () => {
     // Commands whose flags the REPL deliberately does not parse: `start` is
-    // not a REPL command at all (it enters the REPL), and the dispatch runs
-    // `authenticate` without options, so parseCommandArgs rejects their
-    // flags in the REPL — they are one-shot CLI flags by design.
-    const oneShotOnly = new Set(['start', 'authenticate', 'daemon']);
+    // not a REPL command at all (it enters the REPL) and `daemon` has no
+    // dispatch case (one-shot only) — neither has flag tables, by design.
+    const oneShotOnly = new Set(['start', 'daemon']);
 
     const commandNames = [...INDEX_SOURCE.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]);
     expect(commandNames.length).toBeGreaterThan(0);
@@ -167,7 +166,6 @@ describe('flag tables mirror Commander definitions', () => {
 
     // The whitelist cannot rot silently: both commands must still exist.
     expect(commandNames.filter((name) => oneShotOnly.has(name)).sort()).toEqual([
-      'authenticate',
       'daemon',
       'start',
     ]);
@@ -196,6 +194,27 @@ describe('index.ts wiring', () => {
   it('passes the completer to the REPL readline and renders help from the list', () => {
     expect(INDEX_SOURCE).toContain('createReadline({ completer: completeCommand })');
     expect(INDEX_SOURCE).toContain('console.log(renderHelp())');
+  });
+
+  it('routes every tabled command through parseCommandArgs and its help renderer', () => {
+    // The drift guard proves the tables mirror Commander; this proves the
+    // dispatch actually consults them — a table no case parses would still
+    // let the REPL silently drop that command's flags (the authenticate bug).
+    const tabled = [
+      ...new Set([...Object.keys(VALUE_FLAGS), ...Object.keys(BOOLEAN_FLAGS)]),
+    ].sort();
+    expect(tabled.length).toBeGreaterThan(0);
+    for (const name of tabled) {
+      expect(INDEX_SOURCE).toContain(`parseCommandArgs('${name}', args)`);
+      expect(INDEX_SOURCE).toContain(`printCommandHelp('${name}')`);
+    }
+  });
+
+  it('routes authenticate flags into runAuthenticate (consent-override parity)', () => {
+    expect(INDEX_SOURCE).toContain("parseCommandArgs('authenticate', args)");
+    expect(INDEX_SOURCE).toContain('clientId: typeof options.clientId');
+    expect(INDEX_SOURCE).toContain('typeof options.clientSecret');
+    expect(INDEX_SOURCE).toContain('force: options.force === true');
   });
 
   it('gates non-local commands before they reach the dispatcher', () => {
@@ -360,6 +379,26 @@ describe('parseCommandArgs - REPL inline flags match Commander', () => {
       error: null,
     });
     expect(parseCommandArgs('charge-from-battery', ['--nope'])).toEqual({
+      options: {},
+      error: "error: unknown option '--nope'",
+    });
+  });
+
+  it('parses the authenticate flags like the one-shot command', () => {
+    expect(parseCommandArgs('authenticate', ['--force'])).toEqual({
+      options: { force: true },
+      error: null,
+    });
+    expect(
+      parseCommandArgs('authenticate', ['--client-id', 'abc', '--client-secret', 'xyz', '--force'])
+    ).toEqual({ options: { clientId: 'abc', clientSecret: 'xyz', force: true }, error: null });
+    // A single-dash `-force` (the user's literal typo) must error like the
+    // one-shot CLI, not be silently dropped and run unforced.
+    expect(parseCommandArgs('authenticate', ['-force'])).toEqual({
+      options: {},
+      error: "error: unknown option '-force'",
+    });
+    expect(parseCommandArgs('authenticate', ['--nope'])).toEqual({
       options: {},
       error: "error: unknown option '--nope'",
     });
