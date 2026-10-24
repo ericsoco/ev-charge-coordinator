@@ -48,7 +48,11 @@ describe('selectAppCredentials', () => {
       },
       note: () => {},
     });
-    expect(result).toEqual({ clientId: 'OLD_ID', clientSecret: 'OLD_SECRET' });
+    expect(result).toEqual({
+      clientId: 'OLD_ID',
+      clientSecret: 'OLD_SECRET',
+      source: 'stored',
+    });
     expect(probed).toEqual(['OLD_ID']);
     expect(asked).toEqual([reuseQuestion('OLD_ID')]);
   });
@@ -66,7 +70,7 @@ describe('selectAppCredentials', () => {
       probe: async () => 'ok',
       note: () => {},
     });
-    expect(result).toEqual({ clientId: 'NEW_ID', clientSecret: 'NEW_SECRET' });
+    expect(result).toEqual({ clientId: 'NEW_ID', clientSecret: 'NEW_SECRET', source: 'entered' });
     expect(asked).toEqual([reuseQuestion('OLD_ID'), 'Client ID: ', 'Client Secret: ']);
   });
 
@@ -79,7 +83,11 @@ describe('selectAppCredentials', () => {
       probe: async () => 'unknown',
       note: () => {},
     });
-    expect(result).toEqual({ clientId: 'OLD_ID', clientSecret: 'OLD_SECRET' });
+    expect(result).toEqual({
+      clientId: 'OLD_ID',
+      clientSecret: 'OLD_SECRET',
+      source: 'stored',
+    });
   });
 
   it('dead stored pair: skips the reuse question, prompts new, re-probes', async () => {
@@ -96,7 +104,7 @@ describe('selectAppCredentials', () => {
       },
       note: (message) => notes.push(message),
     });
-    expect(result).toEqual({ clientId: 'NEW_ID', clientSecret: 'NEW_SECRET' });
+    expect(result).toEqual({ clientId: 'NEW_ID', clientSecret: 'NEW_SECRET', source: 'entered' });
     expect(probed).toEqual(['OLD_ID', 'NEW_ID']);
     expect(asked).toEqual(['Client ID: ', 'Client Secret: ']);
     expect(notes[0]).toContain('does not recognize the stored client');
@@ -123,7 +131,11 @@ describe('selectAppCredentials', () => {
       probe: neverProbe,
       note: () => {},
     });
-    expect(result).toEqual({ clientId: 'FLAG_ID', clientSecret: 'FLAG_SECRET' });
+    expect(result).toEqual({
+      clientId: 'FLAG_ID',
+      clientSecret: 'FLAG_SECRET',
+      source: 'flags',
+    });
     expect(asked).toEqual([]);
   });
 
@@ -136,7 +148,11 @@ describe('selectAppCredentials', () => {
       probe: neverProbe,
       note: () => {},
     });
-    expect(result).toEqual({ clientId: 'FLAG_ID', clientSecret: 'TYPED_SECRET' });
+    expect(result).toEqual({
+      clientId: 'FLAG_ID',
+      clientSecret: 'TYPED_SECRET',
+      source: 'flags',
+    });
   });
 
   it('fresh setup (nothing stored) prompts for both, no probe', async () => {
@@ -148,7 +164,7 @@ describe('selectAppCredentials', () => {
       probe: neverProbe,
       note: () => {},
     });
-    expect(result).toEqual({ clientId: 'ID1', clientSecret: 'SEC1' });
+    expect(result).toEqual({ clientId: 'ID1', clientSecret: 'SEC1', source: 'entered' });
     expect(asked).toEqual(['Client ID: ', 'Client Secret: ']);
   });
 });
@@ -175,5 +191,11 @@ describe('wiring', () => {
   it('registration failures surface Tesla body and stop the pairing flow', () => {
     expect(INDEX_SOURCE).toContain('Registration failed while trying to ${phase}');
     expect(INDEX_SOURCE).toContain('if (!(await registerDomainWithTesla');
+  });
+
+  it('prints key-pair guidance when credentials changed (source !== stored)', () => {
+    expect(INDEX_SOURCE).toContain("source !== 'stored'");
+    expect(INDEX_SOURCE).toContain('is unchanged');
+    expect(INDEX_SOURCE).toContain('pair-tesla-key --domain ${existing.domain}');
   });
 });

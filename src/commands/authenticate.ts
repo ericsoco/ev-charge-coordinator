@@ -44,16 +44,24 @@ export interface SelectAppCredentialsDeps {
   note: (message: string) => void;
 }
 
-export type SelectedAppCredentials = { clientId: string; clientSecret: string } | { rejected: true };
+/** How resolved credentials were obtained; drives the post-reauth guidance. */
+export type CredentialSource = 'stored' | 'entered' | 'flags';
+
+export type SelectedAppCredentials =
+  | { clientId: string; clientSecret: string; source: CredentialSource }
+  | { rejected: true };
 
 export function reuseQuestion(clientId: string): string {
   return `Re-use the stored app credentials (client ID ${clientId})? (y/n): `;
 }
 
-async function promptForNewCredentials(io: CredentialIO): Promise<AppCredentialSource & { clientId: string; clientSecret: string }> {
+async function promptForNewCredentials(
+  io: CredentialIO
+): Promise<{ clientId: string; clientSecret: string; source: 'entered' }> {
   return {
     clientId: (await io.ask('Client ID: ')).trim(),
     clientSecret: (await io.askSecret('Client Secret: ')).trim(),
+    source: 'entered',
   };
 }
 
@@ -68,6 +76,7 @@ export async function selectAppCredentials(
     return {
       clientId: flags.clientId ?? (await io.ask('Client ID: ')).trim(),
       clientSecret: flags.clientSecret ?? (await io.askSecret('Client Secret: ')).trim(),
+      source: 'flags',
     };
   }
 
@@ -88,7 +97,11 @@ export async function selectAppCredentials(
     // default and the probe never blocks an uncertain network.
     const answer = (await io.ask(reuseQuestion(existing.clientId))).trim().toLowerCase();
     if (answer === 'y') {
-      return { clientId: existing.clientId, clientSecret: existing.clientSecret };
+      return {
+        clientId: existing.clientId,
+        clientSecret: existing.clientSecret,
+        source: 'stored',
+      };
     }
     return promptForNewCredentials(io);
   }
