@@ -104,11 +104,9 @@ export const TESLA_PARTNER_SCOPES = [
 
 export const TESLA_PARTNER_SCOPE_STRING = TESLA_PARTNER_SCOPES.join(' ');
 
-/** Revoke a third-party token by sending the user to Tesla's consent manager. */
-export function buildRevokeConsentUrl(clientId: string, region: TeslaRegion): string {
-  const url = new URL(`${TESLA_REGIONS[region].apiBaseUrl}/oauth2/v3/consent`);
-  url.searchParams.set('client_id', clientId);
-  return url.toString();
+/** Where a human revokes a third-party grant: the account's Third-party apps page. */
+export function buildRevokeConsentUrl(): string {
+  return 'https://accounts.tesla.com/en_us/account-settings/security?tab=tpty-apps';
 }
 
 export function isTeslaRegion(value: unknown): value is TeslaRegion {

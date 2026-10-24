@@ -358,7 +358,7 @@ export class TeslaService implements EVService {
 
   /** URL a user visits to withdraw this application's access. */
   getRevokeConsentUrl(): string {
-    return buildRevokeConsentUrl(this.clientId, this.regionInfo.region);
+    return buildRevokeConsentUrl();
   }
 
   getName(): string {
@@ -866,9 +866,14 @@ export class TeslaService implements EVService {
   }
 
   /**
-   * Position via `vehicle_data?endpoints=drive_state`. The `vehicle_location`
-   * scope gates the location fields; when they are absent the error names the
-   * scope instead of returning a silent undefined. Read-only: never wakes.
+   * Position via `vehicle_data?endpoints=location_data`.
+   *
+   * `location_data` is the selector that gates latitude/longitude — confirmed
+   * live 2026-10-24 against this account: `drive_state` alone returns only
+   * power/shift_state/speed/timestamp, while `location_data` restores the full
+   * GPS set (community-documented: timdorr/tesla-api#786, fleet-telemetry#460).
+   * The fields still land under `drive_state` in the response. Read-only:
+   * never wakes.
    */
   async getVehicleLocation(): Promise<VehicleLocation> {
     if (!this.vin) {
@@ -877,14 +882,15 @@ export class TeslaService implements EVService {
     const response = await this.client.get<{
       response: { drive_state?: { latitude?: number; longitude?: number } };
     }>(`/api/1/vehicles/${this.vin}/vehicle_data`, {
-      params: { endpoints: 'drive_state' },
+      params: { endpoints: 'location_data' },
     });
     const driveState = response.data.response.drive_state;
     if (typeof driveState?.latitude !== 'number' || typeof driveState?.longitude !== 'number') {
       throw new Error(
-        'Location is not in the vehicle response — the vehicle_location scope is ' +
-          'probably missing. Re-run `authenticate` and ' +
-          'ensure Vehicle Location is selected on developer.tesla.com.'
+        'Location is not in the vehicle response. The read uses the location_data selector; ' +
+          'if it stays empty, the vehicle_location scope may be missing from this ACCOUNT ' +
+          'grant (app config is not enough) — revoke the app at accounts.tesla.com ' +
+          '(Account Settings > Security > Third-party apps) and re-run `authenticate`.'
       );
     }
     return { latitude: driveState.latitude, longitude: driveState.longitude };

@@ -131,7 +131,7 @@ describe('getVehicleLocation', () => {
     return recorded;
   }
 
-  it('maps latitude/longitude from drive_state', async () => {
+  it('maps latitude/longitude from the location_data selector (fields land in drive_state)', async () => {
     const { tesla } = await service(['online']);
     const recorded = driveStateAdapter(
       (tesla as unknown as { client: AxiosInstance }).client,
@@ -142,17 +142,20 @@ describe('getVehicleLocation', () => {
       latitude: 37.7749,
       longitude: -122.4194,
     });
-    expect(recorded[0].params).toEqual({ endpoints: 'drive_state' });
+    // Live-verified 2026-10-24: drive_state alone omits lat/lng; the
+    // location_data selector is what gates it.
+    expect(recorded[0].params).toEqual({ endpoints: 'location_data' });
   });
 
-  it('fails with scope guidance when the fields are missing', async () => {
+  it('explains both failure modes when the fields are missing', async () => {
     const { tesla } = await service(['online']);
-    // Scope missing: Tesla returns drive_state without the location fields.
+    // Selector answered without location: scope/grant or vehicle-side issue.
     driveStateAdapter((tesla as unknown as { client: AxiosInstance }).client, {
       heading: 90,
     });
 
-    await expect(tesla.getVehicleLocation()).rejects.toThrow(/vehicle_location scope/);
-    await expect(tesla.getVehicleLocation()).rejects.toThrow(/Re-run `authenticate`/);
+    await expect(tesla.getVehicleLocation()).rejects.toThrow(/location_data selector/);
+    await expect(tesla.getVehicleLocation()).rejects.toThrow(/Third-party apps/);
+    await expect(tesla.getVehicleLocation()).rejects.toThrow(/ACCOUNT grant/);
   });
 });
