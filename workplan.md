@@ -917,4 +917,39 @@ ignoring Tesla's stated delay. (Daemon ruled out: not running; no lock.) Branch
   WAITS (with a visible "waiting Ns" line) instead of failing after a burst.
 - Next: Step 7 — validation checklist + landing review.
 
+### 2026-10-24 — set-home-location: location lives behind the location_data selector
+
+Follow-up: the429 fix worked ("waiting 42s" observed), but the flow then failed
+with "Location is not in the vehicle response — the vehicle_location scope is
+probably missing". User's app config DID list the scope; a fresh consent with
+Location selected still failed. Read-only probes with the stored token settled
+it live:
+- `endpoints=drive_state` (narrow AND full read): `drive_state` =
+  `power/shift_state/speed/timestamp` only — no lat/lng, token fresh, car online.
+- `endpoints=location_data`: `drive_state` gains `gps_as_of, heading, latitude,
+  longitude, native_*` — **`LATLNG OK: 37.76289, -122.504895`** (user's parked
+  car) with the SAME token.
+⇒ Not the scope, not the grant, not Tesla caching: Tesla relocated GPS fields
+behind the separate `location_data` endpoint selector (community-documented:
+timdorr/tesla-api#786 Aug 2025 with the identical response shape;
+fleet-telemetry#460 May 2026 — "hidden … when location_data endpoint parameter
+is not passed"). Wrong turns this cost the user two rounds: blaming
+developer.tesla.com config, then a fabricated API-host revoke URL (DNS dead in
+browsers; the human page is accounts.tesla.com/…/security?tab=tpty-apps — user-
+discovered). Branch `fix/wake-backoff`, gate green **550 passed / 3 skipped**:
+- `48c4a63` **fix:** `getVehicleLocation` requests `endpoints: 'location_data'`
+  (fields still land under `drive_state`; shape unchanged); error message now
+  explains BOTH failure modes (selector vs ACCOUNT-grant) and points at the
+  real revoke page; `buildRevokeConsentUrl` returns the accounts.tesla.com
+  Third-party-apps URL (was the API-host consent URL a browser cannot reach);
+  probe/oauth tests updated (param pin `location_data`, error regexes, URL pin).
+- README: troubleshooting section for the exact error with the evidence and the
+  revoke→re-auth remedy.
+- Method lesson (standing): before blaming configuration, probe the raw API
+  response with the user's own token — the selector difference was visible in
+  one request and invisible through config checking.
+- Morning validation: `npm run build` then `set-home-location` should print
+  "Vehicle reports 37.76289, -122.504895 …".
+- Next: Step 7 — validation checklist + landing review.
+
 
