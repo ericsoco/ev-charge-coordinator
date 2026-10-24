@@ -736,6 +736,7 @@ npm run check:franklin -- --email you@example.com
   | HTTP 412 | app not registered with Tesla in this region; run `pair-tesla-key` |
   | HTTP 422 | request invalid — for domain registration, Allowed Origins on developer.tesla.com must include the domain's origin |
   | HTTP 421 | right credentials, wrong region; set `--tesla-region` |
+  | HTTP 429 | rate limit ("Retry in 12 seconds"); wait the stated time — wake loops honor it automatically and never burn retries on it |
   | `your public key has not been paired with the vehicle` | the key was never
     approved on the phone, or Tesla holds a different key; re-run
     `pair-tesla-key --check-only` |
