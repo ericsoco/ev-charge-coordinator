@@ -148,10 +148,29 @@ function binaryInstalled(): boolean {
 }
 const itWithBinary = it.skipIf(!binaryInstalled());
 
+/** True when something already listens on loopback:port (e.g. a live session's sidecar). */
+function isLoopbackPortBusy(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: '127.0.0.1' });
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('error', () => resolve(false));
+  });
+}
+
 describe('startTeslaProxy / stopTeslaProxy', () => {
   itWithBinary(
     'boots the real proxy, attaches to it, and stops it',
-    async () => {
+    async (ctx) => {
+      // The real proxy binds loopback:4443; an interactive session's sidecar
+      // may already hold it. Skipping (not failing) keeps a live session and a
+      // full gate runnable at the same time — everywhere else this still runs.
+      if (await isLoopbackPortBusy(4443)) {
+        ctx.skip('port 4443 is held (a live session tesla-http-proxy)');
+        return;
+      }
       generateFleetKey();
       let started: Awaited<ReturnType<typeof mod.startTeslaProxy>> | null = null;
       try {
