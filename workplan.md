@@ -883,4 +883,38 @@ rotation (double-rotation footgun), corrected `runAuthenticate` key-pair wording
 to match. The guarded gate chain refused to commit the red first attempt —
 commit discipline holding.
 
+### 2026-10-24 — wakeUp: honor 429 retry delays, stop hammering, poll light
+
+User hit it live: `set-home-location` returned `HTTP 429: Retry in 12 seconds`.
+Quantified cause: `wakeUp()` looped up to 10 × (`wake_up` POST + FULL
+`vehicle_data` poll) at a flat 2 s cadence, swallowed every error, and only
+surfaced the 429 on the last attempt — one command ≈ 10 rejected POSTs in ~20 s,
+ignoring Tesla's stated delay. (Daemon ruled out: not running; no lock.) Branch
+`fix/wake-backoff` (off main after feat/tesla-auth-probe landed), gate green
+**550 passed / 3 skipped** (baseline 544 + 6):
+- `5b19317` **test isolation:** the real-proxy boot test now dynamic-skips when
+  loopback:4443 is held (the user's live session sidecar, PID-traced) instead of
+  failing — a live session and a full gate are simultaneously runnable; CI
+  unaffected (nothing listens there).
+- `2fb8492` **retry-delay parsing** (`services/tesla/oauth.ts`):
+  `rateLimitedRetrySeconds` — retry-after header first (clamped 1–60 s), then the
+  "Retry in N seconds" body Tesla actually sends, 15 s fallback (never hammer);
+  `describeTeslaError` gains a 429 branch ("wait the stated time — wake loops
+  honor it").
+- `1c91a1c` **wakeUp rework:** confirmation now polls the LIGHT state probe
+  (`getVehicleState`, `GET /vehicles/{vin}` — the loop only reads `state`; the
+  full vehicle_data it used to pull is the heaviest call Tesla offers); a 429
+  sleeps the stated delay WITHOUT consuming a wake cycle and logs "Rate limited
+  by Tesla; waiting Ns…"; 3-minute wall budget matches the charge path; a car
+  that never comes online now FAILS (the old loop resolved silently). Parser is
+  cause-chain aware — the Fleet error interceptor re-wraps axios errors, so the
+  response lives on `.cause` (caught by the new tests, not by review).
+  Routing pins updated ([wake_up, state probe]); 6 new fake-timer tests
+  (stated-delay sleeps, header preference, budget error, non-429 bounded to 10
+  cycles, never-online loud failure, no vehicle_data ever).
+- README: HTTP 429 troubleshooting row.
+- Live check for the user: re-run `set-home-location` — a rate-limited wake now
+  WAITS (with a visible "waiting Ns" line) instead of failing after a burst.
+- Next: Step 7 — validation checklist + landing review.
+
 
