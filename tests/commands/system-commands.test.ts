@@ -89,6 +89,7 @@ function seedStore(): void {
 const STUB_PROXIES = {
   franklinProxyState: async () => ({ state: 'running' as const, pid: 123, port: 3001 }),
   teslaProxyState: async () => ({ state: 'running' as const }),
+  vehicleStateProbe: async () => ({ state: 'online' as const }),
 };
 
 describe('showStatus', () => {
@@ -117,6 +118,7 @@ describe('showStatus', () => {
       franklin: { state: 'running', pid: 123, port: 3001 },
       teslaCommand: { state: 'running' },
     });
+    expect(report.vehicle).toEqual({ state: 'online', error: null });
     expect(report.config.homeLocation).toBe('not set');
     // collectStatus resolves the real config file — none exists in the vitest
     // env, so the energy buffer is null here (the human-mode test covers the
@@ -144,6 +146,44 @@ describe('showStatus', () => {
     expect(out).toContain('Battery Buffer: 20%');
     expect(out).toContain('home location: set');
     expect(out).not.toContain('1.00000');
+  });
+
+  it('renders vehicle probe variants and the unrecorded proxy honestly', async () => {
+    const asleep = makeCtx();
+    await showStatus(asleep.ctx, {
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      ...STUB_PROXIES,
+      vehicleStateProbe: async () => ({ state: 'asleep' }),
+      franklinProxyState: async () => ({ state: 'unrecorded' as const, pid: null, port: 3001 }),
+    });
+    const asleepOut = asleep.lines.join('\n');
+    expect(asleepOut).toContain('asleep (live probe)');
+    expect(asleepOut).toContain('running but unrecorded');
+    expect(asleepOut).toContain('one-shot commands cannot attach (port 3001)');
+
+    const failing = makeCtx();
+    await showStatus(failing.ctx, {
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      ...STUB_PROXIES,
+      vehicleStateProbe: async () => {
+        throw new Error('boom');
+      },
+    });
+    expect(failing.lines.join('\n')).toContain('probe failed (boom)');
+
+    const noCreds = makeCtx();
+    await showStatus(noCreds.ctx, {
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      ...STUB_PROXIES,
+      vehicleStateProbe: async () => null,
+    });
+    expect(noCreds.lines.join('\n')).toContain('not probed (no stored credentials)');
   });
 
   it('reports stale and corrupt locks without crashing', async () => {
