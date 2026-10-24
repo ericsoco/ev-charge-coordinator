@@ -1,11 +1,12 @@
 /**
- * Daemon tunables: `<config-dir>/daemon.json`.
+ * Daemon tunables: `<config-dir>/daemon-config.json`.
  *
- * Unlike energy config (`config.ts`), these are ops knobs with documented
- * defaults: an absent file is perfectly valid (all defaults apply), while an
+ * The file is the single source of truth for effective config: the daemon
+ * creates it with the documented defaults on first start (migrating a legacy
+ * `daemon.json` if present), and readers that run before that first start see
+ * the same defaults in code. No CLI setters (P1a) — hand-edit afterwards; an
  * *invalid* value is reported as a problem and blocks the daemon — never
- * clamped or guessed at. The file is hand-edited (no CLI setters in P1a);
- * secrets (home location) never live here.
+ * clamped or guessed at. Secrets (home location) never live here.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -45,7 +46,29 @@ export const DAEMON_CONFIG_TEMPLATE: string =
   JSON.stringify(DEFAULT_DAEMON_CONFIG, null, 2) + '\n';
 
 export function daemonConfigPath(): string {
-  return path.join(getConfigDir(), 'daemon.json');
+  return path.join(getConfigDir(), 'daemon-config.json');
+}
+
+/**
+ * Ensure the config file exists — DAEMON START ONLY (`status` must never call
+ * this: it reads only, starts nothing). Creates it with the documented
+ * defaults, or migrates a legacy `daemon.json`, so after one daemon run the
+ * file is the single source of truth for effective config. An existing file is
+ * never overwritten — the operator's edits are the truth.
+ */
+export function ensureDaemonConfigFile(
+  targetPath: string = daemonConfigPath()
+): 'created' | 'migrated' | 'exists' {
+  if (fs.existsSync(targetPath)) return 'exists';
+  const dir = path.dirname(targetPath);
+  const legacy = path.join(dir, 'daemon.json');
+  if (fs.existsSync(legacy)) {
+    fs.renameSync(legacy, targetPath);
+    return 'migrated';
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(targetPath, DAEMON_CONFIG_TEMPLATE, { mode: 0o600 });
+  return 'created';
 }
 
 function checkRange(min: number, max: number): (value: number) => string | null {

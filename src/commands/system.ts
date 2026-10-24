@@ -332,7 +332,7 @@ export async function showStatus(
   } else if (report.config.daemon) {
     const cfg = report.config.daemon;
     // Label honestly: these values may come from defaults, not a file.
-    const label = fs.existsSync(daemonConfigPath()) ? 'daemon.json' : 'daemon defaults';
+    const label = fs.existsSync(daemonConfigPath()) ? 'daemon-config.json' : 'daemon defaults';
     log(
       ctx,
       `${label}: battery ${cfg.batterySampleSec}s · ev ${cfg.evStatusPollSec}s ` +
