@@ -72,7 +72,7 @@ export const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
 };
 
 export const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  authenticate: ['force', 'help'],
+  authenticate: ['reauth', 'help'],
   config: ['clear-franklin', 'clear-tesla', 'clear-credentials', 'show-public-key', 'help'],
   'pair-tesla-key': ['check-only', 'skip-registration', 'help'],
   'charge-from-battery': ['start', 'dry-run', 'help'],
@@ -111,7 +111,7 @@ export function parseCommandArgs(name: string, tokens: string[]): ParsedArgs {
       continue;
     }
     if (!token.startsWith('--')) {
-      // Single-dash (`-force`) is a mistyped flag, not a positional —
+      // Single-dash (`-reauth`) is a mistyped flag, not a positional —
       // Commander rejects it as an unknown option too.
       return {
         options: {},

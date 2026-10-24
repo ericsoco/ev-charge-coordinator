@@ -720,7 +720,7 @@ program
             clientId: typeof options.clientId === 'string' ? options.clientId : undefined,
             clientSecret:
               typeof options.clientSecret === 'string' ? options.clientSecret : undefined,
-            force: options.force === true,
+            reauth: options.reauth === true,
           });
           break;
         }
@@ -1233,18 +1233,18 @@ program
  * step from every data command, and this is it.
  */
 async function runAuthenticate(
-  options: { clientId?: string; clientSecret?: string; force?: boolean } = {}
+  options: { clientId?: string; clientSecret?: string; reauth?: boolean } = {}
 ): Promise<boolean> {
   const existing = await credentialStore.getTeslaCredentials();
 
-  // Without --force, an intact session is left alone rather than sending the user
+  // Without --reauth, an intact session is left alone rather than sending the user
   // through consent again for no reason.
   const hasSession =
     Boolean(existing?.accessToken) &&
     Boolean(existing?.refreshToken) &&
     Boolean(existing?.clientId) &&
     Boolean(existing?.clientSecret);
-  if (hasSession && !options.force) {
+  if (hasSession && !options.reauth) {
     const expiresAt = existing?.expiresAt ?? 0;
     console.log(paint.info('Already signed in to Tesla.'));
     console.log(
@@ -1254,7 +1254,7 @@ async function runAuthenticate(
           : '  Stored tokens have expired; the CLI will refresh them on next use.'
       )
     );
-    console.log(paint.positive('  Re-authorize anyway with: node dist/index.js authenticate --force'));
+    console.log(paint.positive('  Re-authorize anyway with: node dist/index.js authenticate --reauth'));
     return true;
   }
 
@@ -1335,7 +1335,7 @@ program
   .description('Sign in to Tesla and store the credentials (no other side effects)')
   .option('--client-id <id>', 'Client ID from developer.tesla.com (default: the stored one)')
   .option('--client-secret <secret>', 'Client Secret (default: the stored one)')
-  .option('--force', 'Re-authorize even if credentials are already stored')
+  .option('--reauth', 'Re-authorize even if credentials are already stored')
   .action(async (options) => {
     if (!(await runAuthenticate(options))) {
       process.exitCode = 1;
@@ -1854,7 +1854,7 @@ async function reportKeyState(
   } else if (consent.reason === 'not-signed-in') {
     console.log(paint.warning('Account access: MISSING never authorized (run `authenticate` and approve)'));
   } else if (consent.reason === 'not-authorized') {
-    console.log(paint.warning('Account access: MISSING token rejected; re-authorize (run `authenticate --force`)'));
+    console.log(paint.warning('Account access: MISSING token rejected; re-authorize (run `authenticate --reauth`)'));
   } else {
     console.log(paint.warning(`Account access: not confirmed (${consent.reason}) - ${consent.detail}`));
   }
