@@ -396,7 +396,7 @@ describe('wakeUp rate limiting and budget', () => {
     await waking;
 
     expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(3);
-    // Two rate-limit waits of the stated 5s each — not the old flat 2s hammer.
+    // Two rate-limit waits of the stated 5s each.
     expect(Date.now() - start).toBeGreaterThanOrEqual(10_000);
   });
 
@@ -451,7 +451,7 @@ describe('wakeUp rate limiting and budget', () => {
     expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(10);
   });
 
-  it('fails loudly when the car never comes online (the old loop resolved silently)', async () => {
+  it('fails loudly when the car never comes online', async () => {
     const service = await wakeService();
     const urls = armWake(service, { state: () => 'asleep' });
 
