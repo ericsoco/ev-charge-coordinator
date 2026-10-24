@@ -784,4 +784,39 @@ path worked as typed. Branch `fix/repl-authenticate-flags`:
   commit. Nothing landed until act mode was re-confirmed.
 - Next: Step 7 — validation checklist + landing review.
 
+### 2026-10-23 — authenticate: dead-app auto-detection + credential-selection rules
+
+Follow-up to the parity fix: `authenticate --force` re-ran OAuth with the STORED
+(old) client ID — deliberate ("reuse so a re-auth need not re-paste the secret"),
+but a recreated Tesla application makes that pair dead, and the failure only
+surfaced in the browser. Branch `feat/tesla-auth-probe`, gate green **533 passed /
+2 skipped** (baseline 518 + 15):
+- `8f7d166` **probe wire format** (`services/tesla/oauth.ts`): the token endpoint
+  distinguishes `invalid_client` (app credentials not accepted) from
+  `invalid_grant` (credentials fine, grant bad) — so a refresh_token grant with a
+  deliberately dummy token probes client-ID liveness WITHOUT touching the real,
+  single-use refresh token (test-pinned). `probeClientCredentials` (injected post,
+  `ECC_TESLA_TOKEN_URL`-honoring; network trouble = `unknown`, never blocks) +
+  `classifyTokenEndpointError` for thrown errors. 5 tests.
+- `c271283` **selection rules** (`commands/authenticate.ts`, wired into
+  `runAuthenticate`): flags win and are never paired with a stored counterpart
+  (closes `--client-id X` silently reusing the OLD stored secret); stored
+  credentials are reused only after an explicit `Re-use the stored app credentials
+  (client ID …)? (y/n)` — `n` prompts for new ones; a probe-confirmed dead stored
+  pair skips the reuse question, says why, prompts for new, and re-probes (dead
+  twice → clear failure before any browser round trip); probe `unknown` never
+  blocks. 10 tests incl. wiring pins.
+- `TeslaService.refreshTokens` classifies its token-endpoint failure:
+  invalid_client → "no longer recognizes this application … run `authenticate
+  --force` and enter the new client credentials"; invalid_grant → "refresh token
+  rejected … re-run `authenticate`". The daemon cannot self-heal this (human +
+  new secret required) but now fails loudly with the right cause.
+- Live validation for the user: run `authenticate --force` — with the old, dead
+  stored ID it should print "Tesla does not recognize the stored client ID/secret"
+  and prompt for the new pair; then `pair-tesla-key` for the recreated app's
+  virtual key. Environment note for future sessions: this terminal garbles
+  heredocs and stalls on double-quoted `!` (interactive bang history) — shell
+  edits must avoid both; the `editor` tool works in act mode.
+- Next: Step 7 — validation checklist + landing review.
+
 
