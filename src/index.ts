@@ -1034,6 +1034,7 @@ program
   .command('daemon')
   .description('Run the collect daemon in the foreground (samplers, sessions, history)')
   .option('--once', 'Run every sampler once and exit (non-zero if any failed)')
+  .option('--dry-run', 'Evaluate and record decisions without actuating (forces dry-run mode)')
   .option('--debug', 'Print full stack traces for startup failures')
   .action(async (cliOptions) => {
     // Single source of truth: the file exists after the first daemon start.
@@ -1086,6 +1087,7 @@ program
       homeBatteryId: franklinCreds?.gatewayId,
       vehicleId,
       config: resolved.config,
+      dryRun: cliOptions.dryRun === true,
     };
 
     try {
