@@ -15,6 +15,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { TeslaService } from '../services/TeslaService.js';
+import type { EventKind } from '../store/types.js';
 import * as evStore from '../store/EvStore.js';
 import * as homeBatteryStore from '../store/HomeBatteryStore.js';
 import * as sessionStore from '../store/SessionStore.js';
@@ -46,6 +47,15 @@ export function shouldSampleRich(input: EvCadenceInput): boolean {
   return input.nowMs - input.lastRichSampleMs >= intervalMs;
 }
 
+/** What the decision consumer receives per vehicle plug-in event. */
+export interface VehiclePlugInContext {
+  tsMs: number;
+  sessionId: number;
+  event: EventKind;
+  chargingState: string;
+  evSocPercent: number | null;
+}
+
 export interface EvPollerDeps {
   db: DatabaseSync;
   /** Only these two reads are used; tests pass fakes. */
@@ -60,6 +70,11 @@ export interface EvPollerDeps {
   nowMs?: () => number;
   /** Diagnostic lines (probe transitions, cadence gates); tests pass collectors. */
   log?: (message: string) => void;
+  /**
+   * Decision stage of the chain (P1b): called once per vehicle plug-in after
+   * the new session opens. Absent = collect-only (P1a behavior).
+   */
+  onVehiclePlugIn?: (ctx: VehiclePlugInContext) => Promise<void>;
 }
 
 export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
@@ -159,11 +174,29 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
             const staleId = sessionStore.closeOpenSession(deps.db, deps.vehicleId, tsMs);
             if (staleId !== null) finalize(staleId, alreadyOpen.plugTsMs, tsMs);
           }
-          sessionStore.openSession(deps.db, {
+          const sessionId = sessionStore.openSession(deps.db, {
             vehicleId: deps.vehicleId,
             homeBatteryId: deps.homeBatteryId,
             plugTsMs: tsMs,
           });
+          if (deps.onVehiclePlugIn) {
+            try {
+              await deps.onVehiclePlugIn({
+                tsMs,
+                sessionId,
+                event: event.kind,
+                chargingState: battery.chargingState,
+                evSocPercent: battery.soc,
+              });
+            } catch (error) {
+              // A failed decision must never stop sampling.
+              log(
+                `[ev-poll] decision consumer failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              );
+            }
+          }
         } else if (event.kind === 'unplug') {
           const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
           const closedId = sessionStore.closeOpenSession(deps.db, deps.vehicleId, tsMs);
