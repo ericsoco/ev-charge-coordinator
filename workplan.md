@@ -74,6 +74,11 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
   `daemon-config.json`. `--dry-run` (step 5) forces non-actuation even when enabled.
 - **Actuation** sets the computed charge limit first, then starts charging — same semantics
   as `charge-from-battery` (shared pure math, extracted not duplicated).
+- **Placement (user, 2026-10-25):** decision logic lives in `src/daemon/` beside
+  `eventDetector.ts` — EvPoller owns the whole chain (read vehicle state → detect state
+  changes → apply filters → act); filters exist only within that chain. Purity is a
+  testing discipline, not a claim of other consumers; revisit the split only if a second
+  evaluator (CLI preview, remote/GUI) actually appears.
 
 ### Steps
 
@@ -81,10 +86,11 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
    `false`), `filters[]` (`always`, `geofence` + `radiusM`), fail-loud validation (unknown
    type, missing/non-positive radius, non-boolean `enabled`); defaults and template stay in
    lockstep. *(branch `p1b/step1-decision-config` — complete)*
-2. **Pure filters** — `src/decision/filters.ts`: `(input) => {pass, reason}`; `always` +
+2. **Pure filters** — `src/daemon/filters.ts`: `(input) => {pass, reason}`; `always` +
    `geofence` (location injected by the caller — this step stays fetch-free); unit matrix.
    *(branch `p1b/step2-decision-filters` — complete)*
-3. **Decision engine + store** — pure engine (interlock order: enabled → plugged →
+3. **Decision engine + store** — pure engine (`src/daemon/engine.ts`, beside its filters;
+   interlock order: enabled → plugged →
    not-already-charging → battery-above-buffer → filters → compute limit → outcome);
    `DecisionStore` writer (migration adds the `decisions` row mapper/reason codes;
    `filter_results_json`, `dry_run`, session-id idempotency); the intentionally-unpinned
@@ -1217,4 +1223,25 @@ Branch `p1b/step2-decision-filters` (off landed main `76dca03`), gate green
   step-3 engine (`soc > bufferPercent`, from `energy.ts`'s `max(0, soc − buffer)`).
 - Next: Step 3 — decision engine + `DecisionStore` + migration (branch
   `p1b/step3-decision-engine`).
+
+
+### 2026-10-25 — P1b step 2 addendum: filters colocated in src/daemon/
+
+Same branch (`p1b/step2-decision-filters`), gate green (exit 0; 602 passed / 2 skipped).
+User placement call after reviewing the `src/decision/` split: **decision logic lives in
+`src/daemon/` beside `eventDetector.ts`.** Rationale recorded in the module header and
+above in Confirmed decisions: EvPoller owns the whole chain — read vehicle state, detect
+state changes (`eventDetector.ts`), apply filters (`filters.ts`), act (SessionStore now;
+decisions + actuation next steps) — and filters exist only within that chain. Purity is a
+testing discipline, not a claim of other consumers (the earlier `src/decision/` framing
+bet on future evaluators — CLI preview, remote/GUI — that do not exist; revisit only if
+one appears).
+
+- `git mv src/decision/filters.ts → src/daemon/filters.ts`; `tests/decision/filters.test.ts
+  → tests/daemon/filters.test.ts` (mirrors `src/`, like `event-detector.test.ts`); one
+  import line changed; no code changes inside the module (import depth unchanged).
+- Step 3 retargeted: engine lands in `src/daemon/engine.ts` beside its filters;
+  `DecisionStore` stays in `store/` (persistence follows the `*Store.ts` pattern
+  regardless of where policy lives).
+- Next: unchanged — Step 3 (branch `p1b/step3-decision-engine`).
 

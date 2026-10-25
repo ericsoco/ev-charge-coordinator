@@ -3,7 +3,7 @@
  * semantics. Inputs are plain objects — no I/O by construction.
  */
 import { describe, expect, it } from 'vitest';
-import { distanceM, runFilters, type FilterInput } from '../../src/decision/filters.js';
+import { distanceM, runFilters, type FilterInput } from '../../src/daemon/filters.js';
 import type { DecisionFilterConfig } from '../../src/utils/daemonConfig.js';
 
 const HOME = { latitude: 37.7749, longitude: -122.4194 };
