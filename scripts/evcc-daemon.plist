@@ -6,9 +6,7 @@
   <string>com.transmote.ev-charge-coordinator.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__NODE_BIN__</string>
-    <string>__REPO_DIR__/dist/index.js</string>
-    <string>daemon</string>
+    <string>__LAUNCHER__</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__REPO_DIR__</string>
@@ -20,7 +18,7 @@
   <string>__CONFIG_DIR__/logs/daemon.err.log</string>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key>
-    <string>__NODE_BIN_DIR__:/usr/local/bin:/usr/bin:/bin</string>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 </dict>
 </plist>

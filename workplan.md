@@ -302,9 +302,10 @@ touching anything):
 2. `mkdir -p ~/.ev-charge-coordinator/logs`
 3. Write the plist → `plutil -lint <plist>`
 4. `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.transmote.ev-charge-coordinator.daemon.plist`
-5. Verify: `launchctl print gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon | grep -E
-   'state|pid'` · `tail -f ~/.ev-charge-coordinator/logs/daemon.log` · (from step 5)
-   `node dist/index.js status`
+5. Verify:
+  `launchctl print gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon | grep -E'state|pid'`
+  `tail -f ~/.ev-charge-coordinator/logs/daemon.log`
+  `node dist/index.js status`
 6. **First-run keychain prompt:** macOS may ask to allow `node` to access the
    `ev-charge-coordinator` keychain item — "Always Allow" once.
 
@@ -1015,5 +1016,36 @@ session released :4443):
 - Note for the human: PR body says "419 rate limit" — it is 429; GitHub writes
   stay with the user (skill rule).
 - Next: Step 7 — validation checklist + landing review.
+
+### 2026-10-24 — daemon install round: launcher shim (Login Items title + nvm resilience) + launchctl one-liner
+
+Branch `fix/daemon-launcher-naming` off landed `main` (ed07d26). Two items
+from the user's first real `install-daemon.sh` run:
+
+- **Login Items title was "Node.js Foundation"** — macOS Background Task
+  Management names a login item after `ProgramArguments[0]`; the plist pointed
+  straight at the nvm node binary, whose code-signer identity is "Node.js
+  Foundation" (same class of bug as traycerai/traycer#776, which showed "sh").
+  Fix: new template `scripts/evcc-daemon-launcher.sh` rendered to
+  `~/.ev-charge-coordinator/EV Charge Coordinator` (file name = visible
+  title); plist's sole ProgramArguments entry is now `__LAUNCHER__`. The
+  launcher also sources nvm and resolves `node` at each launch, removing the
+  plist's baked nvm version path (the documented "re-install after node
+  upgrade" caveat is gone; plist PATH env made static).
+  Uninstall removes the launcher too; `--dry-run` on both scripts prints the
+  rendered launcher.
+- **`launchctl print` grep matched `state =` three times** — job state
+  (one tab) plus the job's `resource coalition` and `jetsam coalition`
+  bookkeeping entries (two tabs, `state = active` each). Not duplicate
+  processes; pid appears once. README + install output now use the
+  tab-anchored `grep -E $'^\t(state|pid) ='` with a one-line explanation.
+- Tests: `tests/launchd/launchd-assets.test.ts` re-pinned (launcher-shaped
+  ProgramArguments, placeholder sets {__LAUNCHER__,__REPO_DIR__,__CONFIG_DIR__}
+  for the plist and {__REPO_DIR__} for the launcher, launcher dry-run/uninstall
+  paths, bash -n over all three scripts).
+- Pending (user): re-run `scripts/install-daemon.sh`, then confirm the System
+  Settings / `sfltool dumpbtm` title reads "EV Charge Coordinator" (the old
+  entry may linger until logout). P1b planning paused per user; launcher plan
+  from the 2026-10-24 planning entry stands.
 
 

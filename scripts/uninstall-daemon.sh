@@ -30,6 +30,8 @@ if [ ! -f "$TEMPLATE" ]; then
 fi
 
 CONFIG_DIR="$HOME/.ev-charge-coordinator"
+# Install-side counterpart: the launcher's file name is the Login Items title.
+LAUNCHER="$CONFIG_DIR/EV Charge Coordinator"
 
 # Same single source of truth as install-daemon.sh: the template's Label entry.
 LABEL="$(sed -n 's|.*<string>\(com\.[^<]*\)</string>.*|\1|p' "$TEMPLATE" | head -1)"
@@ -43,13 +45,14 @@ DOMAIN="gui/$(id -u)"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] would: launchctl bootout $DOMAIN/$LABEL 2>/dev/null || true"
   echo "[dry-run] would: rm -f $TARGET"
+  echo "[dry-run] would: rm -f \"$LAUNCHER\""
   echo "[dry-run] no changes were made."
   exit 0
 fi
 
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-rm -f "$TARGET"
+rm -f "$TARGET" "$LAUNCHER"
 
-echo "Removed $TARGET"
+echo "Removed $TARGET and $LAUNCHER"
 echo "Kept: $CONFIG_DIR (store, logs, credentials)."
 echo "Proxies (if any still run): node dist/index.js exit"
