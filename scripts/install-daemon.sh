@@ -77,7 +77,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] would: write rendered plist to $TARGET (below)"
   echo "[dry-run] would: plutil -lint $TARGET"
   echo "[dry-run] would: launchctl bootout $DOMAIN/$LABEL 2>/dev/null || true"
-  echo "[dry-run] would: launchctl bootstrap $DOMAIN $TARGET"
+  echo "[dry-run] would: launchctl bootstrap $DOMAIN $TARGET (up to 5 attempts while the old job tears down)"
   echo "--- rendered launcher <<<"
   render_launcher
   echo ">>> --- end rendered launcher"
@@ -99,7 +99,22 @@ plutil -lint "$TARGET"
 
 # Idempotent upgrade: bootout errors when the label was never loaded.
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-launchctl bootstrap "$DOMAIN" "$TARGET"
+# launchd tears the old job down asynchronously; an immediate bootstrap can
+# race it (EALREADY, surfaced to the client as error 5) and leave the
+# service unloaded. Retry until the previous job is fully gone.
+BOOTSTRAPPED=0
+LAST_ERR=""
+for attempt in 1 2 3 4 5; do
+  if LAST_ERR="$(launchctl bootstrap "$DOMAIN" "$TARGET" 2>&1)"; then
+    BOOTSTRAPPED=1
+    break
+  fi
+  sleep 1
+done
+if [ "$BOOTSTRAPPED" -ne 1 ]; then
+  echo "bootstrap failed after 5 attempts: $LAST_ERR" >&2
+  exit 1
+fi
 
 echo "Installed $LABEL (Login Items title: \"EV Charge Coordinator\")"
 echo "Verify:"
