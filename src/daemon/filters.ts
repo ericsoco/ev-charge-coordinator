@@ -1,12 +1,16 @@
 /**
  * Pure decision filters for auto-start (design.md §3.3/§4).
  *
- * Each filter is a total function over injected data — no I/O, no store, no
- * services: the engine (step 3) and poller wiring (step 4) supply the home
- * secret, the decision-time vehicle location (geofence = Option B:
- * fetched at plug-in, never here), and config. Failure semantics (§4): a
- * configured filter that cannot decide fails with an actionable reason —
- * never a silent allow.
+ * Placement rationale: filters exist only inside the EvPoller chain — the
+ * poller reads vehicle state, detects state changes (eventDetector.ts),
+ * applies this chain, and acts on the outcome (sessions now; decisions +
+ * actuation in the next P1b steps). Purity is a testing choice, not a bid
+ * for other consumers: each filter is a total function over injected data —
+ * no I/O, no store, no services; the poller supplies the home secret, the
+ * decision-time vehicle location (geofence = Option B: fetched at plug-in,
+ * never here), and config. Failure semantics (§4): a configured filter
+ * that cannot decide fails with an actionable reason — never a silent
+ * allow.
  */
 import type { HomeLocation } from '../utils/credentials.js';
 import type { VehicleLocation } from '../types/ev.js';
