@@ -6,7 +6,7 @@
  * read lands a sample, runs the pure transition detector, and maintains
  * sessions — open on plug_in, close+finalize on unplug.
  *
- * Known limitation (collect-only P1a): an unplug the car sleeps through is
+ * Known limitation: an unplug the car sleeps through is
  * observed only at the next wake; if the next visit's state matches the
  * stale one, the session boundary self-heals on the first observed
  * transition (plug_in with an already-open session closes it first, at the
@@ -71,8 +71,8 @@ export interface EvPollerDeps {
   /** Diagnostic lines (probe transitions, cadence gates); tests pass collectors. */
   log?: (message: string) => void;
   /**
-   * Decision stage of the chain (P1b): called once per vehicle plug-in after
-   * the new session opens. Absent = collect-only (P1a behavior).
+   * Decision stage of the chain: called once per vehicle plug-in after
+   * the new session opens. Absent = collect-only.
    */
   onVehiclePlugIn?: (ctx: VehiclePlugInContext) => Promise<void>;
 }
@@ -153,7 +153,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         chargeRateKw: battery.chargeRate,
         minutesToFull: battery.minutesToFull,
         chargeEnergyAddedKwh: battery.chargeEnergyAdded,
-        atHome: null, // P1b's geofence writes this; raw coordinates never land here
+        atHome: null, // geofence evaluation writes this; raw coordinates never land here
       });
       lastRichSampleMs = tsMs;
 
