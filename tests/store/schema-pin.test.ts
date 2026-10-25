@@ -27,7 +27,9 @@ import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import * as ev from '../../src/store/EvStore.js';
 import * as sessions from '../../src/store/SessionStore.js';
 import * as weather from '../../src/store/WeatherForecastStore.js';
+import * as decisions from '../../src/store/DecisionStore.js';
 import type {
+  DecisionRow,
   EventRow,
   EvSampleRow,
   HomeBatterySampleRow,
@@ -148,6 +150,11 @@ const forecastFixture: WeatherForecastRow = {
   id: 0, siteId: 'home', fetchedTsMs: 0, hourTsMs: 0, irradianceWm2: null,
   temperatureC: null, rawJson: null,
 };
+const decisionFixture: DecisionRow = {
+  id: 0, siteId: 'home', vehicleId: '', homeBatteryId: null, tsMs: 0,
+  sessionId: null, accepted: 0, dryRun: 0, reasonCode: 'dry_run',
+  reasonDetail: null, filterResultsJson: null, limitedBy: null,
+};
 
 const FIXTURES: Record<string, readonly string[]> = {
   home_battery_samples: sortedKeys(homeSample),
@@ -156,7 +163,7 @@ const FIXTURES: Record<string, readonly string[]> = {
   events: sortedKeys(eventFixture),
   sessions: sortedKeys(sessionFixture),
   weather_forecasts: sortedKeys(forecastFixture),
-  // decisions: row interface arrives with P1b — pinned then (see test below).
+  decisions: sortedKeys(decisionFixture),
 };
 
 let db: DatabaseSync;
@@ -194,14 +201,13 @@ describe('interface pin (DDL columns ↔ row-interface keys)', () => {
   it('every column camel-converts to an interface key, per table', () => {
     for (const { table, columns } of TABLES) {
       const keys = FIXTURES[table];
-      if (!keys) continue; // decisions — pinned with P1b
       expect(columns.map(toCamel).sort(), table).toEqual([...keys]);
     }
   });
 
-  it('pins every table except decisions (its interface arrives with P1b)', () => {
+  it('every table has a pinned row interface', () => {
     const unpinned = TABLES.map((t) => t.table).filter((name) => !(name in FIXTURES));
-    expect(unpinned).toEqual(['decisions']);
+    expect(unpinned).toEqual([]);
   });
 });
 
@@ -212,6 +218,10 @@ describe('read pin (repository SELECTs ↔ interface keys)', () => {
     ev.insertSample(db, { vehicleId: 'VIN', tsMs: 1 });
     sessions.openSession(db, { vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 1 });
     weather.insertForecast(db, [{ hourTsMs: 1 }], 1);
+    decisions.insertDecision(db, {
+      vehicleId: 'VIN', tsMs: 1, sessionId: 1, accepted: false, dryRun: true,
+      reasonCode: 'dry_run',
+    });
 
     const reads: [string, object | null][] = [
       ['home_battery_samples', homeBattery.latestSample(db)],
@@ -219,12 +229,13 @@ describe('read pin (repository SELECTs ↔ interface keys)', () => {
       ['ev_samples', ev.latestSample(db, 'VIN')],
       ['sessions', sessions.openSessionFor(db, 'VIN')],
       ['weather_forecasts', weather.latestVintage(db)[0] ?? null],
+      ['decisions', decisions.decisionForSession(db, 1)],
     ];
     for (const [table, row] of reads) {
       expect(row, table).not.toBeNull();
       expect(sortedKeys(row!), table).toEqual([...FIXTURES[table]]);
     }
-    // events/decisions have no repository reader yet — covered by the pins above.
+    // events has no repository reader yet — covered by the pins above.
   });
 });
 

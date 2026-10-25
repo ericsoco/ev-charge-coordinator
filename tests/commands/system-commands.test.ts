@@ -111,7 +111,7 @@ describe('showStatus', () => {
     expect(result.ok).toBe(true);
     const report = JSON.parse(lines.join('\n'));
     expect(report.daemon).toMatchObject({ state: 'running', pid: process.pid });
-    expect(report.store).toMatchObject({ path: dbPath, exists: true, schemaVersion: 1 });
+    expect(report.store).toMatchObject({ path: dbPath, exists: true, schemaVersion: 2 });
     expect(report.store.counts).toMatchObject({ batterySamples: 1, sessions: 2, openSessions: 1 });
     expect(report.store.lastSample.battery).toBe('1970-01-01T00:00:01.000Z');
     expect(report.proxies).toEqual({
