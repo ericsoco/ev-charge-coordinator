@@ -51,7 +51,7 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 4 — poller wiring complete (2026-10-25); next: Step 5 — actuation.**
+> Status: **Step 5 — actuation complete (2026-10-25); next: Step 6 — notifiers.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -102,7 +102,7 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
 5. **Actuation** — shared charge-limit math extracted from `charge-from-battery`;
    `tesla-http-proxy` alive-check/respawn before commands (Decisions pointer above);
    `setChargeLimit` → `startCharging` gated on `enabled`; `daemon --dry-run`; dry/disabled
-   ⇒ zero command calls; interlock-matrix tests. *(branch `p1b/step5-actuation`)*
+   ⇒ zero command calls; interlock-matrix tests. *(branch `p1b/step5-actuation` — complete)*
 6. **Notifiers** — `Notifier` interface + `log-only`/`ntfy`/Slack; typed events (decision,
    start/stop, interlock decline, service failures); secrets in credential store;
    failure-isolation tests. *(branch `p1b/step6-notifiers`)*
@@ -1330,4 +1330,45 @@ passed / 2 skipped**; consumer 6/6, wiring 3/3). First run — no flakes.
 - Next: Step 5 — actuation: shared charge-limit math extraction, `tesla-http-proxy`
   alive-check/respawn before commands, `setChargeLimit` → `startCharging` behind
   `autoStart.enabled`, `daemon --dry-run` flag; branch `p1b/step5-actuation`.
+
+
+### 2026-10-25 — P1b step 5 complete: actuation (limit → start, live only)
+
+Branch `p1b/step5-actuation` (off landed main `7921bd4`), gate green (exit 0; **639
+passed / 2 skipped**; decision-consumer 12/12, command-routing 24/24). First run.
+
+**Two step items verified already solved by existing code (pinned, not rebuilt):**
+- **Proxy alive-check/respawn before each command** — `TeslaService.postVehicleCommand`
+  → `vehicleCommandClient()` calls the `commandProxy` resolver on *every* command (only
+  the TLS client is cached by port), and the daemon's `initializeTesla` wires that
+  resolver to `startTeslaProxy()`, which attaches when the recorded pid lives and
+  respawns when it does not. New pin in `tesla-command-routing.test.ts`: counting
+  resolver → 1 harness pre-resolve + 1 per command = 3 across two commands.
+- **Shared charge-limit math** — already unified (Phase 1.5, workplan-history): both
+  `chargeFromBattery` and the engine call `computeChargeLimit`; their actuation tails
+  are the same `setChargeLimit` → `startCharging` sequence. Nothing to extract.
+
+**What changed:**
+- `decisionConsumer.ts`: the forced `DRY_RUN_UNTIL_ACTUATION` constant is gone —
+  `dryRun: boolean` dep (`daemon --dry-run`; the engine derives mode = `!enabled ||
+  flag`). New `chargeCommands` dep; when `outcome.accepted && targetPercent !== null`
+  the consumer runs **setChargeLimit(target) → startCharging()** (limit-before-start);
+  any throw downgrades the recorded outcome to `accepted: 0, reason_code:
+  'service_error'` with detail `"<original verdict> — actuation failed: <msg>"` so the
+  computed target stays in the row as evidence. The row is written *after* the attempt
+  — `'started'` means commands were issued **and** `confirmChargingState` verified the
+  car is charging.
+- `runDaemon.ts`: `RunDaemonOptions.dryRun?`; consumer receives `dryRun` + the two
+  command wrappers over `tesla` (the per-command proxy resolver rides inside).
+- `index.ts`: `daemon --dry-run` flag → `daemonOptions.dryRun`. REPL untouched — the
+  drift guard's `oneShotOnly = {start, daemon}` exempts daemon flag tables by design.
+- No migration: `service_error` was already in the `reason_code` CHECK.
+- Tests: consumer helper now defaults to the **shipped** `enabled: false` (merge dark)
+  with a `commandCalls` recorder; all 6 pre-existing expectations held unchanged. New
+  `actuation` describe: live pass → `['setChargeLimit:51', 'startCharging']` + `started`
+  row · `--dry-run` → zero calls · disabled → zero calls · live decline → zero calls ·
+  set-limit throws → `service_error`, no start, target in detail · start throws →
+  `service_error` with target evidence.
+- Next: Step 6 — notifiers (`Notifier` interface + log-only/ntfy/Slack, typed events,
+  credential-store secrets, failure isolation) — branch `p1b/step6-notifiers`.
 

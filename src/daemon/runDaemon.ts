@@ -31,6 +31,8 @@ export interface RunDaemonOptions {
   /** VIN — row attribution for EV rows. */
   vehicleId?: string;
   config: DaemonConfig;
+  /** `daemon --dry-run`: evaluate and record decisions, never actuate. */
+  dryRun?: boolean;
   dbPath?: string;
   lockFile?: string;
   getHomeLocation?: () => Promise<HomeLocation | undefined>;
@@ -140,8 +142,8 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
     const vehicleId = options.vehicleId;
     const homeBatteryId = options.homeBatteryId ?? 'unknown';
     // Decision stage of the poller chain: records a decisions row per
-    // vehicle plug-in from the first start (merge dark) — actuation stays
-    // off (forced dry-run inside the consumer) until step 5.
+    // vehicle plug-in from the first start; live actuation only when
+    // autoStart.enabled holds and --dry-run is off.
     const decideOnVehiclePlugIn = createDecisionConsumer({
       db,
       getVehicleLocation: () => tesla.getVehicleLocation(),
@@ -149,6 +151,11 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
       vehicleId,
       homeBatteryId,
       autoStart: options.config.autoStart,
+      dryRun: options.dryRun ?? false,
+      chargeCommands: {
+        setChargeLimit: (percent) => tesla.setChargeLimit(percent),
+        startCharging: () => tesla.startCharging(),
+      },
       log,
     });
     tasks.push(

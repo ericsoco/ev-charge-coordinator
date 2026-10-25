@@ -25,11 +25,13 @@ const CFG: EnergyConfig = {
 let dir: string;
 let db: DatabaseSync;
 let logs: string[];
+let commandCalls: string[];
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-decision-consumer-'));
   db = openStore(path.join(dir, 'data.sqlite'));
   logs = [];
+  commandCalls = [];
   homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1, socPercent: 90 });
 });
 
@@ -45,7 +47,17 @@ function consumer(overrides: Partial<DecisionConsumerDeps> = {}) {
     getHomeLocation: async () => ({ ...HOME }),
     vehicleId: 'VIN',
     homeBatteryId: 'GW',
-    autoStart: { enabled: true, filters: [{ type: 'geofence', radiusM: 100 }] },
+    // Shipped default: merge dark. Live-actuation tests override enabled: true.
+    autoStart: { enabled: false, filters: [{ type: 'geofence', radiusM: 100 }] },
+    dryRun: false,
+    chargeCommands: {
+      setChargeLimit: async (percent) => {
+        commandCalls.push(`setChargeLimit:${percent}`);
+      },
+      startCharging: async () => {
+        commandCalls.push('startCharging');
+      },
+    },
     getEnergyConfig: () => CFG,
     log: (message) => logs.push(message),
     ...overrides,
@@ -130,3 +142,90 @@ describe('decision consumer (per vehicle plug-in)', () => {
     expect(logs.join('\n')).toContain('home location read failed');
   });
 });
+
+describe('actuation (live mode only)', () => {
+  const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
+
+  it('a live accepted decision sets the limit first, then starts charging', async () => {
+    await consumer(LIVE)(CTX);
+    expect(commandCalls).toEqual(['setChargeLimit:51', 'startCharging']);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row).toMatchObject({
+      accepted: 1,
+      dryRun: 0,
+      reasonCode: 'started',
+      limitedBy: 'none',
+    });
+    expect(row.reasonDetail).toContain('51%');
+  });
+
+  it('the dry-run flag records dry_run with zero command calls', async () => {
+    await consumer({ ...LIVE, dryRun: true })(CTX);
+    expect(commandCalls).toEqual([]);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row).toMatchObject({ accepted: 0, dryRun: 1, reasonCode: 'dry_run' });
+  });
+
+  it('disabled mode makes zero command calls (merge dark)', async () => {
+    await consumer()(CTX); // default autoStart.enabled: false
+    expect(commandCalls).toEqual([]);
+    expect(decisionStore.decisionForSession(db, 7)!.dryRun).toBe(1);
+  });
+
+  it('a declined decision (live) makes zero command calls', async () => {
+    await consumer({
+      autoStart: { enabled: true, filters: [{ type: 'geofence', radiusM: 100 }] },
+      getHomeLocation: async () => undefined,
+    })(CTX);
+    expect(commandCalls).toEqual([]);
+    expect(decisionStore.decisionForSession(db, 7)!.reasonCode).toBe('filter_declined');
+  });
+
+  it('setChargeLimit failing records service_error and never starts charging', async () => {
+    const decide = consumer({
+      ...LIVE,
+      chargeCommands: {
+        setChargeLimit: async () => {
+          commandCalls.push('setChargeLimit:51');
+          throw new Error('proxy not reachable');
+        },
+        startCharging: async () => {
+          commandCalls.push('startCharging');
+        },
+      },
+    });
+    await decide(CTX);
+    expect(commandCalls).toEqual(['setChargeLimit:51']);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row).toMatchObject({ accepted: 0, dryRun: 0, reasonCode: 'service_error' });
+    expect(row.reasonDetail).toContain('proxy not reachable');
+    expect(row.reasonDetail).toContain('51%');
+  });
+
+  it('startCharging failing records service_error with the target as evidence', async () => {
+    const decide = consumer({
+      ...LIVE,
+      chargeCommands: {
+        setChargeLimit: async (percent) => {
+          commandCalls.push(`setChargeLimit:${percent}`);
+        },
+        startCharging: async () => {
+          commandCalls.push('startCharging');
+          throw new Error('vehicle accepted but is not charging (state: Disconnected)');
+        },
+      },
+    });
+    await decide(CTX);
+    expect(commandCalls).toEqual(['setChargeLimit:51', 'startCharging']);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row).toMatchObject({
+      accepted: 0,
+      dryRun: 0,
+      reasonCode: 'service_error',
+      limitedBy: 'none',
+    });
+    expect(row.reasonDetail).toContain('not charging');
+    expect(row.reasonDetail).toContain('51%');
+  });
+});
+

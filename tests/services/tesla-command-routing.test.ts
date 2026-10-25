@@ -154,6 +154,23 @@ describe('vehicle command routing', () => {
     ]);
   });
 
+  it('resolves the proxy for every command (the alive-check/respawn runs each time)', async () => {
+    let resolutions = 0;
+    const { service } = await withProxyRoute(undefined, {
+      commandProxy: async () => {
+        resolutions += 1;
+        return { port: 4443, caPem: FAKE_CA_PEM };
+      },
+    });
+
+    await service.setChargeLimit(60);
+    await service.setChargeLimit(65);
+
+    // 1 pre-resolve from the harness building the recording client, then 1
+    // per command — a dead sidecar is re-checked and respawned every time.
+    expect(resolutions).toBe(3);
+  });
+
   it('fails with guidance when the resolver says no proxy is available', async () => {
     const { service, commands } = await withProxyRoute(null);
 
