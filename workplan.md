@@ -51,7 +51,7 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 1 — decision config complete (2026-10-24); next: Step 2 — pure filters.**
+> Status: **Step 2 — pure filters complete (2026-10-25); next: Step 3 — decision engine + store.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -83,7 +83,7 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
    lockstep. *(branch `p1b/step1-decision-config` — complete)*
 2. **Pure filters** — `src/decision/filters.ts`: `(input) => {pass, reason}`; `always` +
    `geofence` (location injected by the caller — this step stays fetch-free); unit matrix.
-   *(branch `p1b/step2-decision-filters`)*
+   *(branch `p1b/step2-decision-filters` — complete)*
 3. **Decision engine + store** — pure engine (interlock order: enabled → plugged →
    not-already-charging → battery-above-buffer → filters → compute limit → outcome);
    `DecisionStore` writer (migration adds the `decisions` row mapper/reason codes;
@@ -1177,4 +1177,44 @@ default), but the file itself stayed untouched — knobs invisible. Confirmed de
   (omitted `mkdirSync` + `mode: 0o600`, faked a stray blank line) — `sed | cat -e`
   gave the byte-accurate text; prefer that when exact-match edits fail twice.
 - Next: unchanged — Step 2, `src/decision/filters.ts` (branch `p1b/step2-decision-filters`).
+
+
+### 2026-10-25 — P1b step 2 complete: pure decision filters
+
+Branch `p1b/step2-decision-filters` (off landed main `76dca03`), gate green
+(`npm run check` exit 0; 602 passed / 2 skipped; `tests/decision/filters.test.ts` 18/18).
+
+- New package `src/decision/filters.ts` — pure module per design §3.3/§4: no I/O, no
+  store, no services; the engine (step 3) / poller wiring (step 4) inject everything.
+  - `FilterInput` = the design's `decisionContext`: event + plug state, home secret
+    (`HomeLocation | null`), decision-time fix (`VehicleLocation | null`, Option B),
+    battery context the step-3 interlocks read off the same object. **`radiusM` lives on
+    the filter config only** — an input copy would be a second source of truth.
+  - `runFilters(filters, input) → {pass, results}`: AND semantics, **no short-circuit**
+    (every result lands in `filter_results_json` even after a failure); empty chain
+    passes (design: "empty filters array = all plug-in events"); exhaustive switch whose
+    default fails `config_error` with `type: 'unknown'` — a type slipping past config
+    validation loud-fails, never passes.
+  - `always` → pass always. `geofence` → deny-by-default with ordered checks:
+    `home_unset` (actionable `set-home-location` detail) → `config_error` (radius
+    missing/≤0/NaN — defense behind step-1 validation) → `location_unavailable`
+    (fetch failed/skipped; `vehicle_location` scope + awake-car detail) → haversine
+    `distanceM` (R = 6 371 000 m, rounded to whole meters) vs radius: `≤ radius` passes
+    (boundary equality passes), else `not_at_home` + distance in reason AND detail.
+  - `FilterResult.reason`: `'always' | 'geofence' | 'not_at_home' | 'home_unset' |
+    'location_unavailable' | 'config_error'` — this vocabulary serializes into
+    `filter_results_json` in step 3.
+- Tests (new `tests/decision/`, covered by the existing `tests/**/*.test.ts` glob):
+  distance identity/1°-lat ≈ 111.19 km/symmetry · always with all-null inputs ·
+  geofence matrix (pass+distance, rounded-radius boundary, outside+distance detail,
+  home_unset precedence over location failure, location_unavailable, radius 0/-5/
+  undefined/NaN) · chain: empty passes, AND records every result after a failure,
+  unknown type loud-fails with the offending name in the detail.
+- Fixtures learned en route: vitest `toMatchObject({key: undefined})` requires the key
+  to EXIST — use a separate `toBeUndefined()` for omitted keys.
+- Interlock placement re-confirmed against design §3.3: `bufferPercent` is *not* a
+  filter ("unconditional safety interlocks, independent of filters") — it arrives in the
+  step-3 engine (`soc > bufferPercent`, from `energy.ts`'s `max(0, soc − buffer)`).
+- Next: Step 3 — decision engine + `DecisionStore` + migration (branch
+  `p1b/step3-decision-engine`).
 
