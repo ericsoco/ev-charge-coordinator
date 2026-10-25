@@ -1,5 +1,5 @@
 /**
- * Decision audit (decisions) — one row per evaluated plug-in decision.
+ * Decision audit (decisions) — one row per evaluated vehicle plug-in decision.
  *
  * The EvPoller chain (daemon) is the only writer: the engine produces the
  * outcome, this module records it, CLI readers answer "why didn't it charge?"
