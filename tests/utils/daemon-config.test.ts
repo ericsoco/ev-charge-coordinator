@@ -101,6 +101,120 @@ describe('invalid values refuse loudly (config null, one problem each)', () => {
   });
 });
 
+describe('autoStart block (P1b decision config)', () => {
+  it('defaults to dark: disabled with the trivial always filter', () => {
+    const resolved = resolveDaemonConfig(fixture());
+    expect(resolved.problems).toEqual([]);
+    expect(resolved.config?.autoStart).toEqual({ enabled: false, filters: [{ type: 'always' }] });
+  });
+
+  it('the template carries the autoStart default (dark on first start)', () => {
+    expect(JSON.parse(DAEMON_CONFIG_TEMPLATE).autoStart).toEqual({
+      enabled: false,
+      filters: [{ type: 'always' }],
+    });
+  });
+
+  it('partial overrides merge with defaults; unknown block keys are ignored', () => {
+    const resolved = resolveDaemonConfig(
+      fixture('{"autoStart": {"enabled": true, "surprise": 1}}')
+    );
+    expect(resolved.problems).toEqual([]);
+    expect(resolved.config?.autoStart).toEqual({ enabled: true, filters: [{ type: 'always' }] });
+  });
+
+  it('a full block replaces the chain wholesale', () => {
+    const resolved = resolveDaemonConfig(
+      fixture('{"autoStart": {"enabled": false, "filters": [{"type": "geofence", "radiusM": 80}]}}')
+    );
+    expect(resolved.problems).toEqual([]);
+    expect(resolved.config?.autoStart).toEqual({
+      enabled: false,
+      filters: [{ type: 'geofence', radiusM: 80 }],
+    });
+  });
+
+  it('an empty filter chain is valid (interlocks still apply)', () => {
+    const resolved = resolveDaemonConfig(fixture('{"autoStart": {"filters": []}}'));
+    expect(resolved.problems).toEqual([]);
+    expect(resolved.config?.autoStart.filters).toEqual([]);
+  });
+
+  it('resolved config never shares references with the defaults', () => {
+    const resolved = resolveDaemonConfig(fixture());
+    resolved.config!.autoStart.filters.push({ type: 'geofence', radiusM: 10 });
+    expect(DEFAULT_DAEMON_CONFIG.autoStart.filters).toEqual([{ type: 'always' }]);
+  });
+
+  const invalids: [string, string, RegExp][] = [
+    ['non-object autoStart', '{"autoStart": true}', /autoStart = true \(must be an object\)/],
+    ['array autoStart', '{"autoStart": []}', /autoStart = \[\] \(must be an object\)/],
+    [
+      'non-boolean enabled',
+      '{"autoStart": {"enabled": "yes"}}',
+      /autoStart\.enabled = "yes" \(must be a boolean\)/,
+    ],
+    [
+      'non-array filters',
+      '{"autoStart": {"filters": "always"}}',
+      /autoStart\.filters = "always" \(must be an array\)/,
+    ],
+    [
+      'non-object filter entry',
+      '{"autoStart": {"filters": [7]}}',
+      /autoStart\.filters\[0\] = 7 \(must be an object with a type\)/,
+    ],
+    [
+      'missing filter type',
+      '{"autoStart": {"filters": [{}]}}',
+      /autoStart\.filters\[0\]\.type = undefined \(unknown filter type/,
+    ],
+    [
+      'unknown filter type',
+      '{"autoStart": {"filters": [{"type": "geofencex"}]}}',
+      /unknown filter type; expected "always" or "geofence"/,
+    ],
+    [
+      'geofence without radius',
+      '{"autoStart": {"filters": [{"type": "geofence"}]}}',
+      /autoStart\.filters\[0\] \(geofence requires radiusM — meters\)/,
+    ],
+    [
+      'non-numeric radius',
+      '{"autoStart": {"filters": [{"type": "geofence", "radiusM": "far"}]}}',
+      /radiusM = "far" \(must be a positive number of meters\)/,
+    ],
+    [
+      'zero radius',
+      '{"autoStart": {"filters": [{"type": "geofence", "radiusM": 0}]}}',
+      /radiusM = 0 \(must be a positive number of meters\)/,
+    ],
+    [
+      'negative radius',
+      '{"autoStart": {"filters": [{"type": "geofence", "radiusM": -10}]}}',
+      /radiusM = -10 \(must be a positive number of meters\)/,
+    ],
+  ];
+  for (const [label, content, pattern] of invalids) {
+    it(`rejects ${label}`, () => {
+      const file = fixture(content);
+      const resolved = resolveDaemonConfig(file);
+      expect(resolved.config).toBeNull();
+      expect(resolved.problems).toHaveLength(1);
+      expect(resolved.problems[0]).toMatch(pattern);
+      expect(resolved.problems[0]).toContain(file);
+    });
+  }
+
+  it('reports autoStart problems alongside numeric ones', () => {
+    const resolved = resolveDaemonConfig(
+      fixture('{"batterySampleSec": -1, "autoStart": {"enabled": "dark"}}')
+    );
+    expect(resolved.config).toBeNull();
+    expect(resolved.problems).toHaveLength(2);
+  });
+});
+
 describe('ensureDaemonConfigFile (daemon start only)', () => {
   function dir(): string {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-daemon-ensure-'));
