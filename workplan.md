@@ -51,7 +51,7 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 2 — pure filters complete (2026-10-25); next: Step 3 — decision engine + store.**
+> Status: **Step 3 — decision engine + store complete (2026-10-25); next: Step 4 — poller wiring.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -94,7 +94,7 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
    not-already-charging → battery-above-buffer → filters → compute limit → outcome);
    `DecisionStore` writer (migration adds the `decisions` row mapper/reason codes;
    `filter_results_json`, `dry_run`, session-id idempotency); the intentionally-unpinned
-   `decisions` schema-pin arrives. *(branch `p1b/step3-decision-engine`)*
+   `decisions` schema-pin arrives. *(branch `p1b/step3-decision-engine` — complete)*
 4. **Wiring** — decision consumer hooked at `plug_in` in `EvPoller` (narrow injectable
    seam): decision-time location fetch (Option B), engine run, decision row; tests with
    fakes (plug-in → row; location failure → decline reason).
@@ -1244,4 +1244,50 @@ one appears).
   `DecisionStore` stays in `store/` (persistence follows the `*Store.ts` pattern
   regardless of where policy lives).
 - Next: unchanged — Step 3 (branch `p1b/step3-decision-engine`).
+
+
+### 2026-10-25 — P1b step 3 complete: decision engine + DecisionStore + migration 002
+
+Branch `p1b/step3-decision-engine` (off landed main `722c14f`), two commits, gate green
+(exit 0; **623 passed / 2 skipped**; engine 15/15, decision-store 6/6, schema-pin 4/4).
+
+**3a — store (`4dcfd9a`):**
+- Migration `002-decision-reason-codes.ts`: SQLite cannot ALTER a CHECK → rebuilds
+  `decisions` (create v2 → copy → drop → rename → recreate index) with **+`filter_declined`
+  +`config_error`** in `reason_code`; registered in the explicit `MIGRATIONS` list
+  (user_version → 2).
+- `types.ts`: `DecisionReasonCode` (mirrors the CHECK, `EventKind` pattern), `DecisionRow`
+  (wire-level integers) / `NewDecision` (intent-level booleans — insert maps to 1/0; no
+  precedent existed, so this asymmetry is now the documented pattern for booleans).
+- `DecisionStore.ts`: aliased `COLUMNS`, `insertDecision`, `decisionForSession` (dual role:
+  read-pin + step-4 idempotency; newest row wins).
+- Schema-pin gap closed exactly as its markers planned: fixture + `FIXTURES` entry,
+  "every table has a pinned row interface" (`[]`), read-pin entry; the old comment/test
+  deleting themselves.
+- Collateral gate fixes (honest record): `system-commands` schemaVersion pin 1 → 2 (the
+  deliberate-literal pattern doing its job); **tesla-probe now self-seeds its `resolveVin`
+  credential dependency** — it had been passing on shared-config-dir state some other
+  suite happened to leave behind (order-dependent; a latent flake my extra test file
+  exposed: repro'd on clean main in isolation, then fixed properly with a self-seed).
+
+**3b — engine (`src/daemon/engine.ts`, 15 tests):**
+- `evaluateDecision(input) → DecisionOutcome` — pure; the poller chain assembles inputs
+  and (step 4) persists via `DecisionStore`. Interlock order: `duplicate_session`
+  (short-circuit, no filters evaluated) → `not_plugged_in` → `already_charging` → safety
+  inputs (`config_error` for missing energy config or battery SoC) → `below_buffer`
+  (equality = below, matching `energy.ts`'s 0-available math) → `runFilters` (all results
+  recorded; first failure → `filter_declined` + its detail) → `computeChargeLimit` in
+  try/catch (`compute_error`) → outcome.
+- **Modes, not stops:** `dryRun = !enabled || flag`; dark/dry runs evaluate identical
+  verdicts and record them (`dry_run` + would-be limit in detail). Merge-dark pinned:
+  disabled + geofence failure records `filter_declined` with `dryRun: 1`; a live decline
+  keeps `dryRun: 0`.
+- Input narrowed vs the presented plan: `nowMs`/`sessionId` dropped — the pure engine
+  makes no time lookups and never touches the store; the wiring stamps `ts_ms` and the
+  row's `session_id` (it already owns both).
+- Step-4 note: wiring passes `dryRun: true` until the step-5 actuator exists, so
+  `started` is engine-tested but unreachable in production until then (still dark).
+- Next: Step 4 — decision consumer wired at `plug_in` in `EvPoller` (decision-time
+  location fetch per Option B, engine call, decision row) — branch
+  `p1b/step4-decision-wiring`.
 
