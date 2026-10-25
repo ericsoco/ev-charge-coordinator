@@ -1149,3 +1149,32 @@ limit-before-start, branch per step); P1a marked complete.
   (extra keys dropped); a non-`geofence` entry never requires `radiusM`.
 - Next: Step 2 — `src/decision/filters.ts` (branch `p1b/step2-decision-filters`).
 
+
+### 2026-10-24 — P1b step 1 addendum: config reconcile on daemon start
+
+Same branch (`p1b/step1-decision-config`), gate green (exit 0; 584 passed / 2 skipped).
+User question: does an existing `daemon-config.json` gain the new `autoStart` block on
+next start? Behavior was already correct in memory (absent keys resolve to the dark
+default), but the file itself stayed untouched — knobs invisible. Confirmed decision:
+**additive reconcile on daemon start** (replaces the "never overwrite" rule with
+"operator *values* are the truth").
+
+- `ensureDaemonConfigFile` returns `'created' | 'migrated' | 'updated' | 'exists'`
+  (precedence migrated → updated → created → exists) and, after the existing
+  create/migrate handling, reconciles: `deepMergeDefaults` merges defaults UNDER the
+  file content (file values win; arrays like `filters` replaced wholesale, never
+  element-merged; unknown keys preserved) and rewrites only when the bytes would change
+  (idempotent; temp + rename, private mode). An **invalid** file stays byte-untouched —
+  the operator must see the bad edit to fix it. Still daemon-start-only; `status` never
+  creates or rewrites (existing pin).
+- `daemon` command prints `daemon-config.json updated: added missing keys with defaults
+  (operator edits preserved)` for the new `'updated'` result.
+- Tests re-pinned deliberately: "never overwrites" → "fills missing keys, preserving
+  operator values" (+ `autoStart` materialized); byte-stable second run with no `.tmp`
+  litter; unknown keys survive; geofence chain survives wholesale; invalid untouched;
+  legacy migration now reconciles (`migrated` status precedence pinned).
+- Tooling note: `read_files` rendered the `ensureDaemonConfigFile` body inaccurately
+  (omitted `mkdirSync` + `mode: 0o600`, faked a stray blank line) — `sed | cat -e`
+  gave the byte-accurate text; prefer that when exact-match edits fail twice.
+- Next: unchanged — Step 2, `src/decision/filters.ts` (branch `p1b/step2-decision-filters`).
+

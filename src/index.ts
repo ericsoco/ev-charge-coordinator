@@ -1046,6 +1046,13 @@ program
       console.log(
         paint.info(`migrated legacy daemon.json → daemon-config.json (${daemonConfigPath()})`)
       );
+    } else if (ensured === 'updated') {
+      console.log(
+        paint.info(
+          `daemon-config.json updated: added missing keys with defaults ` +
+            `(operator edits preserved) (${daemonConfigPath()})`
+        )
+      );
     }
     const resolved = resolveDaemonConfig();
     if (!resolved.config) {

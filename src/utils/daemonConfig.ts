@@ -3,16 +3,18 @@
  *
  * The file is the single source of truth for effective config: the daemon
  * creates it with the documented defaults on first start (migrating a legacy
- * `daemon.json` if present), and readers that run before that first start see
- * the same defaults in code. No CLI setters (P1a) — hand-edit afterwards; an
- * *invalid* value is reported as a problem and blocks the daemon — never
- * clamped or guessed at. Secrets (home location) never live here.
+ * `daemon.json` if present) and reconciles missing keys into an existing file
+ * on start (defaults merged under operator edits — values are never changed);
+ * readers that run before that first start see the same defaults in code. No
+ * CLI setters — hand-edit afterwards; an *invalid* value is reported as a
+ * problem and blocks the daemon — never clamped or guessed at. Secrets (home
+ * location) never live here.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { getConfigDir } from './credentials.js';
 
-/** A filter the decision chain runs at every plug-in. */
+/** A filter the decision chain runs at every vehicle plug-in event. */
 export type DecisionFilterType = 'always' | 'geofence';
 
 export interface DecisionFilterConfig {
@@ -74,26 +76,86 @@ export function daemonConfigPath(): string {
   return path.join(getConfigDir(), 'daemon-config.json');
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
- * Ensure the config file exists — DAEMON START ONLY (`status` must never call
- * this: it reads only, starts nothing). Creates it with the documented
- * defaults, or migrates a legacy `daemon.json`, so after one daemon run the
- * file is the single source of truth for effective config. An existing file is
- * never overwritten — the operator's edits are the truth.
+ * Defaults merged UNDER the operator's file content: file values win (arrays
+ * wholesale, never element-merged), missing keys fill in, unknown keys stay.
+ */
+function deepMergeDefaults(
+  fallback: Record<string, unknown>,
+  fileValue: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...fallback };
+  for (const [key, value] of Object.entries(fileValue)) {
+    const base = merged[key];
+    merged[key] =
+      isPlainObject(base) && isPlainObject(value) ? deepMergeDefaults(base, value) : value;
+  }
+  return merged;
+}
+
+/**
+ * Add missing documented keys so the file stays self-documenting — only when
+ * it validates and only when the bytes would change; an invalid file is left
+ * byte-untouched so the operator can see the edit to fix. Atomic write
+ * (temp + rename, private mode). Returns true when the file was rewritten.
+ */
+function reconcileDaemonConfigFile(targetPath: string): boolean {
+  if (resolveDaemonConfig(targetPath).config === null) return false;
+  let raw: string;
+  try {
+    raw = fs.readFileSync(targetPath, 'utf8');
+  } catch {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false; // resolveDaemonConfig just accepted it; defensive only
+  }
+  if (!isPlainObject(parsed)) return false;
+  const merged = JSON.stringify(deepMergeDefaults({ ...DEFAULT_DAEMON_CONFIG }, parsed), null, 2) + '\n';
+  if (merged === raw) return false;
+  const temp = `${targetPath}.tmp`;
+  fs.writeFileSync(temp, merged, { mode: 0o600 });
+  fs.renameSync(temp, targetPath);
+  return true;
+}
+
+/**
+ * Ensure the config file exists and knows every documented knob — DAEMON START
+ * ONLY (`status` must never call this: it reads only, starts nothing). Creates
+ * it with the documented defaults, migrates a legacy `daemon.json`, reconciles
+ * missing keys into an existing file (defaults merged under the operator's
+ * edits — values never changed; an invalid file stays byte-untouched). When
+ * several apply the status precedence is migrated → updated → created → exists.
  */
 export function ensureDaemonConfigFile(
   targetPath: string = daemonConfigPath()
-): 'created' | 'migrated' | 'exists' {
-  if (fs.existsSync(targetPath)) return 'exists';
-  const dir = path.dirname(targetPath);
-  const legacy = path.join(dir, 'daemon.json');
-  if (fs.existsSync(legacy)) {
-    fs.renameSync(legacy, targetPath);
-    return 'migrated';
+): 'created' | 'migrated' | 'updated' | 'exists' {
+  let status: 'created' | 'migrated' | 'exists';
+  if (fs.existsSync(targetPath)) {
+    status = 'exists';
+  } else {
+    const dir = path.dirname(targetPath);
+    const legacy = path.join(dir, 'daemon.json');
+    if (fs.existsSync(legacy)) {
+      fs.renameSync(legacy, targetPath);
+      status = 'migrated';
+    } else {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(targetPath, DAEMON_CONFIG_TEMPLATE, { mode: 0o600 });
+      status = 'created';
+    }
   }
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(targetPath, DAEMON_CONFIG_TEMPLATE, { mode: 0o600 });
-  return 'created';
+  if (status === 'created') return status; // template == defaults: nothing to reconcile
+  const reconciled = reconcileDaemonConfigFile(targetPath);
+  if (!reconciled || status === 'migrated') return status;
+  return 'updated';
 }
 
 function checkRange(min: number, max: number): (value: number) => string | null {

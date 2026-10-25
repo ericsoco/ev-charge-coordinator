@@ -1,6 +1,6 @@
 /**
  * daemon-config.json resolution: documented defaults + fail-loud validation,
- * plus first-start creation/migration (ensureDaemonConfigFile).
+ * plus creation/migration/reconcile (ensureDaemonConfigFile).
  * Explicit tmp-file paths (the database.ts precedent) — no env juggling.
  */
 import { afterEach, describe, expect, it } from 'vitest';
@@ -232,36 +232,85 @@ describe('ensureDaemonConfigFile (daemon start only)', () => {
     expect(resolved.config).toEqual(DEFAULT_DAEMON_CONFIG);
   });
 
-  it('never overwrites an existing file (operator edits are the truth)', () => {
+  it('fills missing keys into an existing file, preserving operator values', () => {
     const target = path.join(dir(), 'daemon-config.json');
     fs.writeFileSync(target, '{"evSampleIdleSec": 60}');
 
-    expect(ensureDaemonConfigFile(target)).toBe('exists');
-    expect(fs.readFileSync(target, 'utf8')).toBe('{"evSampleIdleSec": 60}');
+    expect(ensureDaemonConfigFile(target)).toBe('updated');
+    const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+    expect(parsed.evSampleIdleSec).toBe(60);
+    expect(parsed.batterySampleSec).toBe(DEFAULT_DAEMON_CONFIG.batterySampleSec);
+    expect(parsed.autoStart).toEqual({ enabled: false, filters: [{ type: 'always' }] });
+    expect(resolveDaemonConfig(target)).toEqual({
+      config: { ...DEFAULT_DAEMON_CONFIG, evSampleIdleSec: 60 },
+      problems: [],
+    });
   });
 
-  it('migrates a legacy daemon.json, preserving its hand-edits', () => {
+  it('reconciled output is byte-stable and leaves no temp file behind', () => {
+    const target = path.join(dir(), 'daemon-config.json');
+    fs.writeFileSync(target, '{"evSampleIdleSec": 60}');
+    expect(ensureDaemonConfigFile(target)).toBe('updated');
+    const once = fs.readFileSync(target, 'utf8');
+
+    expect(ensureDaemonConfigFile(target)).toBe('exists');
+    expect(fs.readFileSync(target, 'utf8')).toBe(once);
+    expect(fs.existsSync(`${target}.tmp`)).toBe(false);
+  });
+
+  it('preserves unknown keys while reconciling', () => {
+    const target = path.join(dir(), 'daemon-config.json');
+    fs.writeFileSync(target, '{"surpriseKey": true}');
+
+    expect(ensureDaemonConfigFile(target)).toBe('updated');
+    const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+    expect(parsed.surpriseKey).toBe(true);
+    expect(resolveDaemonConfig(target).problems).toEqual([]);
+  });
+
+  it('reconcile never element-merges arrays (operator geofence chain survives)', () => {
+    const target = path.join(dir(), 'daemon-config.json');
+    const chain = [{ type: 'geofence', radiusM: 80 }];
+    fs.writeFileSync(target, JSON.stringify({ autoStart: { enabled: true, filters: chain } }));
+
+    expect(ensureDaemonConfigFile(target)).toBe('updated');
+    expect(JSON.parse(fs.readFileSync(target, 'utf8')).autoStart).toEqual({
+      enabled: true,
+      filters: chain,
+    });
+  });
+
+  it('an invalid file stays byte-untouched', () => {
+    const target = path.join(dir(), 'daemon-config.json');
+    fs.writeFileSync(target, '{"batterySampleSec": 5}');
+
+    expect(ensureDaemonConfigFile(target)).toBe('exists');
+    expect(fs.readFileSync(target, 'utf8')).toBe('{"batterySampleSec": 5}');
+  });
+
+  it('migrates a legacy daemon.json, preserving its hand-edits (then reconciles)', () => {
     const d = dir();
     fs.writeFileSync(path.join(d, 'daemon.json'), '{"evSampleIdleSec": 45}');
     const target = path.join(d, 'daemon-config.json');
 
     expect(ensureDaemonConfigFile(target)).toBe('migrated');
     expect(fs.existsSync(path.join(d, 'daemon.json'))).toBe(false);
-    expect(fs.readFileSync(target, 'utf8')).toBe('{"evSampleIdleSec": 45}');
+    expect(JSON.parse(fs.readFileSync(target, 'utf8')).evSampleIdleSec).toBe(45);
     expect(resolveDaemonConfig(target).config).toEqual({
       ...DEFAULT_DAEMON_CONFIG,
       evSampleIdleSec: 45,
     });
   });
 
-  it('prefers daemon-config.json when both files are present', () => {
+  it('prefers daemon-config.json when both files are present (reconciles it)', () => {
     const d = dir();
     fs.writeFileSync(path.join(d, 'daemon.json'), '{"evSampleIdleSec": 45}');
     const target = path.join(d, 'daemon-config.json');
     fs.writeFileSync(target, '{"evSampleIdleSec": 60}');
 
-    expect(ensureDaemonConfigFile(target)).toBe('exists');
-    expect(fs.readFileSync(target, 'utf8')).toBe('{"evSampleIdleSec": 60}');
+    expect(ensureDaemonConfigFile(target)).toBe('updated');
+    expect(fs.existsSync(path.join(d, 'daemon.json'))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(target, 'utf8')).evSampleIdleSec).toBe(60);
   });
 });
 
@@ -276,6 +325,7 @@ describe('creation wiring', () => {
     expect(indexSource).toContain('ensureDaemonConfigFile()');
     expect(indexSource).toContain('daemon-config.json not found');
     expect(indexSource).toContain('migrated legacy daemon.json');
+    expect(indexSource).toContain('daemon-config.json updated');
     expect(systemSource).not.toContain('ensureDaemonConfigFile');
   });
 });
