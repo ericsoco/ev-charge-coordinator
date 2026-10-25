@@ -20,6 +20,7 @@ import { acquireLock, lockPath, type LockHandle } from './lockfile.js';
 import { createScheduler, type ScheduledTask } from './scheduler.js';
 import { createBatterySampler } from './BatterySampler.js';
 import { createEvPoller } from './EvPoller.js';
+import { createDecisionConsumer } from './decisionConsumer.js';
 import { createWeatherSampler, type FetchForecast } from './WeatherSampler.js';
 import { clearRuntimeState, readRuntimeState, writeRuntimeState } from '../services/ProcessManager.js';
 
@@ -136,17 +137,32 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
   }
 
   if (tesla && options.vehicleId) {
+    const vehicleId = options.vehicleId;
+    const homeBatteryId = options.homeBatteryId ?? 'unknown';
+    // Decision stage of the poller chain: records a decisions row per
+    // vehicle plug-in from the first start (merge dark) — actuation stays
+    // off (forced dry-run inside the consumer) until step 5.
+    const decideOnVehiclePlugIn = createDecisionConsumer({
+      db,
+      getVehicleLocation: () => tesla.getVehicleLocation(),
+      getHomeLocation: options.getHomeLocation ?? (() => credentialStore.getHomeLocation()),
+      vehicleId,
+      homeBatteryId,
+      autoStart: options.config.autoStart,
+      log,
+    });
     tasks.push(
       createEvPoller({
         db,
         ev: tesla,
-        vehicleId: options.vehicleId,
-        homeBatteryId: options.homeBatteryId ?? 'unknown',
+        vehicleId,
+        homeBatteryId,
         statusPollSec: options.config.evStatusPollSec,
         samplePluggedSec: options.config.evSamplePluggedSec,
         sampleIdleSec: options.config.evSampleIdleSec,
         nowMs,
         log,
+        onVehiclePlugIn: decideOnVehiclePlugIn,
       })
     );
   } else {

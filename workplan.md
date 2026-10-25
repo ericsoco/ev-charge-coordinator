@@ -51,7 +51,7 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 3 — decision engine + store complete (2026-10-25); next: Step 4 — poller wiring.**
+> Status: **Step 4 — poller wiring complete (2026-10-25); next: Step 5 — actuation.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -98,7 +98,7 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
 4. **Wiring** — decision consumer hooked at `plug_in` in `EvPoller` (narrow injectable
    seam): decision-time location fetch (Option B), engine run, decision row; tests with
    fakes (plug-in → row; location failure → decline reason).
-   *(branch `p1b/step4-decision-wiring`)*
+   *(branch `p1b/step4-decision-wiring` — complete)*
 5. **Actuation** — shared charge-limit math extracted from `charge-from-battery`;
    `tesla-http-proxy` alive-check/respawn before commands (Decisions pointer above);
    `setChargeLimit` → `startCharging` gated on `enabled`; `daemon --dry-run`; dry/disabled
@@ -1290,4 +1290,44 @@ Branch `p1b/step3-decision-engine` (off landed main `722c14f`), two commits, gat
 - Next: Step 4 — decision consumer wired at `plug_in` in `EvPoller` (decision-time
   location fetch per Option B, engine call, decision row) — branch
   `p1b/step4-decision-wiring`.
+
+
+### 2026-10-25 — P1b step 4 complete: decision consumer wired at the vehicle plug-in
+
+Branch `p1b/step4-decision-wiring` (off landed main `befca99`), gate green (exit 0; **632
+passed / 2 skipped**; consumer 6/6, wiring 3/3). First run — no flakes.
+
+- **Terminology directive (user, 2026-10-25):** "plug-in" in this codebase means a
+  **vehicle plug-in** (the charge cable going on the car) — from here on code names use
+  `vehiclePlugIn` style (`onVehiclePlugIn`, `VehiclePlugInContext`) and comments say
+  "vehicle plug-in event", disambiguated from software-plugin usage. The stored
+  `plug_in` event kind stays (schema vocabulary).
+- `src/daemon/decisionConsumer.ts`: the chain's decision stage — per vehicle plug-in:
+  idempotency lookup (`decisionForSession`), **Option-B decision-time location fetch**
+  (failure → null + log → geofence declines), home secret (weather's default
+  `credentialStore` pattern), latest home-battery SoC, injectable energy config
+  (default `resolveEnergyConfig().config`), `evaluateDecision` → `insertDecision` with
+  `filterResultsJson` + `limitedBy`, one `[decision]` log line. **Never throws**
+  (outer try/catch log-only) and **`DRY_RUN_UNTIL_ACTUATION = true`** (step 5 rewires):
+  rows record from the first start, nothing actuates — merge dark holds even if the flag
+  is flipped early.
+- `src/daemon/EvPoller.ts`: narrow seam — `VehiclePlugInContext` + optional
+  `onVehiclePlugIn` dep (absent = collect-only, so P1a tests/behavior untouched); the
+  previously discarded `openSession` id is captured and handed over; the await is
+  wrapped so a failing decision can never stop sampling (`[ev-poll] decision consumer
+  failed: …`).
+- `src/daemon/runDaemon.ts`: consumer built in `prepare()` from existing options
+  (`config.autoStart`, `getVehicleLocation`, the `getHomeLocation` seam weather already
+  used) and passed into `createEvPoller` — attached unconditionally (merge dark records
+  decisions while `enabled: false`). `index.ts` untouched: `daemonOptions.config`
+  already carried everything.
+- Tests: `decision-consumer.test.ts` (dark dry-run row + geofence audit JSON; location
+  failure → `location_unavailable` decline + log; home unset → `home_unset`; repeat →
+  `duplicate_session` with `[]`; battery under buffer → `below_buffer`; double-failure
+  read → still resolves, row lands). `decision-wiring.test.ts` (fires exactly once per
+  vehicle plug-in with the fresh session id; rejecting consumer leaves samples +
+  sessions intact; omitted dep = collect-only).
+- Next: Step 5 — actuation: shared charge-limit math extraction, `tesla-http-proxy`
+  alive-check/respawn before commands, `setChargeLimit` → `startCharging` behind
+  `autoStart.enabled`, `daemon --dry-run` flag; branch `p1b/step5-actuation`.
 
