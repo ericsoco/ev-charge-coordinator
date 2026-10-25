@@ -16,9 +16,11 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SCRIPTS = path.join(REPO_ROOT, 'scripts');
 const TEMPLATE = path.join(SCRIPTS, 'evcc-daemon.plist');
+const LAUNCHER_TEMPLATE = path.join(SCRIPTS, 'evcc-daemon-launcher.sh');
 const INSTALL = path.join(SCRIPTS, 'install-daemon.sh');
 const UNINSTALL = path.join(SCRIPTS, 'uninstall-daemon.sh');
 const LABEL = 'com.transmote.ev-charge-coordinator.daemon';
+const LAUNCHER_NAME = 'EV Charge Coordinator';
 
 function bash(script: string, args: string[], home: string) {
   return spawnSync('bash', [script, ...args], {
@@ -38,15 +40,16 @@ function withTempHome<T>(fn: (home: string) => T): T {
 }
 
 describe('evcc-daemon.plist template', () => {
-  it('uses the com.transmote label first and targets the daemon entry point', () => {
+  it('uses the com.transmote label first and launches via the launcher shim', () => {
     const tpl = fs.readFileSync(TEMPLATE, 'utf8');
     expect(tpl).toContain(`<string>${LABEL}</string>`);
     const labelIdx = tpl.indexOf('<key>Label</key>');
     const firstStringIdx = tpl.indexOf('<string>');
     expect(labelIdx).toBeGreaterThan(-1);
     expect(labelIdx).toBeLessThan(firstStringIdx); // Label precedes every value
+    // argv[0] is the launcher so macOS names the Login Item after it.
     expect(tpl).toMatch(
-      /<string>__NODE_BIN__<\/string>\s*<string>__REPO_DIR__\/dist\/index\.js<\/string>\s*<string>daemon<\/string>/
+      /<key>ProgramArguments<\/key>\s*<array>\s*<string>__LAUNCHER__<\/string>\s*<\/array>/
     );
   });
 
@@ -56,15 +59,27 @@ describe('evcc-daemon.plist template', () => {
     expect(tpl).toMatch(/<key>KeepAlive<\/key><true\/>/);
     expect(tpl).toContain('<string>__CONFIG_DIR__/logs/daemon.log</string>');
     expect(tpl).toContain('<string>__CONFIG_DIR__/logs/daemon.err.log</string>');
-    expect(tpl).toContain('__NODE_BIN_DIR__'); // PATH must include the pinned node's dir
+    expect(tpl).toContain('/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin');
   });
 
-  it('has exactly the four placeholders the installer substitutes', () => {
+  it('has exactly the three placeholders the installer substitutes', () => {
     const tpl = fs.readFileSync(TEMPLATE, 'utf8');
     const found = tpl.match(/__[A-Z_]+__/g) ?? [];
     expect(new Set(found)).toEqual(
-      new Set(['__NODE_BIN__', '__NODE_BIN_DIR__', '__REPO_DIR__', '__CONFIG_DIR__'])
+      new Set(['__LAUNCHER__', '__REPO_DIR__', '__CONFIG_DIR__'])
     );
+  });
+});
+
+describe('evcc-daemon-launcher.sh template', () => {
+  it('resolves node at launch (nvm or PATH) and execs the daemon entry point', () => {
+    const tpl = fs.readFileSync(LAUNCHER_TEMPLATE, 'utf8');
+    expect(tpl).toContain('__REPO_DIR__');
+    expect(tpl).toContain('NVM_DIR');
+    expect(tpl).toContain('command -v node');
+    expect(tpl).toMatch(/exec "\$NODE_BIN" "\$REPO_DIR\/dist\/index\.js" daemon/);
+    const found = tpl.match(/__[A-Z_]+__/g) ?? [];
+    expect(new Set(found)).toEqual(new Set(['__REPO_DIR__'])); // repo dir is the only substitution
   });
 });
 
@@ -75,8 +90,8 @@ describe('install-daemon.sh --dry-run', () => {
       expect(res.status, res.stderr).toBe(0);
       const out = res.stdout;
       expect(out).toContain(`<string>${LABEL}</string>`);
-      expect(out).toContain(path.join(REPO_ROOT, 'dist/index.js'));
-      expect(out).toMatch(/<string>[^<]*[/\\]node<\/string>/); // resolved via command -v node
+      expect(out).toContain(`REPO_DIR="${REPO_ROOT}"`); // launcher's rendered repo root
+      expect(out).toContain(path.join(home, '.ev-charge-coordinator', LAUNCHER_NAME));
       expect(out).not.toMatch(/__[A-Z_]+__/);
       expect(out).toContain('[dry-run]');
       expect(out).toContain(path.join(home, 'Library/LaunchAgents', `${LABEL}.plist`));
@@ -106,14 +121,15 @@ describe('uninstall-daemon.sh --dry-run', () => {
       expect(res.stdout).toContain('bootout');
       expect(res.stdout).toContain(LABEL);
       expect(res.stdout).toContain(`rm -f ${path.join(home, 'Library/LaunchAgents', `${LABEL}.plist`)}`);
+      expect(res.stdout).toContain(`rm -f "${path.join(home, '.ev-charge-coordinator', LAUNCHER_NAME)}"`);
       expect(fs.readdirSync(home)).toEqual([]);
     });
   });
 });
 
 describe('script syntax', () => {
-  it('both scripts parse under bash -n', () => {
-    for (const script of [INSTALL, UNINSTALL]) {
+  it('all scripts parse under bash -n', () => {
+    for (const script of [INSTALL, UNINSTALL, LAUNCHER_TEMPLATE]) {
       const res = spawnSync('bash', ['-n', script], { encoding: 'utf8' });
       expect(res.status, res.stderr).toBe(0);
     }

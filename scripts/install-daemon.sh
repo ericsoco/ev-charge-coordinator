@@ -29,13 +29,17 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEMPLATE="$SCRIPT_DIR/evcc-daemon.plist"
-if [ ! -f "$TEMPLATE" ]; then
-  echo "template not found: $TEMPLATE" >&2
+LAUNCHER_TEMPLATE="$SCRIPT_DIR/evcc-daemon-launcher.sh"
+if [ ! -f "$TEMPLATE" ] || [ ! -f "$LAUNCHER_TEMPLATE" ]; then
+  echo "template not found: $TEMPLATE / $LAUNCHER_TEMPLATE" >&2
   exit 1
 fi
 
 CONFIG_DIR="$HOME/.ev-charge-coordinator"
 AGENT_DIR="$HOME/Library/LaunchAgents"
+# Login Items names the item after ProgramArguments[0]; the launcher's file
+# name is therefore the visible title. Always quote "$LAUNCHER" in shell use.
+LAUNCHER="$CONFIG_DIR/EV Charge Coordinator"
 
 # Single source of truth for the label: the template's Label entry.
 LABEL="$(sed -n 's|.*<string>\(com\.[^<]*\)</string>.*|\1|p' "$TEMPLATE" | head -1)"
@@ -50,15 +54,17 @@ if [ -z "$NODE_BIN" ]; then
   echo "node not on PATH (nvm login-shell only?); re-run from a shell where node resolves" >&2
   exit 1
 fi
-NODE_BIN_DIR="$(dirname "$NODE_BIN")"
 
-render() {
+render_plist() {
   sed \
-    -e "s|__NODE_BIN__|$NODE_BIN|g" \
-    -e "s|__NODE_BIN_DIR__|$NODE_BIN_DIR|g" \
+    -e "s|__LAUNCHER__|$LAUNCHER|g" \
     -e "s|__REPO_DIR__|$REPO_DIR|g" \
     -e "s|__CONFIG_DIR__|$CONFIG_DIR|g" \
     "$TEMPLATE"
+}
+
+render_launcher() {
+  sed -e "s|__REPO_DIR__|$REPO_DIR|g" "$LAUNCHER_TEMPLATE"
 }
 
 DOMAIN="gui/$(id -u)"
@@ -66,12 +72,17 @@ DOMAIN="gui/$(id -u)"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] would: npm run build (in $REPO_DIR)"
   echo "[dry-run] would: mkdir -p $CONFIG_DIR/logs $AGENT_DIR"
+  echo "[dry-run] would: write launcher to $LAUNCHER (below)"
+  echo "[dry-run] would: chmod 755 \"$LAUNCHER\""
   echo "[dry-run] would: write rendered plist to $TARGET (below)"
   echo "[dry-run] would: plutil -lint $TARGET"
   echo "[dry-run] would: launchctl bootout $DOMAIN/$LABEL 2>/dev/null || true"
   echo "[dry-run] would: launchctl bootstrap $DOMAIN $TARGET"
+  echo "--- rendered launcher <<<"
+  render_launcher
+  echo ">>> --- end rendered launcher"
   echo "--- rendered plist <<<"
-  render
+  render_plist
   echo ">>> --- end rendered plist"
   echo "[dry-run] no changes were made."
   exit 0
@@ -81,16 +92,18 @@ echo "Building dist/ ..."
 (cd "$REPO_DIR" && npm run build)
 
 mkdir -p "$CONFIG_DIR/logs" "$AGENT_DIR"
-render > "$TARGET"
+render_launcher > "$LAUNCHER"
+chmod 755 "$LAUNCHER"
+render_plist > "$TARGET"
 plutil -lint "$TARGET"
 
 # Idempotent upgrade: bootout errors when the label was never loaded.
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
 launchctl bootstrap "$DOMAIN" "$TARGET"
 
-echo "Installed $LABEL"
+echo "Installed $LABEL (Login Items title: \"EV Charge Coordinator\")"
 echo "Verify:"
-echo "  launchctl print $DOMAIN/$LABEL | grep -E 'state =|pid ='"
+echo "  launchctl print $DOMAIN/$LABEL | grep -E $'^\t(state|pid) ='"
 echo "  tail -f $CONFIG_DIR/logs/daemon.log"
 echo "  node dist/index.js status"
 echo "First run: choose 'Always Allow' if macOS asks about keychain access."

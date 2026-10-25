@@ -363,7 +363,7 @@ To keep it running without an open terminal, install it as a per-user
 **LaunchAgent**:
 
 ```bash
-scripts/install-daemon.sh           # build + render plist + bootstrap into your gui domain
+scripts/install-daemon.sh           # build + render launcher & plist + bootstrap into your gui domain
 scripts/install-daemon.sh --dry-run # show exactly what it would do; changes nothing
 scripts/uninstall-daemon.sh         # bootout + remove the plist (keeps store, logs, credentials)
 ```
@@ -375,12 +375,16 @@ starts as root before login, where the keychain session does not exist.
 Verify and operate (label `com.transmote.ev-charge-coordinator.daemon`):
 
 ```bash
-launchctl print gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon | grep -E 'state =|pid ='
+launchctl print gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon | grep -E $'^\t(state|pid) ='
 tail -f ~/.ev-charge-coordinator/logs/daemon.log
 launchctl kickstart -k gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon  # restart in place
 launchctl bootout gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon       # stop (until reinstall/login)
 node dist/index.js status                                                       # daemon + store summary
 ```
+
+The tab-anchored grep selects only the job-level lines: `launchctl print`
+also reports the job's `resource coalition` and `jetsam coalition` entries,
+each with its own deeper-indented `state = active`.
 
 First run: choose **Always Allow** if macOS asks whether `node` may access the
 `ev-charge-coordinator` keychain item. If you have not re-authenticated since
@@ -388,9 +392,14 @@ the `vehicle_location` scope was added, run `node dist/index.js authenticate`.
 
 Caveats:
 
-- **nvm pinning:** the plist embeds the absolute path of the node that ran the
-  install script. After a node upgrade, re-run `scripts/install-daemon.sh`
-  (it re-resolves `command -v node`).
+- **Node upgrades:** the agent runs a launcher shim
+  (`~/.ev-charge-coordinator/EV Charge Coordinator`) that resolves `node`
+  (via nvm or PATH) at each launch — a node upgrade needs no reinstall.
+  Re-run `scripts/install-daemon.sh` if the repo directory moves.
+- **Login Items title:** macOS names the login item after the launcher shim,
+  so it appears as **"EV Charge Coordinator"** (previously "Node.js
+  Foundation" — the node binary's signer identity). The old entry may linger
+  in System Settings → Login Items until logout/restart.
 - **Sleep:** launchd suspends the agent while the Mac sleeps; the first poll
   after wake catches up (a car is usually awake then).
 - **Logs:** launchd does not rotate them; the daemon logs sparsely — truncate
