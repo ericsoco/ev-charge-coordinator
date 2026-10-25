@@ -113,6 +113,16 @@ describe('install-daemon.sh --dry-run', () => {
   });
 });
 
+describe('install-daemon.sh bootstrap retry', () => {
+  it('retries bootstrap — bootout teardown is async and races an immediate attempt', () => {
+    const src = fs.readFileSync(INSTALL, 'utf8');
+    expect(src).toMatch(/for attempt in 1 2 3 4 5; do/);
+    expect(src).toMatch(/launchctl bootstrap "\$DOMAIN" "\$TARGET"/);
+    expect(src).toMatch(/sleep 1/);
+    expect(src).toContain('bootstrap failed after 5 attempts');
+  });
+});
+
 describe('uninstall-daemon.sh --dry-run', () => {
   it('prints bootout + rm for the template label and performs no writes', () => {
     withTempHome((home) => {

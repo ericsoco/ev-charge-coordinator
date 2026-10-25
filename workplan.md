@@ -1048,4 +1048,16 @@ from the user's first real `install-daemon.sh` run:
   entry may linger until logout). P1b planning paused per user; launcher plan
   from the 2026-10-24 planning entry stands.
 
+  **First re-install attempt failed (EIO):** log forensics showed launchd's
+  async teardown of the old node-based job took ~1.2s (`service inactive →
+  removing service` at +1.23s) while the script's next line had already fired
+  `launchctl bootstrap`, which launchd rejected with `37: Operation already
+  in progress` (client-visible as `Bootstrap failed: 5: Input/output error`).
+  First install never hit it (bootout on a never-loaded label is a no-op).
+  BTM re-registration itself succeeded (`name=EV Charge Coordinator,
+  [enabled, allowed], result=no error` — Login Items title fixed ✓).
+  Fix: install now retries bootstrap up to 5× (1s apart, first attempt
+  immediate) and exits 1 with the last error if all fail; dry-run says so;
+  source pin added in launchd-assets test.
+
 
