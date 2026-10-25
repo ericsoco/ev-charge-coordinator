@@ -25,6 +25,16 @@ TASKS / BUGS
          [ ] ...but skipped over Tesla and Franklin setup in ## Configuration
 [ ] Wake before issuing command -- how to ensure app is not keeping vehicle awake and causing phantom drain? Need some research.
     Note: this is already in place for write (state-changing) commands, but not for reads.
+[ ] Codebase audit (legibility, organization)
+    [ ] Move daemonConfig.ts from utils into src/daemon
+    [ ] Move various .md files into /docs: utils/REPLThemes.md, design.md, requirements.md, README.md
+        [ ] possible to move root-level agentic files? workplan/-history, AGENTS...
+    [ ] Organize /services into one folder per service, with only index + ProcessManager in root folder
+        [ ] Franklin gets its own folder
+        [ ] TeslaService + TeslaCommandProxy move into /tesla
+    [ ] Clean up index.ts?
+        Very bloated now, can individual commands be moved out?
+        How are REPL + one-shot / Commander kept in sync?
 [X] Rename `npm start config --clear-all` to `--clear-credentials`
 [X] Tab completion for flags
 [X] Replace `keytar` (deprecated) with...? Need to clarify specific needed functionality.
