@@ -13,7 +13,7 @@ import * as evStore from '../../src/store/EvStore.js';
 import * as sessionStore from '../../src/store/SessionStore.js';
 import { acquireLock } from '../../src/daemon/lockfile.js';
 import { runDaemonOnce, startDaemon } from '../../src/daemon/runDaemon.js';
-import type { DaemonConfig } from '../../src/utils/daemonConfig.js';
+import { DEFAULT_DAEMON_CONFIG, type DaemonConfig } from '../../src/utils/daemonConfig.js';
 import type { FranklinWHService } from '../../src/services/FranklinWHService.js';
 import type { TeslaService } from '../../src/services/TeslaService.js';
 import type { BatteryFullStats } from '../../src/types/battery.js';
@@ -33,6 +33,7 @@ const CONFIG: DaemonConfig = {
   evSampleIdleSec: 0,
   weatherFetchSec: 3600,
   retentionDays: 90,
+  autoStart: DEFAULT_DAEMON_CONFIG.autoStart,
 };
 const FAST: DaemonConfig = { ...CONFIG, batterySampleSec: 0.02 };
 

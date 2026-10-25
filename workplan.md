@@ -49,14 +49,75 @@
   Franklin's reconnect — the sidecar is a stateless signer (app key on disk), so there is
   no re-auth session to restore.
 
-## P1a — collect-only daemon (active execution plan)
+## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 6 — launchd assets + README daemon section complete (2026-10-21); next:
-> Step 7 — validation checklist (user installs the LaunchAgent, live checks).** Standing rules:
-> one step at a time; each step green (`npm run check`) + its own commit on the step's branch
-> (step 1: `feat/p1a-collect-daemon`, step 2: `feat/p1a-daemon-runtime`); stop for review after each step; **the user performs the launchd
-> install themselves** (guide below). Design rationale: [design.md](./design.md) §3/§5.
-> After each step: update the status line here, append a short dated Log entry.
+> Status: **Step 1 — decision config complete (2026-10-24); next: Step 2 — pure filters.**
+> Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
+> (`npm run check`) + its own commit; stop for review after each step; the user lands each
+> step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
+> After each step: update the status line here, append a dated Log entry.
+
+**Goal:** plug-in decisions the daemon records and — once enabled — acts on: evaluate the
+configured filter chain, compute the charge limit, write a `decisions` audit row, then,
+gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs last.
+
+**Confirmed decisions (2026-10-24, user):**
+- **Geofence = decision-time fetch (Option B):** on plug-in, after the cheap local filters
+  pass, one read-only `getVehicleLocation()` (`endpoints=location_data`, never wakes) →
+  haversine vs the `vehicle_location` secret → outside radius / secret missing / location
+  read fails ⇒ **decline loudly** (deny-by-default; recorded in the decision row's
+  `filter_results_json`). Sampling never depends on location — a scope lapse degrades only
+  decisions, never the collect path. `ev_samples.at_home` stays NULL; the audit history is
+  the `decisions` rows themselves.
+- **Merge dark:** `autoStart.enabled` defaults **false** — the engine runs and records
+  decisions from real plug-ins but actuates nothing until the operator flips the flag in
+  `daemon-config.json`. `--dry-run` (step 5) forces non-actuation even when enabled.
+- **Actuation** sets the computed charge limit first, then starts charging — same semantics
+  as `charge-from-battery` (shared pure math, extracted not duplicated).
+
+### Steps
+
+1. **Decision config** — `autoStart` block in `daemon-config.json`: `enabled` (default
+   `false`), `filters[]` (`always`, `geofence` + `radiusM`), fail-loud validation (unknown
+   type, missing/non-positive radius, non-boolean `enabled`); defaults and template stay in
+   lockstep. *(branch `p1b/step1-decision-config` — complete)*
+2. **Pure filters** — `src/decision/filters.ts`: `(input) => {pass, reason}`; `always` +
+   `geofence` (location injected by the caller — this step stays fetch-free); unit matrix.
+   *(branch `p1b/step2-decision-filters`)*
+3. **Decision engine + store** — pure engine (interlock order: enabled → plugged →
+   not-already-charging → battery-above-buffer → filters → compute limit → outcome);
+   `DecisionStore` writer (migration adds the `decisions` row mapper/reason codes;
+   `filter_results_json`, `dry_run`, session-id idempotency); the intentionally-unpinned
+   `decisions` schema-pin arrives. *(branch `p1b/step3-decision-engine`)*
+4. **Wiring** — decision consumer hooked at `plug_in` in `EvPoller` (narrow injectable
+   seam): decision-time location fetch (Option B), engine run, decision row; tests with
+   fakes (plug-in → row; location failure → decline reason).
+   *(branch `p1b/step4-decision-wiring`)*
+5. **Actuation** — shared charge-limit math extracted from `charge-from-battery`;
+   `tesla-http-proxy` alive-check/respawn before commands (Decisions pointer above);
+   `setChargeLimit` → `startCharging` gated on `enabled`; `daemon --dry-run`; dry/disabled
+   ⇒ zero command calls; interlock-matrix tests. *(branch `p1b/step5-actuation`)*
+6. **Notifiers** — `Notifier` interface + `log-only`/`ntfy`/Slack; typed events (decision,
+   start/stop, interlock decline, service failures); secrets in credential store;
+   failure-isolation tests. *(branch `p1b/step6-notifiers`)*
+7. **Surfaces + docs** — store-report decisions section, `status` shows auto-start mode,
+   README auto-start section, workplan. *(branch `p1b/step7-docs-surfaces`)*
+8. **Live validation** (user + car) — disabled-run decision rows → flip `enabled` → real
+   auto-start; buffer interlock; park-away geofence decline; optional ntfy.
+
+### Scope
+
+**In:** `autoStart` config; decision engine + `decisions` audit rows; filters (`always`,
+`geofence`); battery-buffer interlock; charge-limit computation + gated start; notifiers;
+status/report surfaces.
+**Out:** weather-adaptive charging, scheduled windows, multi-EV, telemetry, Modbus, GUI —
+Phase 6+.
+
+## P1a — collect-only daemon (complete)
+
+> Status: **Complete — steps 1–7 landed; daemon installed on launchd and in validated
+> long-run operation (Log 2026-10-24 entries).** Historical detail below; the active plan
+> is P1b above. Design rationale: [design.md](./design.md) §3/§5.
 
 **Goal:** long-running `evcc daemon` on this Mac that only observes and records — home-battery
 samples, poll-while-awake EV samples, plug-in/session events, daily weather forecasts — into a
@@ -1060,4 +1121,31 @@ from the user's first real `install-daemon.sh` run:
   immediate) and exits 1 with the last error if all fail; dry-run says so;
   source pin added in launchd-assets test.
 
+
+
+### 2026-10-24 — P1b step 1 complete: autoStart decision config
+
+Branch `p1b/step1-decision-config`, gate green (`npm run check` exit 0; 580 passed / 2
+skipped; `daemon-config.test.ts` 35/35). P1b lifted to the active workplan section with
+the user's confirmed decisions (geofence = decision-time fetch / Option B, merge dark,
+limit-before-start, branch per step); P1a marked complete.
+
+- `daemonConfig.ts`: nested `autoStart` block — `AutoStartConfig` (`enabled` default
+  `false`; `filters[]` of `always` / `geofence` + `radiusM`) validated field-by-field by
+  `resolveAutoStart`: absent fields keep defaults; any problem nulls the whole config
+  with one message per problem naming the file (refuse, never clamp/patch). The numeric
+  loop now walks `NumericDaemonField` (`Exclude<keyof DaemonConfig, 'autoStart'>`);
+  `show()` renders objects/arrays as JSON.
+- Resolved configs deep-copy the block — no shared references with
+  `DEFAULT_DAEMON_CONFIG` (pinned by test).
+- Template lockstep: first start writes `autoStart: {enabled: false, filters: [{type:
+  'always'}]}` (dark on any machine); existing files without the block resolve to the
+  same dark default — no migration needed.
+- Tests: +18 in `daemon-config.test.ts` (defaults, template pin, partial/full override,
+  empty chain valid, reference isolation, 11-case invalid matrix, mixed numeric+block
+  problems); `run-daemon.test.ts` config literal gains `autoStart`.
+- Recorded decisions: empty filter chain is valid (interlocks still apply); unknown keys
+  inside `autoStart` tolerated like top-level; `always` entries normalize to `{type}`
+  (extra keys dropped); a non-`geofence` entry never requires `radiusM`.
+- Next: Step 2 — `src/decision/filters.ts` (branch `p1b/step2-decision-filters`).
 
