@@ -160,3 +160,51 @@ export interface NewWeatherForecast {
   temperatureC?: number | null;
   rawJson?: string | null;
 }
+
+/**
+ * Top-level decision outcome; mirrored by the decisions.reason_code CHECK
+ * (002 added filter_declined/config_error). Per-filter reasons live in
+ * filter_results_json.
+ */
+export type DecisionReasonCode =
+  | 'started'
+  | 'dry_run'
+  | 'below_buffer'
+  | 'already_charging'
+  | 'not_plugged_in'
+  | 'duplicate_session'
+  | 'compute_error'
+  | 'service_error'
+  | 'filter_declined'
+  | 'config_error';
+
+export interface DecisionRow {
+  id: number;
+  siteId: SiteId;
+  vehicleId: string;
+  homeBatteryId: string | null;
+  tsMs: number;
+  sessionId: number | null;
+  /** 1/0 — node:sqlite returns INTEGER, not boolean. */
+  accepted: number;
+  dryRun: number;
+  reasonCode: DecisionReasonCode;
+  reasonDetail: string | null;
+  filterResultsJson: string | null;
+  /** EnergyLimitedBy value (free text: the DDL carries no CHECK here). */
+  limitedBy: string | null;
+}
+
+export interface NewDecision {
+  vehicleId: string;
+  homeBatteryId?: string | null;
+  tsMs: number;
+  sessionId?: number | null;
+  /** Booleans at the intent level; the insert maps them to 1/0. */
+  accepted: boolean;
+  dryRun: boolean;
+  reasonCode: DecisionReasonCode;
+  reasonDetail?: string | null;
+  filterResultsJson?: string | null;
+  limitedBy?: string | null;
+}

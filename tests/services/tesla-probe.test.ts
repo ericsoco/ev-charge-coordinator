@@ -9,6 +9,7 @@
 import { type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import { describe, expect, it } from 'vitest';
 import { TeslaService } from '../../src/services/TeslaService.js';
+import { credentialStore } from '../../src/utils/credentials.js';
 
 const VIN = '5YJTESTVIN00000000';
 
@@ -65,6 +66,10 @@ async function service(states: string[] = ['asleep'], chargeEnergyAdded?: number
   tesla: TeslaService;
   recorded: Recorded[];
 }> {
+  // resolveVin persists the VIN, which needs stored Tesla credentials.
+  // Self-seed so this file never depends on shared config-dir state some
+  // other suite happened to leave behind (order-dependent flake).
+  await credentialStore.setTeslaCredentials({ clientId: 'cid', clientSecret: 'secret' });
   const tesla = new TeslaService({ region: 'na' });
   await tesla.initialize({
     clientId: 'cid',
