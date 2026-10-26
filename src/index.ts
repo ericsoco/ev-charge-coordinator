@@ -54,6 +54,13 @@ import { selectAppCredentials } from './commands/authenticate.js';
 import { describeAxiosHttpError, probeClientCredentials } from './services/tesla/oauth.js';
 import * as paint from './utils/color.js';
 import {
+  restartDaemon,
+  runDaemonScript,
+  stopDaemon,
+  strayParentFlagProblem,
+  type LifecycleResult,
+} from './commands/daemonLifecycle.js';
+import {
   chargeFromBattery,
   getBatterySoc,
   getChargingState,
@@ -239,6 +246,11 @@ function describeTeslaFailure(error: unknown): ServiceStart {
 }
 
 const program = new Command();
+// Options bind to the command they follow (Commander positional mode) —
+// required for the daemon subcommands' passThroughOptions, so a subcommand
+// flag like `daemon uninstall --dry-run` is not swallowed by the parent's
+// same-named option.
+program.enablePositionalOptions();
 let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
 
@@ -1030,8 +1042,9 @@ function requireService(name: 'Tesla' | 'FranklinWH', init: ServiceStart): void 
   process.exit(1);
 }
 
-program
+const daemonCommand = program
   .command('daemon')
+  .passThroughOptions()
   .description('Run the collect daemon in the foreground (samplers, sessions, history)')
   .option('--once', 'Run every sampler once and exit (non-zero if any failed)')
   .option('--dry-run', 'Evaluate and record decisions without actuating (forces dry-run mode)')
@@ -1126,6 +1139,48 @@ program
       process.exitCode = 1;
     }
   });
+
+/** Lifecycle actions share one printer: message when there is one, code when failed. */
+const reportLifecycle = (result: LifecycleResult): void => {
+  if (result.message) {
+    console.log(result.ok ? paint.positive(result.message) : paint.error(result.message));
+  }
+  if (!result.ok) process.exitCode = 1;
+};
+
+daemonCommand
+  .command('stop')
+  .description('Stop the launchd daemon (bootout; the agent stays installed)')
+  .action(async () => reportLifecycle(stopDaemon()));
+
+daemonCommand
+  .command('restart')
+  .description('Restart the launchd daemon (stop + bootstrap the installed plist; no file changes)')
+  .action(async () => reportLifecycle(restartDaemon()));
+
+daemonCommand
+  .command('install')
+  .description('Install (or upgrade) the LaunchAgent and Login Item launcher')
+  .option('--dry-run', 'Print the actions; change nothing')
+  .action(async (options) => reportLifecycle(runDaemonScript('install', options.dryRun === true)));
+
+daemonCommand
+  .command('uninstall')
+  .description('Remove the LaunchAgent and Login Item launcher (keeps store, logs, credentials)')
+  .option('--dry-run', 'Print the actions; change nothing')
+  .action(async (options) => reportLifecycle(runDaemonScript('uninstall', options.dryRun === true)));
+
+// A parent-level flag before a lifecycle subcommand (`daemon --dry-run
+// uninstall`) parses onto the parent, whose action never runs when a
+// subcommand is present — refuse instead of silently doing the real thing.
+daemonCommand.hook('preAction', (_thisCommand, actionCommand) => {
+  if (actionCommand === daemonCommand) return;
+  const stray = strayParentFlagProblem(daemonCommand.opts());
+  if (stray !== null) {
+    console.log(paint.error(stray));
+    process.exit(1);
+  }
+});
 
 program
   .command('status')
