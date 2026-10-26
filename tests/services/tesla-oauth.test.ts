@@ -305,6 +305,34 @@ describe('describeTeslaError', () => {
     expect(describeTeslaError(429, 'Retry in 12 seconds')).toContain('rate limit');
   });
 
+  it('maps the 412 vehicle-pairing body to enrollment advice, not region advice', () => {
+    // Observed live after recreating the dev app: everything app-side was
+    // green and the vehicle simply lacked the key — steering to Allowed
+    // Origins would send the operator in the wrong direction.
+    const mapped = describeTeslaError(
+      412,
+      'vehicle rejected request: your public key has not been paired with the vehicle'
+    );
+    expect(mapped).toContain("does not hold this app's key");
+    expect(mapped).toContain('check-only');
+    expect(mapped).toContain('key already exists');
+    expect(mapped).not.toContain('Allowed Origin');
+  });
+
+  it('422: a body naming something else gets neutral text, not domain directions', () => {
+    const mapped = describeTeslaError(422, 'vin: required field missing');
+    expect(mapped).toContain('HTTP 422');
+    expect(mapped).toContain('vin: required field missing');
+    expect(mapped).not.toContain('Allowed Origins');
+  });
+
+  it('422: empty and uninformative bodies keep the observed partner-accounts advice', () => {
+    expect(describeTeslaError(422, '')).toContain('Allowed Origins');
+    expect(describeTeslaError(422, 'Request failed with status code 422')).toContain(
+      'Allowed Origins'
+    );
+  });
+
   it('explains the not-registered error Tesla actually returns', () => {
     // Observed live from GET /api/1/vehicles. The registration step is separate
     // from OAuth consent, so the advice has to say so: a user who has already
