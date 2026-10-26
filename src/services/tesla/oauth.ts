@@ -413,6 +413,19 @@ export function describeTeslaError(status: number | undefined, raw: string): str
     );
   }
   if (status === 412) {
+    if (safeRaw.toLowerCase().includes('not been paired')) {
+      // Observed live from signed commands after the developer app was
+      // recreated: the vehicle does not hold this app's key. This is the
+      // vehicle-side enrollment tap, not region registration — and pairing
+      // cannot be verified from the CLI (no endpoint reports VIN↔key).
+      return (
+        `${statusText}${safeRaw} - the vehicle does not hold this app's key. ` +
+        'Open the pairing link from `pair-tesla-key --domain <domain>` and approve it in ' +
+        'the Tesla app; if the app says the key already exists, remove the old entry from ' +
+        "the vehicle's key list first, then re-tap. Check the app-side state with " +
+        '`pair-tesla-key --check-only` (a `--rotate-key` run invalidates prior approvals).'
+      );
+    }
     // Observed live: "Account <uuid> must be registered in the current region
     // <base url>". This is the POST /api/1/partner_accounts step, which is
     // separate from granting consent: authorizing the app in the browser does
@@ -427,13 +440,27 @@ export function describeTeslaError(status: number | undefined, raw: string): str
   }
   if (status === 422) {
     // Observed live from POST /api/1/partner_accounts after the developer app
-    // was recreated: the body names no field, and the usual cause is the domain
-    // check -- Allowed Origins on developer.tesla.com must list the origin.
-    return (
-      `${statusText}${safeRaw} - Tesla rejected the request as invalid. For partner-account ` +
-      'registration, check that developer.tesla.com lists this domain under Allowed Origins ' +
-      '(e.g. https://example.com) and that the app is configured like the original app.'
-    );
+    // was recreated: an empty/uninformative body where the usual cause is the
+    // domain check — Allowed Origins on developer.tesla.com must list the
+    // origin. A body that positively names something else gets neutral text
+    // instead of directions that may not apply (the hash-taken 422
+    // short-circuits via the known table above).
+    const body = safeRaw.trim().toLowerCase();
+    const domainShaped =
+      body === '' ||
+      body.includes('origin') ||
+      body.includes('domain') ||
+      body.includes('allowed') ||
+      body.includes('unprocessable') ||
+      body.startsWith('request failed');
+    if (domainShaped) {
+      return (
+        `${statusText}${safeRaw} - Tesla rejected the request as invalid. For partner-account ` +
+        'registration, check that developer.tesla.com lists this domain under Allowed Origins ' +
+        '(e.g. https://example.com) and that the app is configured like the original app.'
+      );
+    }
+    return `${statusText}${safeRaw} - Tesla rejected the request as invalid.`;
   }
   if (status === 429) {
     // Observed live from wake_up: "Retry in 12 seconds" as the plain body.
