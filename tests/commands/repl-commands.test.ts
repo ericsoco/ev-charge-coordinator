@@ -138,12 +138,21 @@ describe('flag tables mirror Commander definitions', () => {
     // not a REPL command at all (it enters the REPL) and `daemon` has no
     // dispatch case (one-shot only) — neither has flag tables, by design.
     const oneShotOnly = new Set(['start', 'daemon']);
+    // Subcommands of `daemon`; the top-level scan sees their registrations
+    // too. Pinned under their parent so neither side can rot silently.
+    const subcommands: Record<string, string> = {
+      stop: 'daemon',
+      restart: 'daemon',
+      install: 'daemon',
+      uninstall: 'daemon',
+    };
 
     const commandNames = [...INDEX_SOURCE.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]);
     expect(commandNames.length).toBeGreaterThan(0);
 
     const drift: string[] = [];
     for (const name of commandNames) {
+      if (name in subcommands) continue;
       const start = INDEX_SOURCE.indexOf(`.command('${name}')`);
       const end = INDEX_SOURCE.indexOf('.action(', start);
       const block = INDEX_SOURCE.slice(start, end === -1 ? undefined : end);
@@ -169,6 +178,12 @@ describe('flag tables mirror Commander definitions', () => {
       'daemon',
       'start',
     ]);
+    // Subcommands must stay registered under their parent (chain may wrap).
+    for (const [sub, parent] of Object.entries(subcommands)) {
+      expect(INDEX_SOURCE, sub).toMatch(
+        new RegExp(`${parent}Command\\s*\\.command\\('${sub}'\\)`)
+      );
+    }
     expect(drift).toEqual([]);
   });
 });

@@ -51,7 +51,8 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 5 — actuation complete (2026-10-25); next: Step 6 — notifiers.**
+> Status: **Step 5.1 — ops hardening in progress (2026-10-25, branch `p1b/step5-1-ops-fixes`,
+> four issues, separate commits); next after it: Step 6 — notifiers.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -110,6 +111,47 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
    README auto-start section, workplan. *(branch `p1b/step7-docs-surfaces`)*
 8. **Live validation** (user + car) — disabled-run decision rows → flip `enabled` → real
    auto-start; buffer interlock; park-away geofence decline; optional ntfy.
+
+**Step 5.1 — ops hardening (user, 2026-10-25; one branch `p1b/step5-1-ops-fixes`, one
+commit per issue; each gated).** Recorded from live validation: manual tests passed dark
++ live + geofence (`radiusM: 1` rejection); four issues surfaced.
+
+1. **Daemon lifecycle via the program** — `evcc daemon stop|restart|install|uninstall`
+   subcommands beside the foreground `daemon` (Commander v12: parent action + optional
+   subcommands). `stop` = label derived from the template plist (same single source the
+   scripts use) + `launchctl print`/`bootout` (not-loaded = friendly result); `restart` =
+   stop-if-loaded + `bootstrap` of the *already-installed* plist (pure reload — upgrades
+   stay `daemon install`); `install [--dry-run]` / `uninstall [--dry-run]` spawn the bash
+   scripts via `bash` (no exec-bit need; child exit propagated; repo root resolved from
+   the module's own location). REPL has no `daemon` dispatch → no REPL work; the drift
+   test's source-regex will see the new `.command('…')` names → explicit subcommand
+   exclusion map pinned under `daemon`. New `src/commands/daemonLifecycle.ts` (injectable
+   exec seam) + tests + README daemon-section note.
+2. **oauth.ts 412/422 disambiguation** — 412 body contains `not been paired` ⇒
+   enrollment advice (open the `pair-tesla-key --domain` `_ak` link and approve;
+   "key already exists" ⇒ remove the vehicle's old entry first; app-side state via
+   `--check-only`; `--rotate-key` invalidates approvals); otherwise the observed
+   partner-accounts region text. 422: hash-taken keeps short-circuiting via the `known`
+   table; origin/domain/empty/uninformative bodies keep the Allowed-Origins advice
+   (the observed live shape); any other body ⇒ neutral passthrough (no wrong
+   directions). Four pins in `tesla-oauth.test.ts`.
+3. **Wake on writes** (the `setChargeLimit` 408: `wakeUp` did run but the non-429 path
+   died after 10 cycles × 2 s ≈ 20 s against a documented 3-minute budget, then
+   rethrew the original whose message carried *read* advice) — non-429 wakes honor the
+   wall budget (state poll every 2 s, re-`wake_up` at most every 10 s; 429 handling
+   untouched); wake exit sites wrap with wake-context messages built from the axios
+   cause (no "Reads do not wake"; original kept as `cause` for `--debug`);
+   `postVehicleCommand` gains a 408 special case ("went unavailable during the signed
+   command… retry") beside ECONNREFUSED; `setEvChargeLimit` prints the same pre-wake
+   line `charge-from-battery` uses and `wakeUp` prints one wake-notice — all four
+   surfaces converge on `TeslaService.setChargeLimit`, so one fix covers REPL,
+   one-shot, and daemon. The deliberate "rethrows the original" pin is re-written.
+4. **Local timestamps in human logs** — boundary: human log/status text = local
+   `YYYY-MM-DD HH:MM:SS` (new `formatLocalTimestamp(ms)`, local getters — TZ-agnostic
+   tests); machine surfaces (`status --json`, store-report JSON, `ev_samples.ts_ms`)
+   stay ISO-8601 UTC. Swap sites: `[ev-poll] rich read due`, `[daemon] started at`,
+   stale-lock `takenAt`, "Stored tokens valid until". `system.ts`'s ISO helper feeds
+   the JSON report + relative ages → stays. `samplers` due-line pin re-written.
 
 ### Scope
 

@@ -363,10 +363,15 @@ To keep it running without an open terminal, install it as a per-user
 **LaunchAgent**:
 
 ```bash
-scripts/install-daemon.sh           # build + render launcher & plist + bootstrap into your gui domain
-scripts/install-daemon.sh --dry-run # show exactly what it would do; changes nothing
-scripts/uninstall-daemon.sh         # bootout + remove the plist (keeps store, logs, credentials)
+node dist/index.js daemon install           # build + render launcher & plist + bootstrap into your gui domain
+node dist/index.js daemon install --dry-run # show exactly what it would do; changes nothing
+node dist/index.js daemon stop              # bootout only — the agent stays installed
+node dist/index.js daemon restart           # stop (if loaded) + bootstrap the installed plist; no file changes
+node dist/index.js daemon uninstall         # bootout + remove the plist (keeps store, logs, credentials)
 ```
+
+These wrap `scripts/install-daemon.sh` / `scripts/uninstall-daemon.sh` — the
+same actions, runnable without leaving the program.
 
 Why an agent and not a LaunchDaemon: agents run inside your login session,
 which login-keychain access (`@napi-rs/keyring`) requires — a LaunchDaemon
