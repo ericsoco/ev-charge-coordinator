@@ -51,8 +51,8 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 5.1 — ops hardening in progress (2026-10-25, branch `p1b/step5-1-ops-fixes`,
-> four issues, separate commits); next after it: Step 6 — notifiers.**
+> Status: **Step 5.1 — ops hardening complete (2026-10-25, four commits on
+> `p1b/step5-1-ops-fixes`); next: Step 6 — notifiers.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -1411,6 +1411,52 @@ passed / 2 skipped**; decision-consumer 12/12, command-routing 24/24). First run
   row · `--dry-run` → zero calls · disabled → zero calls · live decline → zero calls ·
   set-limit throws → `service_error`, no start, target in detail · start throws →
   `service_error` with target evidence.
+- Next: Step 6 — notifiers (`Notifier` interface + log-only/ntfy/Slack, typed events,
+  credential-store secrets, failure isolation) — branch `p1b/step6-notifiers`.
+
+
+### 2026-10-25 — P1b step 5.1 complete: ops hardening (4 issues, 4 commits)
+
+Branch `p1b/step5-1-ops-fixes`; gate green after every step (final: **666 passed / 2
+skipped**, 49 files).
+
+1. **#1 lifecycle (`cae2027`)** — `evcc daemon stop|restart|install|uninstall`
+   subcommands (`src/commands/daemonLifecycle.ts`, injectable exec seam; scripts spawned
+   via `bash`). **Incident worth remembering:** the first `--dry-run` smokes ran for REAL
+   — Commander silently drops a subcommand option that duplicates a parent option name
+   (isolated repro: `SUB {}`), so `daemon uninstall --dry-run` bootout'd the user's
+   LaunchAgent and deleted the plist + Login Item. Detected from the output wording,
+   **restored with a real `daemon install`** (daemon verified running). Fix:
+   `program.enablePositionalOptions()` + `daemonCommand.passThroughOptions()` (canonical
+   `daemon uninstall --dry-run` verified to print only would-lines; exit 0) plus a
+   `preAction` refusal for stray parent flags (`daemon --dry-run uninstall` → guard,
+   exit 1 — verified). Drift test: subcommand exclusion map + parent-registration pins;
+   mirror-tree routing tests. README install section rewritten CLI-first.
+2. **#2 oauth disambiguation (`1adb975`)** — 412 body `not been paired` → vehicle-side
+   enrollment advice (the misleading region/Allowed-Origins text is what the user hit
+   after a fully-green `--check-only`); other 412 bodies keep the observed
+   partner-accounts text; 422 is body-aware (hash-taken still short-circuits via the
+   `known` table; empty/uninformative keeps domain advice; named bodies get neutral
+   passthrough). +3 pins, 48/48 oauth tests.
+3. **#3 wake on writes (`b3cd926`)** — root causes of the live `set-ev-charge-limit`
+   408: the non-429 wake died after 10 cycles × 2 s ≈ 20 s against a documented 3-minute
+   budget, then rethrew the interceptor message whose 408 branch carries *read* advice.
+   `wakeUp` now polls to the wall deadline (2 s light probes, `wake_up` re-POST ≤ every
+   10 s — **only a due POST consumes the cadence**: a poll-failure reset found by the new
+   pin would have stranded wake_up), 429 semantics untouched; wake exits wrap with
+   wake-context messages (cause preserved for `--debug`); `postVehicleCommand` gained a
+   408 branch beside ECONNREFUSED; pre-wake UX lines in `setEvChargeLimit` + one wake
+   notice in `wakeUp` (all four surfaces share `setChargeLimit`). Deliberate "rethrows
+   the original" pin rewritten; +slow-online, +wake-408, +command-408 pins. **Lesson:**
+   axios adapters must THROW a response-carrying AxiosError — the core does not
+   re-validate a resolved non-2xx response.
+4. **#4 local timestamps (`c03751c`)** — `formatLocalTimestamp(ms)` (`src/utils/time.ts`,
+   local getters, TZ-agnostic tests) swapped into the four human log sites: `[ev-poll]
+   rich read due` (the reported Zulu line), `[daemon] started at`, stale-lock `takenAt`,
+   "Stored tokens valid until". Boundary: machine surfaces keep ISO-8601 UTC
+   (`status --json` pin, store-report, `ts_ms`; `system.ts`'s helper feeds JSON + relative
+   ages). Samplers due-line pin rewritten.
+
 - Next: Step 6 — notifiers (`Notifier` interface + log-only/ntfy/Slack, typed events,
   credential-store secrets, failure isolation) — branch `p1b/step6-notifiers`.
 
