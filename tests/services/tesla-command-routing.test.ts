@@ -171,6 +171,30 @@ describe('vehicle command routing', () => {
     expect(resolutions).toBe(3);
   });
 
+  it('a 408 on the signed command path gets command advice, not read advice', async () => {
+    const { service } = await withProxyRoute();
+    const proxyClient = await (
+      service as unknown as { vehicleCommandClient: () => Promise<AxiosInstance> }
+    ).vehicleCommandClient();
+    proxyClient.defaults.adapter = async (config) => {
+      // Adapters must REJECT for axios to treat a non-2xx as an error (the
+      // core does not re-validate a resolved response's status).
+      throw Object.assign(new AxiosError('timeout'), {
+        response: {
+          status: 408,
+          data: 'vehicle unavailable: vehicle is offline or asleep',
+          headers: {},
+          config,
+        },
+      });
+    };
+
+    const error = await service.setChargeLimit(60).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/went unavailable during the signed command/);
+    expect((error as Error).message).not.toContain('Reads do not wake');
+  });
+
   it('fails with guidance when the resolver says no proxy is available', async () => {
     const { service, commands } = await withProxyRoute(null);
 
@@ -450,10 +474,21 @@ describe('wakeUp rate limiting and budget', () => {
     expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(3);
   });
 
-  it('bounds non-429 errors to the wake cycles and rethrows the original', async () => {
+  /** Capture wakeUp's rejection without Promise<void>'s union leaking in. */
+  async function captureWakeError(service: TeslaService): Promise<Error> {
+    try {
+      await service.wakeUp();
+      return new Error('wakeUp resolved unexpectedly');
+    } catch (error) {
+      return error as Error;
+    }
+  }
+
+  it('keeps trying for the full wake budget, then reports wake context (not read advice)', async () => {
     const service = await wakeService();
     const urls: string[] = [];
-    // A plain 500: not a rate limit, so every cycle is consumed.
+    // A plain 500 on every call: not a rate limit, so the loop polls to the
+    // wall budget — wake posts throttled to one per 10 s, state polls every 2 s.
     (service as unknown as { client: AxiosInstance }).client.defaults.adapter = async (config) => {
       urls.push(config.url ?? '');
       throw Object.assign(new AxiosError('boom'), {
@@ -461,11 +496,59 @@ describe('wakeUp rate limiting and budget', () => {
       });
     };
 
-    const waking = service.wakeUp();
-    const expectation = expect(waking).rejects.toThrow('boom');
+    const caught = captureWakeError(service);
     await vi.runAllTimersAsync();
-    await expectation;
-    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(10);
+    const error = await caught;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toMatch(
+      /Could not bring the vehicle online within the 3-minute wake budget \(last: HTTP 500: boom\)/
+    );
+    // The old behavior rethrew the raw interceptor message, which for a 408
+    // carried read advice ("issue a command") in the middle of a wake.
+    expect(error.message).not.toContain('Reads do not wake');
+    expect(error.cause).toBeDefined();
+    // t=0,10,…,170 — the t=180 deadline breaks the loop first.
+    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(18);
+  });
+
+  it('a 408 on the wake itself gets wake-context advice, never read advice', async () => {
+    const service = await wakeService();
+    (service as unknown as { client: AxiosInstance }).client.defaults.adapter = async (config) => {
+      throw Object.assign(new AxiosError('timeout'), {
+        response: {
+          status: 408,
+          data: 'vehicle unavailable: vehicle is offline or asleep',
+          headers: {},
+          config,
+        },
+      });
+    };
+
+    const caught = captureWakeError(service);
+    await vi.runAllTimersAsync();
+    const error = await caught;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toMatch(/Could not bring the vehicle online within the .* budget/);
+    expect(error.message).toContain('HTTP 408: vehicle unavailable');
+    expect(error.message).not.toContain('Reads do not wake');
+  });
+
+  it('gives a slow car the full budget instead of a ~20 s cycle cap', async () => {
+    const service = await wakeService();
+    let probes = 0;
+    const urls = armWake(service, {
+      state: () => (++probes < 3 ? 'asleep' : 'online'),
+    });
+
+    const waking = service.wakeUp();
+    await vi.runAllTimersAsync();
+    await waking;
+
+    // One wake POST (then throttled), online on the third light probe.
+    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(1);
+    expect(probes).toBe(3);
   });
 
   it('fails loudly when the car never comes online', async () => {
@@ -473,10 +556,14 @@ describe('wakeUp rate limiting and budget', () => {
     const urls = armWake(service, { state: () => 'asleep' });
 
     const waking = service.wakeUp();
-    const expectation = expect(waking).rejects.toThrow(/did not come online after 10 wake attempts/);
+    const expectation = expect(waking).rejects.toThrow(
+      /Vehicle did not come online within the 3-minute wake budget/
+    );
     await vi.runAllTimersAsync();
     await expectation;
-    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(10);
+    // Throttled cadence across the whole budget: 18 posts (was a 10-cycle
+    // cap that gave up after ~20 s against a documented 3-minute budget).
+    expect(urls.filter((url) => url.endsWith('/wake_up')).length).toBe(18);
     // The confirmation poll is the light probe, never full vehicle_data.
     expect(urls.some((url) => url.endsWith('/vehicle_data'))).toBe(false);
   });

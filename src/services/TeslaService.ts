@@ -229,12 +229,12 @@ export interface TeslaCommandProxyRoute {
   caPem: string;
 }
 
-/** Wake budget: honest-failure ceiling for wakeUp (matches the charge path's ~3 min). */
+/** Wake budget: the full wall-clock ceiling for wakeUp (matches the charge path's ~3 min). */
 const WAKE_WALL_BUDGET_MS = 180_000;
-/** Bounded wake cycles (each = wake POST + light state poll); rate-limit waits do not count. */
-const WAKE_MAX_CYCLES = 10;
-/** Pause between wake cycles while the car is not yet online. */
+/** Pause between light state polls while the car is not yet online. */
 const WAKE_POLL_MS = 2_000;
+/** Re-POST wake_up at most this often — polite upstream cadence within the budget. */
+const WAKE_REPOST_MS = 10_000;
 
 export class TeslaService implements EVService {
   private client: AxiosInstance;
@@ -787,11 +787,13 @@ export class TeslaService implements EVService {
   /**
    * Wake the car and wait honestly for it to come online.
    *
-   * Rate limits are honored, not hammered: a 429 sleeps exactly as long as
-   * Tesla asked (retry-after header or the "Retry in N seconds" body) without
-   * consuming a wake cycle. Confirmation polls the light state probe — the
-   * loop only reads `state`, the cheapest read available. A car that never
-   * comes online fails within a 3-minute budget.
+   * The full wall-clock budget applies to every path: light state polls every
+   * WAKE_POLL_MS until the deadline, with wake_up re-POSTed at most every
+   * WAKE_REPOST_MS (a ~20 s cycle cap used to give up far short of the
+   * documented budget). Rate limits are honored, not hammered: a 429 sleeps
+   * exactly as long as Tesla asked without consuming the cadence. Exits speak
+   * for waking — a failure keeps the original as `cause` but never surfaces
+   * read-oriented advice.
    */
   async wakeUp(): Promise<void> {
     if (!this.vin) {
@@ -800,14 +802,33 @@ export class TeslaService implements EVService {
 
     const deadlineMs = Date.now() + WAKE_WALL_BUDGET_MS;
     const budgetLabel = `${Math.round(WAKE_WALL_BUDGET_MS / 60_000)}-minute wake budget`;
+    // The interceptor's message may append advice written for reads (the 408
+    // branch); the wake exit speaks for the wake, so keep only the head.
+    const shortDesc = (error: unknown): string =>
+      (error instanceof Error ? error.message : String(error)).split(' - ')[0];
     let lastError: unknown = null;
-    let cycle = 0;
+    let nextWakePostMs = 0;
+    let announced = false;
 
-    while (cycle < WAKE_MAX_CYCLES) {
+    for (;;) {
+      if (Date.now() >= deadlineMs) break;
+
+      const postDue = Date.now() >= nextWakePostMs;
       try {
-        await this.client.post(`/api/1/vehicles/${this.vin}/wake_up`);
+        if (postDue) {
+          await this.client.post(`/api/1/vehicles/${this.vin}/wake_up`);
+          // Throttle successes and plain failures alike; a 429 wait below
+          // skips this instead (the rate limit must not consume the cadence).
+          nextWakePostMs = Date.now() + WAKE_REPOST_MS;
+        }
         const vehicle = await this.getVehicleState();
         if (vehicle.state === 'online') return;
+        if (!announced) {
+          announced = true;
+          console.log(
+            paint.info('  Waiting for the vehicle to come online (asleep cars can take a while)...')
+          );
+        }
       } catch (error) {
         const retrySec = rateLimitedRetrySeconds(error);
         if (retrySec !== null) {
@@ -822,23 +843,26 @@ export class TeslaService implements EVService {
             paint.info(`  Rate limited by Tesla; waiting ${retrySec}s before retrying the wake`)
           );
           await new Promise((resolve) => setTimeout(resolve, waitMs));
-          continue; // the rate limit did not burn a wake cycle
+          continue; // the rate limit did not consume the cadence
         }
+        // Only a due POST consumes the wake cadence — a state-poll failure
+        // must not push the next wake_up further out (it never returns).
+        if (postDue) nextWakePostMs = Date.now() + WAKE_REPOST_MS;
         lastError = error;
       }
 
-      cycle += 1;
-      if (cycle >= WAKE_MAX_CYCLES) break;
-      if (Date.now() + WAKE_POLL_MS >= deadlineMs) {
-        throw new Error(`Vehicle did not come online within the ${budgetLabel}.`, {
-          cause: lastError,
-        });
-      }
       await new Promise((resolve) => setTimeout(resolve, WAKE_POLL_MS));
     }
 
-    if (lastError !== null) throw lastError;
-    throw new Error(`Vehicle did not come online after ${WAKE_MAX_CYCLES} wake attempts`);
+    if (lastError !== null) {
+      throw new Error(
+        `Could not bring the vehicle online within the ${budgetLabel} ` +
+          `(last: ${shortDesc(lastError)}). The vehicle may be out of coverage — ` +
+          'retry when it has network; use --debug for the full error.',
+        { cause: lastError }
+      );
+    }
+    throw new Error(`Vehicle did not come online within the ${budgetLabel}.`);
   }
 
   /**
@@ -945,6 +969,17 @@ export class TeslaService implements EVService {
         throw new Error(
           'Tesla command proxy is not reachable. Run `start`, or check its output ' +
             'for why the proxy is not running.',
+          { cause: error }
+        );
+      }
+      const status = (error as { cause?: { response?: { status?: number } } }).cause?.response
+        ?.status;
+      if (status === 408) {
+        // The wake before this command reported online; the vehicle dropped
+        // out mid-request. Read advice ("issue a command") would be nonsense.
+        throw new Error(
+          'vehicle went unavailable during the signed command (it may have fallen back ' +
+            'asleep mid-request); retry',
           { cause: error }
         );
       }
