@@ -70,7 +70,12 @@ export async function setEvChargeLimit(
     return { ok: false, error: 'Tesla not connected' };
   }
   try {
-    log(ctx, paint.info('Setting EV charge limit...'));
+    log(
+      ctx,
+      paint.info(
+        'Setting the EV charge limit (waking the vehicle if needed; asleep cars take up to a minute)...'
+      )
+    );
     await ctx.tesla.setChargeLimit(percent);
     log(ctx, paint.success(`✓ EV charge limit set to ${percent}%`));
     return { ok: true };
