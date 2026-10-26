@@ -21,6 +21,7 @@ import { createScheduler, type ScheduledTask } from './scheduler.js';
 import { createBatterySampler } from './BatterySampler.js';
 import { createEvPoller } from './EvPoller.js';
 import { createDecisionConsumer } from './decisionConsumer.js';
+import { formatLocalTimestamp } from '../utils/time.js';
 import { createWeatherSampler, type FetchForecast } from './WeatherSampler.js';
 import { clearRuntimeState, readRuntimeState, writeRuntimeState } from '../services/ProcessManager.js';
 
@@ -280,7 +281,7 @@ export async function startDaemon(options: RunDaemonOptions): Promise<DaemonHand
   });
   scheduler.start();
   log(
-    `[daemon] started at ${new Date(nowMs()).toISOString()} — tasks: ` +
+    `[daemon] started at ${formatLocalTimestamp(nowMs())} — tasks: ` +
       prepared.tasks.map((task) => task.name).join(', ')
   );
 

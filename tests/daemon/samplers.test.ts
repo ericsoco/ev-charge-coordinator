@@ -17,6 +17,7 @@ import * as weatherStore from '../../src/store/WeatherForecastStore.js';
 import { createBatterySampler } from '../../src/daemon/BatterySampler.js';
 import { createEvPoller } from '../../src/daemon/EvPoller.js';
 import { createWeatherSampler, type ForecastHour } from '../../src/daemon/WeatherSampler.js';
+import { formatLocalTimestamp } from '../../src/utils/time.js';
 import type { BatteryFullStats } from '../../src/types/battery.js';
 import type { EVStatus } from '../../src/types/ev.js';
 
@@ -251,9 +252,9 @@ describe('EvPoller', () => {
     await task.run(); // gated: same window — no duplicate
     const dueLines = lines.filter((message) => message.includes('rich read due'));
     expect(dueLines).toHaveLength(1);
-    expect(dueLines[0]).toContain(
-      new Date(1_000_000 + 60_000 + 300_000).toISOString()
-    );
+    // Human log lines are local wall-clock (the Zulu/ISO rendering was the bug).
+    expect(dueLines[0]).toContain(formatLocalTimestamp(1_000_000 + 60_000 + 300_000));
+    expect(dueLines[0]).not.toContain('T00:');
     expect(dueLines[0]).toContain('cadence 300s, idle');
 
     ev.probe = 'asleep';

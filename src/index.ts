@@ -60,6 +60,7 @@ import {
   strayParentFlagProblem,
   type LifecycleResult,
 } from './commands/daemonLifecycle.js';
+import { formatLocalTimestamp } from './utils/time.js';
 import {
   chargeFromBattery,
   getBatterySoc,
@@ -1325,7 +1326,7 @@ async function runAuthenticate(
     console.log(
       paint.info(
         expiresAt > Date.now()
-          ? `  Stored tokens valid until ${new Date(expiresAt).toISOString()}.`
+          ? `  Stored tokens valid until ${formatLocalTimestamp(expiresAt)}.`
           : '  Stored tokens have expired; the CLI will refresh them on next use.'
       )
     );

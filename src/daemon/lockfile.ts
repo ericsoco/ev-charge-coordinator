@@ -17,6 +17,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getConfigDir } from '../utils/credentials.js';
+import { formatLocalTimestamp } from '../utils/time.js';
 
 export interface LockInfo {
   pid: number;
@@ -28,7 +29,7 @@ export class DaemonAlreadyRunningError extends Error {
   constructor(lock: LockInfo, file: string) {
     super(
       `Daemon already running (pid ${lock.pid}, since ` +
-        `${new Date(lock.takenAt).toISOString()}). Stop it first — if no ` +
+        `${formatLocalTimestamp(lock.takenAt)}). Stop it first — if no ` +
         `daemon is actually running, remove ${file}.`
     );
     this.name = 'DaemonAlreadyRunningError';

@@ -17,6 +17,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { TeslaService } from '../services/TeslaService.js';
 import type { EventKind } from '../store/types.js';
 import * as evStore from '../store/EvStore.js';
+import { formatLocalTimestamp } from '../utils/time.js';
 import * as homeBatteryStore from '../store/HomeBatteryStore.js';
 import * as sessionStore from '../store/SessionStore.js';
 import { detectTransitions } from './eventDetector.js';
@@ -131,7 +132,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         if (lastDueLoggedAt !== dueAt) {
           lastDueLoggedAt = dueAt;
           log(
-            `[ev-poll] rich read due ${new Date(dueAt).toISOString()} ` +
+            `[ev-poll] rich read due ${formatLocalTimestamp(dueAt)} ` +
               `(cadence ${intervalSec}s, ${plugged ? 'plugged' : 'idle'})`
           );
         }
