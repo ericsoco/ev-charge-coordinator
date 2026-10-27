@@ -32,6 +32,7 @@ try {
     ev: await import(pathToFileURL(path.join(repo, 'dist/store/EvStore.js')).href),
     sessions: await import(pathToFileURL(path.join(repo, 'dist/store/SessionStore.js')).href),
     weather: await import(pathToFileURL(path.join(repo, 'dist/store/WeatherForecastStore.js')).href),
+    time: await import(pathToFileURL(path.join(repo, 'dist/utils/time.js')).href),
   };
 } catch {
   console.error('Could not load dist/store — run `npm run build` first.');
@@ -93,6 +94,13 @@ const weatherAgg = one(
   'SELECT COUNT(*) AS rows, MAX(fetched_ts_ms) AS latestVintage FROM weather_forecasts'
 );
 const decisionsAgg = one('SELECT COUNT(*) AS rows FROM decisions');
+// Latest decisions with their outcomes — the "why didn't it charge?" view.
+const decisionsRecent = all(
+  'SELECT session_id AS sessionId, ts_ms AS tsMs, accepted, dry_run AS dryRun, ' +
+    'reason_code AS reasonCode, reason_detail AS reasonDetail, ' +
+    'filter_results_json AS filterResultsJson, limited_by AS limitedBy ' +
+    'FROM decisions ORDER BY ts_ms DESC, id DESC LIMIT 5'
+);
 
 const report = {
   store: store.path,
@@ -137,7 +145,19 @@ const report = {
             ).n
           ),
   },
-  decisions: { rows: Number(decisionsAgg.rows) },
+  decisions: {
+    rows: Number(decisionsAgg.rows),
+    recent5: decisionsRecent.map((row) => ({
+      ts: iso(row.tsMs),
+      sessionId: row.sessionId,
+      accepted: row.accepted === 1,
+      dryRun: row.dryRun === 1,
+      reason: row.reasonCode,
+      detail: row.reasonDetail,
+      limitedBy: row.limitedBy,
+      filters: row.filterResultsJson,
+    })),
+  },
 };
 db.close();
 
@@ -156,6 +176,19 @@ for (const [table, data] of Object.entries(report)) {
   if (data.avgSocPercent !== undefined) line('avg soc', data.avgSocPercent === null ? '—' : `${data.avgSocPercent}%`);
   if (data.byKind) line('by kind', Object.entries(data.byKind).map(([k, n]) => `${k}=${n}`).join(' ') || '(none)');
   if (data.latest5?.length) for (const event of data.latest5) line('event', `${event.ts} ${event.kind} ${event.from}→${event.to}`);
+  if (data.recent5?.length) {
+    // Decision lines are local wall-clock (machine mode keeps ISO); each row
+    // shows why, and the per-filter audit rides along.
+    for (const decision of data.recent5) {
+      line(
+        'decision',
+        `${store.time.formatLocalTimestamp(Date.parse(decision.ts))} session ${decision.sessionId} ` +
+          `accepted=${decision.accepted ? 1 : 0} dry=${decision.dryRun ? 1 : 0} ${decision.reason}`
+      );
+      if (decision.detail) console.log(`      ${decision.detail}`);
+      if (decision.filters) console.log(`      filters: ${decision.filters}`);
+    }
+  }
   if (data.total !== undefined) {
     line('sessions', `${data.total} total, ${data.open} open, ${data.closed} closed`);
     line('avg energy / efficiency / elapsed', `${data.avgEnergyKwh ?? '—'} kWh / ${data.avgEfficiency ?? '—'} / ${data.avgElapsedMs ?? '—'} ms`);
