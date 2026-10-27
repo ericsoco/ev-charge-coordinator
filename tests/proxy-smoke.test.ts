@@ -204,6 +204,29 @@ suite('proxy security smoke (Phase 3)', () => {
     expect(body.error).toContain('Not authenticated');
   }, 15_000);
 
+  it('suppresses only the known flaky-upstream TypeErrors (traceback policy)', () => {
+    // Both live NoneType signatures (subscriptable / container) are the same
+    // upstream null-data condition; anything else keeps its traceback.
+    const result = spawnSync(
+      VENV_PYTHON,
+      [
+        '-c',
+        [
+          "import sys; sys.path.insert(0, 'python')",
+          'import franklin_proxy as m',
+          `assert m._known_flaky_upstream(TypeError("'NoneType' object is not subscriptable"))`,
+          `assert m._known_flaky_upstream(TypeError("argument of type 'NoneType' object is not a container or iterable"))`,
+          `assert not m._known_flaky_upstream(TypeError('some other problem'))`,
+          `assert not m._known_flaky_upstream(ValueError("'NoneType' object is not subscriptable"))`,
+          `print('ok')`,
+        ].join('\n'),
+      ],
+      { encoding: 'utf8', cwd: PROJECT_ROOT, env: { ...process.env, FRANKLIN_PROXY_TOKEN: 'import-only' } }
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('ok');
+  });
+
   it('refuses to boot without FRANKLIN_PROXY_TOKEN', async () => {
     const child = spawnProxy({ FRANKLIN_PROXY_TOKEN: undefined, FRANKLIN_PROXY_PORT: '3402' });
     const code = await waitForExit(child.child, 15_000);
