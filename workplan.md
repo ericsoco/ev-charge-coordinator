@@ -51,8 +51,8 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 5.1 — ops hardening complete (2026-10-25, four commits on
-> `p1b/step5-1-ops-fixes`); next: Step 6 — notifiers.**
+> Status: **Step 5.2 — decision diagnostics complete (2026-10-25/26, four commits on
+> `p1b/step5-2-decision-diagnostics`); next: Step 6 — notifiers.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -1459,4 +1459,42 @@ skipped**, 49 files).
 
 - Next: Step 6 — notifiers (`Notifier` interface + log-only/ntfy/Slack, typed events,
   credential-store secrets, failure isolation) — branch `p1b/step6-notifiers`.
+
+
+### 2026-10-26 — P1b step 5.2 complete: decision diagnostics (4 commits)
+
+Branch `p1b/step5-2-decision-diagnostics`, gate green after every commit (final: **674
+passed / 2 skipped**). Triggered by the live session-8 row (`service_error … complete
+(charging has already completed)`) and three user questions:
+
+1. **Why the limit ≈ SoC (answer, not a bug):** battery 27% − 20% buffer × 13.5 kWh × 0.9
+   ≈ **0.85 kWh** = +1.1% on a 75 kWh pack — the math raised the limit, by a
+   rounding tick (`67 > 66`, `limitedBy: none` all correct). Commit `b3e4044`:
+   - **Engine guard `targetPercent <= evSoc → decline `insufficient_energy``** — the
+     engine had never inherited `chargeFromBattery`'s refusal; migration 003 (CHECK
+     rebuild) + union + tests (tie, full pack, merge-dark). Zero vehicle commands; the
+     limit is not set either. Populated-v1→v3 smoke: row survived, new code accepted.
+   - Outcome details now carry the math: `charge limit 51% (none) — 8.5 kWh above 20% buffer`.
+2. **The start race** (`791347d`): set-then-start raced the controller — `charge_start`
+   answered `complete` from the pre-raise state. Consumer now: post-limit status read
+   (paces the start; `isCharging` = auto-resumed → `started` with a note, no redundant
+   command) + one complete-rejection retry after 2.5 s (matches proxy and Fleet message
+   shapes); a second failure stays honest `service_error`. New deps `getStatus` /
+   `startRetryDelayMs`; three fake-driven tests. *Live validation item.*
+3. **Debugging tools** (`cc30b83`): `npm run store` decisions section = recent-5 with
+   **local wall-clock** lines (ISO in `--json`), accepted/dry flags, reason, full
+   `reason_detail`, per-filter audit JSON. Verified against the live store — sessions
+   5–9 tell the whole story (radiusM:1 decline, dark dry_run, pre-tap 412, the session-8
+   race, an `already_charging` decline).
+4. **Franklin tracebacks** (`ad5adb2`): the trace is the retry-exhausted path only
+   (attempts 1–2 print single lines; the final re-raise hits
+   `handle_franklin_errors.print_exc` — the captured `line 161, in decorated` proves
+   it); the second NoneType TypeError shares the path and simply never exhausts.
+   `handle_franklin_errors` now suppresses the trace for `_known_flaky_upstream`
+   (TypeError + NoneType + subscriptable|container — both live signatures) with one
+   compact line; anything else keeps its traceback. Pinned via venv `python -c`
+   asserts + py_compile.
+
+- Next: Step 6 — notifiers — branch `p1b/step6-notifiers`. Deploy note: after landing,
+  upgrade with `evcc daemon install` (it rebuilds; plain `restart` does not).
 
