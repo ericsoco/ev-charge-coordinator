@@ -12,6 +12,7 @@ import * as decisionStore from '../../src/store/DecisionStore.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import { createDecisionConsumer, type DecisionConsumerDeps } from '../../src/daemon/decisionConsumer.js';
 import type { VehiclePlugInContext } from '../../src/daemon/EvPoller.js';
+import type { EVStatus } from '../../src/types/ev.js';
 import type { EnergyConfig } from '../../src/utils/energy.js';
 
 const HOME = { latitude: 37.7749, longitude: -122.4194 };
@@ -40,16 +41,34 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+/** Post-limit status read: only isCharging matters to the start decision. */
+function evStatus(isCharging: boolean): EVStatus {
+  return {
+    vin: 'VIN',
+    displayName: 'Test',
+    state: 'online',
+    battery: {
+      soc: 51,
+      chargeLimit: 67,
+      isCharging,
+      chargingState: isCharging ? 'Charging' : 'Stopped',
+      chargeEnergyAdded: 0,
+    },
+  };
+}
+
 function consumer(overrides: Partial<DecisionConsumerDeps> = {}) {
   return createDecisionConsumer({
     db,
     getVehicleLocation: async () => ({ ...HOME }),
     getHomeLocation: async () => ({ ...HOME }),
+    getStatus: async () => evStatus(false),
     vehicleId: 'VIN',
     homeBatteryId: 'GW',
     // Shipped default: merge dark. Live-actuation tests override enabled: true.
     autoStart: { enabled: false, filters: [{ type: 'geofence', radiusM: 100 }] },
     dryRun: false,
+    startRetryDelayMs: 1,
     chargeCommands: {
       setChargeLimit: async (percent) => {
         commandCalls.push(`setChargeLimit:${percent}`);
@@ -226,6 +245,60 @@ describe('actuation (live mode only)', () => {
     });
     expect(row.reasonDetail).toContain('not charging');
     expect(row.reasonDetail).toContain('51%');
+  });
+
+  it('an auto-resumed car skips the start command (post-limit status read)', async () => {
+    await consumer({ ...LIVE, getStatus: async () => evStatus(true) })(CTX);
+    expect(commandCalls).toEqual(['setChargeLimit:51']);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonCode).toBe('started');
+    expect(row.reasonDetail).toContain('auto-resumed');
+  });
+
+  it('a complete-rejection race retries the start once and succeeds', async () => {
+    let starts = 0;
+    const decide = consumer({
+      ...LIVE,
+      chargeCommands: {
+        setChargeLimit: async (percent) => {
+          commandCalls.push(`setChargeLimit:${percent}`);
+        },
+        startCharging: async () => {
+          commandCalls.push('startCharging');
+          starts += 1;
+          if (starts < 2) {
+            throw new Error(
+              'Vehicle rejected the command: car could not execute command: complete (charging has already completed)'
+            );
+          }
+        },
+      },
+    });
+    await decide(CTX);
+    expect(commandCalls).toEqual(['setChargeLimit:51', 'startCharging', 'startCharging']);
+    expect(decisionStore.decisionForSession(db, 7)!.reasonCode).toBe('started');
+  });
+
+  it('a persistent complete-rejection stays an honest service_error', async () => {
+    const decide = consumer({
+      ...LIVE,
+      chargeCommands: {
+        setChargeLimit: async (percent) => {
+          commandCalls.push(`setChargeLimit:${percent}`);
+        },
+        startCharging: async () => {
+          commandCalls.push('startCharging');
+          throw new Error(
+            'Vehicle rejected the command: car could not execute command: complete (charging has already completed)'
+          );
+        },
+      },
+    });
+    await decide(CTX);
+    expect(commandCalls).toEqual(['setChargeLimit:51', 'startCharging', 'startCharging']);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonCode).toBe('service_error');
+    expect(row.reasonDetail).toContain('complete');
   });
 });
 

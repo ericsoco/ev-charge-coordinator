@@ -9,7 +9,7 @@
  * the poll loop down.
  */
 import type { DatabaseSync } from 'node:sqlite';
-import type { VehicleLocation } from '../types/ev.js';
+import type { EVStatus, VehicleLocation } from '../types/ev.js';
 import type { HomeLocation } from '../utils/credentials.js';
 import type { AutoStartConfig } from '../utils/daemonConfig.js';
 import type { EnergyConfig } from '../utils/energy.js';
@@ -24,6 +24,11 @@ export interface DecisionConsumerDeps {
   /** Decision-time fix (Option B): read-only, never wakes; failure declines. */
   getVehicleLocation: () => Promise<VehicleLocation>;
   getHomeLocation: () => Promise<HomeLocation | undefined>;
+  /**
+   * Post-limit state read (paces the start; an auto-resume means the raise
+   * already did the work). Same non-waking probe the poller uses.
+   */
+  getStatus: () => Promise<EVStatus>;
   vehicleId: string;
   homeBatteryId: string;
   autoStart: AutoStartConfig;
@@ -41,9 +46,21 @@ export interface DecisionConsumerDeps {
     setChargeLimit: (percent: number) => Promise<void>;
     startCharging: () => Promise<void>;
   };
+  /** Delay before the single complete-rejection retry; tests pass 1. */
+  startRetryDelayMs?: number;
   /** Injectable so tests avoid config files; default reads energy config.json. */
   getEnergyConfig?: () => EnergyConfig | null;
   log?: (message: string) => void;
+}
+
+/** Delay before retrying a start the car answered with the OLD limit's state. */
+const START_RETRY_DELAY_MS = 2_500;
+
+/** The raise→start race: the car rejects charge_start from the pre-raise state. */
+function isCompleteRejection(error: unknown): boolean {
+  return (
+    error instanceof Error && /(?:rejected the command|execute command):\s*complete\b/.test(error.message)
+  );
 }
 
 /**
@@ -101,9 +118,30 @@ export function createDecisionConsumer(
       // computed target kept as context.
       let recorded = outcome;
       if (outcome.accepted && outcome.targetPercent !== null) {
+        const target = outcome.targetPercent;
         try {
-          await deps.chargeCommands.setChargeLimit(outcome.targetPercent);
-          await deps.chargeCommands.startCharging();
+          await deps.chargeCommands.setChargeLimit(target);
+          // The car needs a beat to apply a raised limit: one status read
+          // paces the start, and an auto-resume means the work is done.
+          const status = await deps.getStatus();
+          if (status.battery.isCharging) {
+            recorded = {
+              ...outcome,
+              reasonDetail: `${outcome.reasonDetail ?? 'decision accepted'} — auto-resumed after the limit raise (no start command needed)`,
+            };
+          } else {
+            try {
+              await deps.chargeCommands.startCharging();
+            } catch (error) {
+              if (!isCompleteRejection(error)) throw error;
+              // The controller still answered from the OLD limit (state
+              // Complete). One retry after a beat; a second failure is honest.
+              await new Promise((resolve) =>
+                setTimeout(resolve, deps.startRetryDelayMs ?? START_RETRY_DELAY_MS)
+              );
+              await deps.chargeCommands.startCharging();
+            }
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           recorded = {
