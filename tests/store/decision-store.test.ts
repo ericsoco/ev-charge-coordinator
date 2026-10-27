@@ -95,6 +95,11 @@ describe('insertDecision / decisionForSession', () => {
     expect(decisions.decisionForSession(db, 7)?.reasonCode).toBe('filter_declined');
   });
 
+  it('accepts the insufficient_energy verdict (migration 003)', () => {
+    decisions.insertDecision(db, { ...BASE, reasonCode: 'insufficient_energy' });
+    expect(decisions.decisionForSession(db, 7)?.reasonCode).toBe('insufficient_energy');
+  });
+
   it('rejects a reason_code outside the CHECK', () => {
     const bad = { ...BASE, reasonCode: 'not_a_reason' } as unknown as NewDecision;
     expect(() => decisions.insertDecision(db, bad)).toThrow(/CHECK constraint/i);

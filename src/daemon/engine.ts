@@ -124,12 +124,18 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
     );
   }
 
+  if (input.evSocPercent === null) {
+    return declined(
+      'compute_error',
+      'EV SoC unreadable — cannot compute a charge limit',
+      chain.results
+    );
+  }
+  const evSoc = input.evSocPercent;
+
   let limit: EnergyChargeLimit;
   try {
-    if (input.evSocPercent === null) {
-      throw new Error('EV SoC unreadable — cannot compute a charge limit');
-    }
-    limit = computeChargeLimit(input.evSocPercent, batterySoc, cfg);
+    limit = computeChargeLimit(evSoc, batterySoc, cfg);
   } catch (error) {
     return declined(
       'compute_error',
@@ -138,15 +144,29 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
     );
   }
 
+  // Integer SoC is where the car's own controller decides: a limit at or
+  // below it raises nothing (the CLI refuses the same case with its kWh
+  // breakdown) — decline without touching the vehicle.
+  if (limit.targetPercent <= evSoc) {
+    return declined(
+      'insufficient_energy',
+      `energy math cannot raise the limit above the EV's current ${evSoc}% ` +
+        `(target ${limit.targetPercent}%, ` +
+        `${limit.batteryAvailableKwh.toFixed(1)} kWh above ${cfg.bufferPercent}% buffer)`,
+      chain.results
+    );
+  }
+
   const accepted = !dryRun;
   const why = input.autoStart.enabled ? 'dry-run mode' : 'autoStart disabled';
+  const math =
+    `charge limit ${limit.targetPercent}% (${limit.limitedBy}) — ` +
+    `${limit.batteryAvailableKwh.toFixed(1)} kWh above ${cfg.bufferPercent}% buffer`;
   return {
     accepted,
     dryRun,
     reasonCode: accepted ? 'started' : 'dry_run',
-    reasonDetail: accepted
-      ? `starting: charge limit ${limit.targetPercent}% (${limit.limitedBy})`
-      : `would start (${why}): charge limit ${limit.targetPercent}% (${limit.limitedBy})`,
+    reasonDetail: accepted ? `starting: ${math}` : `would start (${why}): ${math}`,
     filterResults: chain.results,
     limitedBy: limit.limitedBy,
     targetPercent: limit.targetPercent,
