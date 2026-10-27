@@ -176,7 +176,8 @@ export type DecisionReasonCode =
   | 'compute_error'
   | 'service_error'
   | 'filter_declined'
-  | 'config_error';
+  | 'config_error'
+  | 'insufficient_energy';
 
 export interface DecisionRow {
   id: number;

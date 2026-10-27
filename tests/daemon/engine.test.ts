@@ -129,6 +129,45 @@ describe('filters → compute', () => {
       limitedBy: 'none',
     });
     expect(outcome.reasonDetail).toContain('51%');
+    // The row must explain the math (why 51?) without a second query.
+    expect(outcome.reasonDetail).toContain('kWh above 20% buffer');
+  });
+
+  it('a no-gain tie declines insufficient_energy without touching the vehicle', () => {
+    // Battery 21% → 0.1 kWh above the 20% buffer cannot move integer 67.
+    const outcome = evaluateDecision(
+      input({ evSocPercent: 67, homeBatterySocPercent: 21 })
+    );
+    expect(outcome).toMatchObject({
+      accepted: false,
+      reasonCode: 'insufficient_energy',
+      targetPercent: null,
+    });
+    expect(outcome.reasonDetail).toContain("current 67%");
+    expect(outcome.reasonDetail).toContain('kWh above 20% buffer');
+    // Filters still ran and stay in the audit.
+    expect(outcome.filterResults).toHaveLength(1);
+  });
+
+  it('a full pack declines insufficient_energy (nothing left to raise)', () => {
+    const outcome = evaluateDecision(input({ evSocPercent: 100 }));
+    expect(outcome.reasonCode).toBe('insufficient_energy');
+    expect(outcome.reasonDetail).toContain('current 100%');
+  });
+
+  it('merge dark: the no-gain decline still records the mode', () => {
+    const outcome = evaluateDecision(
+      input({
+        evSocPercent: 67,
+        homeBatterySocPercent: 21,
+        autoStart: { enabled: false, filters: [] },
+      })
+    );
+    expect(outcome).toMatchObject({
+      accepted: false,
+      dryRun: true,
+      reasonCode: 'insufficient_energy',
+    });
   });
 });
 
