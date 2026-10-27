@@ -153,6 +153,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
       homeBatteryId,
       autoStart: options.config.autoStart,
       dryRun: options.dryRun ?? false,
+      getStatus: () => tesla.getStatus(),
       chargeCommands: {
         setChargeLimit: (percent) => tesla.setChargeLimit(percent),
         startCharging: () => tesla.startCharging(),
