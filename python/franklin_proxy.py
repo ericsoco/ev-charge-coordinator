@@ -121,6 +121,21 @@ def run_read(factory, attempts=3, delays=(0.5, 1.5)):
             )
 
 
+def _known_flaky_upstream(error):
+    """True for the null-data TypeErrors Franklin's cloud answers with.
+
+    Both signatures come from the same upstream condition (HTTP 200 with
+    result: null); run_read already retries them, and a final failure is
+    explained by the attempt lines, so the handler suppresses the traceback.
+    """
+    message = str(error)
+    return (
+        isinstance(error, TypeError)
+        and "NoneType" in message
+        and ("subscriptable" in message or "container" in message)
+    )
+
+
 def require_client(f):
     """Decorator to ensure client is initialized before handling request."""
     @wraps(f)
@@ -173,7 +188,17 @@ def handle_franklin_errors(f):
             # reaches stderr and a 500 is undiagnosable after the fact. Node
             # forwards stderr live as [proxy] lines, so this is what makes the
             # failure visible from the CLI. `details` in the body only has str(e).
-            traceback.print_exc(file=sys.stderr)
+            if _known_flaky_upstream(e):
+                # Known upstream null-data flakiness (run_read already retried):
+                # the traceback repeats what the attempt lines proved and wrecks
+                # the daemon log. One compact line instead.
+                print(
+                    f"franklinwh gave up: {type(e).__name__}: {str(e) or 'no message'} "
+                    "(known flaky upstream - traceback suppressed)",
+                    file=sys.stderr,
+                )
+            else:
+                traceback.print_exc(file=sys.stderr)
             # httpx timeouts carry no message; `details: ""` would reach the
             # CLI as a bare 'HTTP 500 - Internal error' with nothing saying
             # which class of call failed. Fall back to the exception type.
