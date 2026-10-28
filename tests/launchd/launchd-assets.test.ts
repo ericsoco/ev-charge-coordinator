@@ -81,6 +81,13 @@ describe('evcc-daemon-launcher.sh template', () => {
     const found = tpl.match(/__[A-Z_]+__/g) ?? [];
     expect(new Set(found)).toEqual(new Set(['__REPO_DIR__'])); // repo dir is the only substitution
   });
+
+  it('holds PreventSystemSleep via caffeinate on AC (lid-closed polling)', () => {
+    const tpl = fs.readFileSync(LAUNCHER_TEMPLATE, 'utf8');
+    expect(tpl).toContain('caffeinate -s');
+    // The plain exec remains as the fallback for machines without caffeinate.
+    expect(tpl).toMatch(/^exec "\$NODE_BIN" "\$REPO_DIR\/dist\/index\.js" daemon$/m);
+  });
 });
 
 describe('install-daemon.sh --dry-run', () => {
