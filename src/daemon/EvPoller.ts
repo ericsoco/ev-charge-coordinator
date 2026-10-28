@@ -179,6 +179,16 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
       });
       lastRichSampleMs = tsMs;
 
+      // Session progress on every rich read while charging — the line people
+      // watch. Session-independent on purpose: a daemon restart mid-session
+      // (no open session row) still reports.
+      if (battery.chargingState === 'Charging') {
+        const parts = [`${battery.soc}% / limit ${battery.chargeLimit}%`];
+        if (battery.chargeRate !== undefined) parts.push(`${battery.chargeRate} kW`);
+        if (battery.chargeEnergyAdded !== undefined) parts.push(`+${battery.chargeEnergyAdded} kWh`);
+        log(`[ev-poll] charging ${parts.join(' · ')}`);
+      }
+
       for (const event of detectTransitions(lastChargingState, battery.chargingState)) {
         sessionStore.insertEvent(deps.db, {
           vehicleId: deps.vehicleId,
