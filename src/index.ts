@@ -60,7 +60,7 @@ import {
   strayParentFlagProblem,
   type LifecycleResult,
 } from './commands/daemonLifecycle.js';
-import { formatLocalTimestamp } from './utils/time.js';
+import { formatLocalTimestamp, installConsoleTimestamps } from './utils/time.js';
 import {
   chargeFromBattery,
   getBatterySoc,
@@ -1051,6 +1051,10 @@ const daemonCommand = program
   .option('--dry-run', 'Evaluate and record decisions without actuating (forces dry-run mode)')
   .option('--debug', 'Print full stack traces for startup failures')
   .action(async (cliOptions) => {
+    // One timestamp format across daemon.log and daemon.err.log — every line
+    // this process emits ([proxy], wake notices, sampler lines) is stamped
+    // from here. Event times inside messages are data and stay as they are.
+    installConsoleTimestamps();
     // Single source of truth: the file exists after the first daemon start.
     const ensured = ensureDaemonConfigFile();
     if (ensured === 'created') {

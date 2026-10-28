@@ -1,9 +1,11 @@
 /**
  * formatLocalTimestamp: local wall-clock YYYY-MM-DD HH:MM:SS, TZ-agnostic by
  * construction (rebuilt from the same local getters on both sides).
+ * installConsoleTimestamps: the daemon process's log-line prefix.
  */
 import { describe, expect, it } from 'vitest';
-import { formatLocalTimestamp } from '../../src/utils/time.js';
+import { format } from 'node:util';
+import { formatLocalTimestamp, installConsoleTimestamps } from '../../src/utils/time.js';
 
 describe('formatLocalTimestamp', () => {
   const ms = Date.UTC(2026, 9, 25, 14, 30, 45);
@@ -24,3 +26,26 @@ describe('formatLocalTimestamp', () => {
     expect(rendered).not.toMatch(/Z$/);
   });
 });
+
+describe('installConsoleTimestamps', () => {
+  it('prefixes every line, keeping console argument formatting', () => {
+    const instant = Date.UTC(2026, 9, 28, 2, 3, 4);
+    const stamp = formatLocalTimestamp(instant);
+    const captured: string[] = [];
+    const savedLog = console.log;
+    const savedError = console.error;
+    try {
+      console.log = (...args: unknown[]) => {
+        captured.push(format(...args));
+      };
+      installConsoleTimestamps(() => instant);
+      console.log('tick %d\nnext line', 7);
+    } finally {
+      console.log = savedLog;
+      console.error = savedError;
+    }
+    // Multiline output is stamped per line; %d follows console semantics.
+    expect(captured).toEqual([`${stamp} tick 7`, `${stamp} next line`]);
+  });
+});
+
