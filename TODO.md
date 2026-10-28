@@ -44,3 +44,6 @@ TASKS / BUGS
         Very bloated now, can individual commands be moved out?
         How are REPL + one-shot / Commander kept in sync?
 [ ] Expose common commands in package.json to run via `npm run x`
+[X] Daemon logging
+    [X] should show charging progress on every poll during a session
+    [X] should start every log with a timestamp first, formatted the same for all logs
