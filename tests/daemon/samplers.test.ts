@@ -382,6 +382,54 @@ describe('EvPoller', () => {
     expect(sessionStore.recentSessions(db, 5)).toHaveLength(1);
   });
 
+  it('logs charging progress on every rich read while charging', async () => {
+    const lines: string[] = [];
+    const ev = fakeEv();
+    ev.status = {
+      ...ev.status,
+      battery: {
+        ...ev.status.battery,
+        chargingState: 'Charging',
+        chargeRate: 11.8,
+        chargeEnergyAdded: 2.4,
+      },
+    };
+    const task = poller(ev, () => 1_000, 0, (message) => lines.push(message));
+
+    await task.run(); // seed rich read while charging
+    expect(lines.filter((message) => message.includes('charging'))).toEqual([
+      '[ev-poll] charging 50% / limit 80% · 11.8 kW · +2.4 kWh',
+    ]);
+
+    await task.run(); // next tick: another progress line
+    expect(lines.filter((message) => message.includes('[ev-poll] charging'))).toHaveLength(2);
+  });
+
+  it('omits optional segments the car omits, and stays quiet when not charging', async () => {
+    const lines: string[] = [];
+    const ev = fakeEv();
+    ev.status = {
+      ...ev.status,
+      battery: {
+        ...ev.status.battery,
+        chargingState: 'Charging',
+        chargeRate: undefined,
+        chargeEnergyAdded: undefined,
+      }, // the car omits both
+    };
+    const task = poller(ev, () => 1_000, 0, (message) => lines.push(message));
+    await task.run();
+    expect(lines.filter((message) => message.includes('[ev-poll] charging'))).toEqual([
+      '[ev-poll] charging 50% / limit 80%',
+    ]);
+
+    const quiet = fakeEv('Disconnected'); // default: Stopped-ish, not charging
+    quiet.status = { ...quiet.status, battery: { ...quiet.status.battery, chargingState: 'Stopped' } };
+    const quietLines: string[] = [];
+    await poller(quiet, () => 1_000, 0, (message) => quietLines.push(message)).run();
+    expect(quietLines.filter((message) => message.includes('charging'))).toEqual([]);
+  });
+
   it('heartbeats while the vehicle sleeps — first observation, then hourly', async () => {
     let now = 2_000_000;
     const lines: string[] = [];
