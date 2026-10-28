@@ -247,13 +247,25 @@ export async function runDaemonOnce(options: RunDaemonOptions): Promise<DaemonOu
   const nowMs = options.nowMs ?? Date.now;
   const prepared = await prepare({ ...options, log });
   try {
-    const scheduler = createScheduler(prepared.tasks, (task, error) => {
-      // runOnce collects errors itself; this guards against anything escaping
-      // the collector. Kept identical to the continuous handler.
-      (options.errorLog ?? console.error)(
-        `[daemon] ${task.name}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    });
+    const scheduler = createScheduler(
+      prepared.tasks,
+      (task, error) => {
+        // runOnce collects errors itself; this guards against anything escaping
+        // the collector. Kept identical to the continuous handler.
+        (options.errorLog ?? console.error)(
+          `[daemon] ${task.name}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      },
+      {
+        onLate: (task, gapMs) => {
+          (options.errorLog ?? console.error)(
+            `[daemon] ${task.name} ran ${Math.round(gapMs / 60_000)}m late — ` +
+              'macOS suspended our timers (system sleep); events in that window were ' +
+              'missed (see README: keeping the Mac awake)'
+          );
+        },
+      }
+    );
     const taskResults = await scheduler.runOnce();
     const ok = Object.values(taskResults).every((result) => result === null);
     return { ok, taskResults };

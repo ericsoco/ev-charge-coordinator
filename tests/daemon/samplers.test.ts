@@ -236,14 +236,16 @@ describe('EvPoller', () => {
     ev.probe = 'asleep';
     const task = poller(ev, () => now, 300, (message) => lines.push(message));
 
-    await task.run(); // first probe establishes the baseline silently
-    expect(lines).toEqual([]);
+    await task.run(); // baseline probe — silent except the asleep heartbeat
+    expect(lines).toEqual([
+      '[ev-poll] vehicle asleep — waiting (poll-while-awake; wakes are observed, not triggered)',
+    ]);
     expect(ev.reads).toBe(0);
 
     ev.probe = 'online';
     now += 60_000;
     await task.run(); // transition logged, first rich read runs (seed)
-    expect(lines).toEqual(['[ev-poll] vehicle asleep → online']);
+    expect(lines.slice(1)).toEqual(['[ev-poll] vehicle asleep → online']);
     expect(ev.reads).toBe(1);
 
     now += 60_000;
@@ -260,8 +262,9 @@ describe('EvPoller', () => {
     ev.probe = 'asleep';
     now += 60_000;
     await task.run();
-    expect(lines).toHaveLength(3);
-    expect(lines[2]).toBe('[ev-poll] vehicle online → asleep');
+    expect(lines).toHaveLength(5);
+    expect(lines[3]).toBe('[ev-poll] vehicle online → asleep');
+    expect(lines[4]).toContain('waiting'); // heartbeat re-armed after the wake
     expect(ev.reads).toBe(1); // gating never reached the rich read
   });
 
@@ -377,6 +380,48 @@ describe('EvPoller', () => {
     await restarted.run(); // Stopped → Stopped: no duplicate plug_in
     expect(eventKinds()).toEqual(['plug_in']);
     expect(sessionStore.recentSessions(db, 5)).toHaveLength(1);
+  });
+
+  it('heartbeats while the vehicle sleeps — first observation, then hourly', async () => {
+    let now = 2_000_000;
+    const lines: string[] = [];
+    const ev = fakeEv();
+    ev.probe = 'asleep';
+    const task = poller(ev, () => now, 300, (message) => lines.push(message));
+
+    await task.run(); // baseline probe — heartbeat fires, nothing else
+    const heartbeats = () => lines.filter((message) => message.includes('waiting'));
+    expect(heartbeats()).toHaveLength(1);
+    expect(heartbeats()[0]).toContain('vehicle asleep');
+    expect(heartbeats()[0]).toContain('observed, not triggered');
+
+    now += 60_000;
+    await task.run(); // still asleep, within the hour: quiet
+    expect(heartbeats()).toHaveLength(1);
+
+    now += 3_600_000;
+    await task.run(); // hourly repeat
+    expect(heartbeats()).toHaveLength(2);
+  });
+
+  it('re-arms the heartbeat after the vehicle wakes', async () => {
+    let now = 3_000_000;
+    const lines: string[] = [];
+    const ev = fakeEv();
+    ev.probe = 'asleep';
+    const task = poller(ev, () => now, 300, (message) => lines.push(message));
+    const heartbeats = () => lines.filter((message) => message.includes('waiting'));
+
+    await task.run(); // heartbeat #1
+    expect(heartbeats()).toHaveLength(1);
+
+    ev.probe = 'online';
+    now += 60_000;
+    await task.run(); // wakes: transition + rich read
+    ev.probe = 'asleep';
+    now += 60_000;
+    await task.run(); // sleeps again: the next heartbeat is immediate
+    expect(heartbeats()).toHaveLength(2);
   });
 });
 

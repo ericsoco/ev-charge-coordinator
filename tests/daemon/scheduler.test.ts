@@ -183,3 +183,58 @@ describe('task validation', () => {
     ).toThrow(/unique/);
   });
 });
+
+describe('late-tick watchdog', () => {
+  it('reports a tick that starts far past cadence, at most once per hour', async () => {
+    let now = 1_000_000;
+    const late: { name: string; gapMs: number }[] = [];
+    const handle = createScheduler(
+      [{ name: 'tick', everyMs: 1000, run: () => {} }],
+      () => {},
+      {
+        nowMs: () => now,
+        onLate: (task, gapMs) => late.push({ name: task.name, gapMs }),
+      }
+    );
+    handle.start();
+    await vi.advanceTimersByTimeAsync(0); // first tick — no baseline yet
+    expect(late).toEqual([]);
+
+    now += 1000; // normal cadence — within threshold
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(late).toEqual([]);
+
+    // Simulated suspension: the next tick starts 60 minutes late.
+    const suspendedUntil = now + 3_600_000;
+    now = suspendedUntil;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(late).toEqual([{ name: 'tick', gapMs: 3_600_000 }]);
+
+    // Another suspension 30 min after the report — rate-limited, no repeat.
+    now += 1_800_000;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(late).toHaveLength(1);
+
+    // Past the hour since the last report — reported again.
+    now += 1_900_000;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(late).toHaveLength(2);
+    expect(late[1].name).toBe('tick');
+    expect(handle).toBeDefined();
+    await handle.stop();
+  });
+
+  it('runOnce never reports lateness (no cadence semantics)', async () => {
+    const late: unknown[] = [];
+    const handle = createScheduler(
+      [{ name: 'once', everyMs: 1000, run: () => {} }],
+      () => {},
+      { onLate: (task, gapMs) => late.push({ task, gapMs }) }
+    );
+    await handle.runOnce();
+    await handle.runOnce();
+    expect(late).toEqual([]);
+    await handle.stop();
+  });
+});
+
