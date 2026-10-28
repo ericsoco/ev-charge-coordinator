@@ -51,8 +51,8 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 5.2 — decision diagnostics complete (2026-10-25/26, four commits on
-> `p1b/step5-2-decision-diagnostics`); next: Step 6 — notifiers.**
+> Status: **Step 6.0 — daemon observability complete (2026-10-27, five commits on
+> `p1b/step6-0-daemon-observability`); next: Step 6 — notifiers.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -1497,4 +1497,37 @@ passed / 2 skipped**). Triggered by the live session-8 row (`service_error … c
 
 - Next: Step 6 — notifiers — branch `p1b/step6-notifiers`. Deploy note: after landing,
   upgrade with `evcc daemon install` (it rebuilds; plain `restart` does not).
+
+
+### 2026-10-27 — P1b step 6.0 complete: daemon observability (5 commits)
+
+Branch `p1b/step6-0-daemon-observability`, gate green after every commit (final: **681
+passed / 3 skipped**). Triggered by the missed 18:15 plug-in — root cause evidence-locked:
+`pmset -g log` shows Maintenance-Sleep cycles (17:56 +925 s; ~18:19 +~16 min) mapping
+1:1 onto the `/stats` gaps; the car woke on plug-in (touchscreen observed) but the
+daemon's timers were frozen, and a non-charging car re-sleeps within minutes. Polling
+itself was healthy (120 s exactly *while awake*); the `/stats` lines are the battery
+sampler — EV probes are silent while the car sleeps, which doubled the confusion.
+
+1. **`afb4228` keep-awake** — launcher execs through `caffeinate -s` (PreventSystemSleep;
+   AC-only assertion so battery behavior stays honest; covers lid-closed clamshell where
+   `sleep 0` does not) with plain-exec fallback; launchd-assets pin; README "Keeping the
+   Mac awake".
+2. **`e9b8dc6` timestamps** — `installConsoleTimestamps()` wraps console in the daemon
+   action: every line in daemon.log AND daemon.err.log prefixed with the same local
+   `YYYY-MM-DD HH:MM:SS` (per line; console arg semantics kept). The timestampless
+   `[daemon] task:` errors that made the 408 era unboundable are now bounded. Event
+   times inside messages stay (data, not the log clock).
+3. **`9ff5917` watchdog + heartbeat** — scheduler reports ticks starting > max(3×
+   interval, 60 s) past cadence (once per task per hour) with a "macOS suspended our
+   timers" hint; EvPoller heartbeats on the first non-online probe, hourly after, and
+   re-arms after each wake (`vehicle asleep — waiting (poll-while-awake; wakes are
+   observed, not triggered)`). Existing transition pins re-written for the heartbeat.
+4. **`32b2649` charging progress** — every rich read while `Charging` logs
+   `[ev-poll] charging 43% / limit 79% · 11.8 kW · +2.4 kWh` (optional segments omitted
+   when the car omits them; session-independent so a restart mid-session still reports).
+5. This entry.
+
+- Next: Step 6 — notifiers — branch `p1b/step6-notifiers`. Deploy: `evcc daemon install`
+  (rebuild + re-render the caffeinated launcher + bootstrap).
 
