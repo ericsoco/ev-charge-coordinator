@@ -24,6 +24,22 @@ export interface ScheduledTask {
 
 export type TaskErrorHandler = (task: ScheduledTask, error: unknown) => void;
 
+export interface SchedulerOptions {
+  /** Injectable clock (tests). */
+  nowMs?: () => number;
+  /**
+   * A tick that started far past its cadence — macOS suspending the process
+   * (system sleep) freezes timers, and events in that window are missed.
+   * Reported at most once per task per hour.
+   */
+  onLate?: (task: ScheduledTask, gapMs: number) => void;
+}
+
+/** Beyond this past-cadence gap a tick counts as suspended-timers lateness. */
+const LATE_MIN_GAP_MS = 60_000;
+/** Rate limit for onLate reports (one hint per task per hour). */
+const LATE_REPORT_INTERVAL_MS = 3_600_000;
+
 export interface SchedulerHandle {
   /** Register and start every task (immediate first tick, then cadence). */
   start(): void;
@@ -35,8 +51,10 @@ export interface SchedulerHandle {
 
 export function createScheduler(
   tasks: readonly ScheduledTask[],
-  onError: TaskErrorHandler
+  onError: TaskErrorHandler,
+  options: SchedulerOptions = {}
 ): SchedulerHandle {
+  const nowMs = options.nowMs ?? Date.now;
   const seen = new Set<string>();
   for (const task of tasks) {
     if (!Number.isFinite(task.everyMs) || task.everyMs <= 0) {
@@ -52,9 +70,22 @@ export function createScheduler(
   const inFlight = new Set<Promise<void>>();
 
   const jobs: Job[] = tasks.map((task) => {
+    // Lateness bookkeeping: gap = time since this task's previous START.
+    let lastStartMs: number | null = null;
+    let lastLateReportedMs = 0;
     // Wrap so sync throws become rejections (toad's AsyncTask then routes
     // them to the error callback) and every tick is tracked for drain-on-stop.
     const handler = (): Promise<void> => {
+      const startedAt = nowMs();
+      if (lastStartMs !== null) {
+        const gap = startedAt - lastStartMs;
+        const threshold = Math.max(task.everyMs * 3, LATE_MIN_GAP_MS);
+        if (gap > threshold && startedAt - lastLateReportedMs >= LATE_REPORT_INTERVAL_MS) {
+          lastLateReportedMs = startedAt;
+          options.onLate?.(task, gap);
+        }
+      }
+      lastStartMs = startedAt;
       const tick = Promise.resolve().then(() => task.run());
       const settled = tick.then(
         () => undefined,

@@ -57,6 +57,9 @@ export interface VehiclePlugInContext {
   evSocPercent: number | null;
 }
 
+/** First asleep observation, then hourly — silence stays explicable. */
+const ASLEEP_HEARTBEAT_MS = 3_600_000;
+
 export interface EvPollerDeps {
   db: DatabaseSync;
   /** Only these two reads are used; tests pass fakes. */
@@ -89,6 +92,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
   // transition against a stale seed would be noise, not information.
   let lastProbeState: string | null = null;
   let lastDueLoggedAt: number | null = null;
+  let lastAsleepHeartbeatMs: number | null = null;
 
   function finalize(sessionId: number, plugTsMs: number, unplugTsMs: number): void {
     sessionStore.finalizeSession(
@@ -112,7 +116,24 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         log(`[ev-poll] vehicle ${lastProbeState} → ${vehicle.state}`);
       }
       lastProbeState = vehicle.state;
-      if (vehicle.state !== 'online') return; // probe-only tick: no rich read, no wake
+      if (vehicle.state !== 'online') {
+        // Liveness while silent: first observation, then hourly, so an empty
+        // log is explicable — poll-while-awake observes wakes; it never
+        // triggers one.
+        const probeNow = nowMs();
+        if (
+          lastAsleepHeartbeatMs === null ||
+          probeNow - lastAsleepHeartbeatMs >= ASLEEP_HEARTBEAT_MS
+        ) {
+          lastAsleepHeartbeatMs = probeNow;
+          log(
+            `[ev-poll] vehicle ${vehicle.state} — waiting (poll-while-awake; ` +
+              'wakes are observed, not triggered)'
+          );
+        }
+        return; // probe-only tick: no rich read, no wake
+      }
+      lastAsleepHeartbeatMs = null;
 
       const plugged = lastChargingState !== null && lastChargingState !== 'Disconnected';
       const now = nowMs();
