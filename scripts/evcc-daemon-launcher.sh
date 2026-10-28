@@ -25,4 +25,11 @@ if [ -z "$NODE_BIN" ]; then
   exit 1
 fi
 
+# Hold PreventSystemSleep while the daemon runs — meaningful on AC power
+# (macOS ignores the assertion on battery, so a laptop still sleeps there).
+# Without it a lid-closed Mac naps in Maintenance-Sleep cycles and any
+# vehicle wake between polls is invisible (see README: keeping the Mac awake).
+if [ -x /usr/bin/caffeinate ]; then
+  exec /usr/bin/caffeinate -s "$NODE_BIN" "$REPO_DIR/dist/index.js" daemon
+fi
 exec "$NODE_BIN" "$REPO_DIR/dist/index.js" daemon

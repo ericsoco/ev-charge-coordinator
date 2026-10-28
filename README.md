@@ -377,6 +377,24 @@ Why an agent and not a LaunchDaemon: agents run inside your login session,
 which login-keychain access (`@napi-rs/keyring`) requires — a LaunchDaemon
 starts as root before login, where the keychain session does not exist.
 
+### Keeping the Mac awake
+
+A daemon that watches for vehicle plug-ins must itself be awake: when macOS
+suspends the agent, every poll freezes, and a car that wakes on plug-in
+(then re-sleeps if charging does not begin) is invisible in that window.
+
+- The launcher wraps the daemon in `caffeinate -s` (PreventSystemSleep). The
+  assertion is honored **only on AC power** — on battery macOS ignores it and
+  the machine sleeps normally. Unlike `sleep 0`, it also covers the
+  lid-closed (clamshell) case.
+- Alternative / belt-and-suspenders: `sudo pmset -a sleep 0` — system-wide,
+  unlike the launcher's scoped assertion.
+- The log tells you what happened either way: `[ev-poll] vehicle asleep —
+  waiting…` heartbeats prove the daemon is alive while the car sleeps;
+  `[daemon] <task> ran Nm late` warns when timers were suspended anyway; and
+  `[ev-poll] charging …` lines track progress every rich read during a
+  charging session. All daemon log lines start with a local timestamp.
+
 Verify and operate (label `com.transmote.ev-charge-coordinator.daemon`):
 
 ```bash
