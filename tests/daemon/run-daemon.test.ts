@@ -33,6 +33,7 @@ const CONFIG: DaemonConfig = {
   evSampleIdleSec: 0,
   weatherFetchSec: 3600,
   retentionDays: 90,
+  notifiers: [{ type: 'log' }],
   autoStart: DEFAULT_DAEMON_CONFIG.autoStart,
 };
 const FAST: DaemonConfig = { ...CONFIG, batterySampleSec: 0.02 };

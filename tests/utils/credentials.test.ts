@@ -198,6 +198,55 @@ describe('CredentialStore - backend pinning', () => {
   });
 });
 
+describe('CredentialStore - notifier secrets (design §3.7)', () => {
+  it('round-trips ntfy topic + Slack webhook URL and starts unset', async () => {
+    const store = new mod.CredentialStore();
+    expect(await store.getNotifierSecrets()).toBeUndefined();
+
+    await store.setNtfyTopic('evcc-abc123');
+    await store.setSlackWebhookUrl('https://hooks.slack.com/services/T00/B00/xxx');
+    expect(await store.getNotifierSecrets()).toEqual({
+      ntfyTopic: 'evcc-abc123',
+      slackWebhookUrl: 'https://hooks.slack.com/services/T00/B00/xxx',
+    });
+
+    const fresh = new mod.CredentialStore();
+    expect(await fresh.getNotifierSecrets()).toEqual({
+      ntfyTopic: 'evcc-abc123',
+      slackWebhookUrl: 'https://hooks.slack.com/services/T00/B00/xxx',
+    });
+  });
+
+  it('merges partial updates (setting one secret keeps the other)', async () => {
+    const store = new mod.CredentialStore();
+    await store.setNtfyTopic('evcc-abc123');
+    await store.setSlackWebhookUrl('https://hooks.slack.com/services/T00/B00/xxx');
+    await store.setNtfyTopic('evcc-rotated');
+    expect(await store.getNotifierSecrets()).toEqual({
+      ntfyTopic: 'evcc-rotated',
+      slackWebhookUrl: 'https://hooks.slack.com/services/T00/B00/xxx',
+    });
+  });
+
+  it('rejects an empty topic and a non-URL webhook without storing anything', async () => {
+    const store = new mod.CredentialStore();
+    await expect(store.setNtfyTopic('   ')).rejects.toThrow('non-empty');
+    await expect(store.setSlackWebhookUrl('not-a-url')).rejects.toThrow('http(s) URL');
+    expect(await store.getNotifierSecrets()).toBeUndefined();
+  });
+
+  it('clears notifier secrets without touching other credentials', async () => {
+    const store = new mod.CredentialStore();
+    await store.setFranklinCredentials('user@example.com', 'hunter2', 'GW12345');
+    await store.setNtfyTopic('evcc-abc123');
+    await store.setSlackWebhookUrl('https://hooks.slack.com/services/T00/B00/xxx');
+
+    await store.clearNotifierSecrets();
+    expect(await store.getNotifierSecrets()).toBeUndefined();
+    expect((await store.getFranklinCredentials())?.gatewayId).toBe('GW12345');
+  });
+});
+
 describe('CredentialStore - module surface', () => {
   it('exports a ready-made singleton for the CLI to share', () => {
     expect(mod.credentialStore).toBeInstanceOf(mod.CredentialStore);

@@ -71,6 +71,14 @@ interface StoredCredentials {
     callbackPort?: number;
   };
   homeLocation?: HomeLocation;
+  /**
+   * Notifier secrets (design.md §3.7): ntfy topic + Slack webhook URL never
+   * live in config.json. Partial updates merge, like tesla.
+   */
+  notifiers?: {
+    ntfyTopic?: string;
+    slackWebhookUrl?: string;
+  };
 }
 
 /** The only keychain operations this module needs, backed by @napi-rs/keyring. */
@@ -358,6 +366,36 @@ export class CredentialStore {
     }
     await this.initialize();
     this.credentials.homeLocation = { latitude, longitude };
+    await this.save();
+  }
+
+  // Notifier secrets — design.md §3.7: topics/webhooks stay out of config.json.
+  async getNotifierSecrets(): Promise<StoredCredentials['notifiers']> {
+    await this.initialize();
+    return this.credentials.notifiers;
+  }
+
+  async setNtfyTopic(topic: string): Promise<void> {
+    if (typeof topic !== 'string' || topic.trim().length === 0) {
+      throw new Error('ntfy topic must be a non-empty string');
+    }
+    await this.initialize();
+    this.credentials.notifiers = { ...this.credentials.notifiers, ntfyTopic: topic };
+    await this.save();
+  }
+
+  async setSlackWebhookUrl(url: string): Promise<void> {
+    if (typeof url !== 'string' || !/^https?:\/\/\S+$/.test(url)) {
+      throw new Error('Slack webhook URL must be an http(s) URL');
+    }
+    await this.initialize();
+    this.credentials.notifiers = { ...this.credentials.notifiers, slackWebhookUrl: url };
+    await this.save();
+  }
+
+  async clearNotifierSecrets(): Promise<void> {
+    await this.initialize();
+    delete this.credentials.notifiers;
     await this.save();
   }
 
