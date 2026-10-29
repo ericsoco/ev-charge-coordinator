@@ -49,6 +49,7 @@ import {
   type CommandResult,
 } from './commands/context.js';
 import { pendingQuestion, prompt, promptNumeric, promptSecret, setReplReadline } from './commands/prompt.js';
+import { createNotifyCommand } from './commands/notify.js';
 import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from './commands/repl.js';
 import { selectAppCredentials } from './commands/authenticate.js';
 import { describeAxiosHttpError, probeClientCredentials } from './services/tesla/oauth.js';
@@ -1572,6 +1573,19 @@ async function runConfig(options: ConfigOptions): Promise<boolean> {
   console.log('');
   return true;
 }
+
+program.addCommand(
+  createNotifyCommand({
+    getNotifierEntries: () => resolveDaemonConfig().config?.notifiers ?? null,
+    getSecrets: () => credentialStore.getNotifierSecrets(),
+    setNtfyTopic: (topic) => credentialStore.setNtfyTopic(topic),
+    setSlackWebhookUrl: (url) => credentialStore.setSlackWebhookUrl(url),
+    clearNotifierSecrets: () => credentialStore.clearNotifierSecrets(),
+    promptSecret,
+    log: (message) => console.log(message),
+    nowMs: () => Date.now(),
+  })
+);
 
 program
   .command('config')

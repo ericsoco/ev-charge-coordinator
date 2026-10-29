@@ -48,7 +48,9 @@ export type NotificationEvent =
       tsMs: number;
       component: string;
       message: string;
-    };
+    }
+  /** `evcc notify test` — never produced by the daemon. */
+  | { type: 'test'; tsMs: number };
 
 /**
  * Design.md §3.7 — the pluggable surface. A client may reject; isolation is
