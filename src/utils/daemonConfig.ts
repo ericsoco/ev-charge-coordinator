@@ -8,7 +8,7 @@
  * readers that run before that first start see the same defaults in code. No
  * CLI setters — hand-edit afterwards; an *invalid* value is reported as a
  * problem and blocks the daemon — never clamped or guessed at. Secrets (home
- * location) never live here.
+ * location, notifier topics/webhook URLs) never live here.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -33,6 +33,20 @@ export interface AutoStartConfig {
   filters: DecisionFilterConfig[];
 }
 
+export type NotifierType = 'log' | 'ntfy' | 'slack';
+
+/**
+ * A configured notification client (design.md §3.7). Non-secret knobs only —
+ * ntfy topics and Slack webhook URLs live in the credential store.
+ */
+export interface NotifierConfigEntry {
+  type: NotifierType;
+  /** ntfy only: push priority. Default 'default'. */
+  priority?: 'default' | 'high';
+  /** ntfy only: self-hosted server URL. Default https://ntfy.sh. */
+  server?: string;
+}
+
 export interface DaemonConfig {
   /** Home-battery sample cadence, seconds. */
   batterySampleSec: number;
@@ -53,6 +67,11 @@ export interface DaemonConfig {
   retentionDays: number;
   /** Auto-start decision settings (nested block, validated field-by-field). */
   autoStart: AutoStartConfig;
+  /**
+   * Notification clients invoked for every typed event; all are called and
+   * failures are isolated. `[]` disables notifications entirely.
+   */
+  notifiers: NotifierConfigEntry[];
 }
 
 export const DEFAULT_DAEMON_CONFIG: Readonly<DaemonConfig> = Object.freeze<DaemonConfig>({
@@ -66,6 +85,7 @@ export const DEFAULT_DAEMON_CONFIG: Readonly<DaemonConfig> = Object.freeze<Daemo
     enabled: false,
     filters: [{ type: 'always' }],
   },
+  notifiers: [{ type: 'log' }],
 });
 
 /** Derived from the defaults so template and defaults cannot drift. */
@@ -166,8 +186,8 @@ function checkRange(min: number, max: number): (value: number) => string | null 
   };
 }
 
-/** Numeric tunables only — the nested `autoStart` block validates separately. */
-type NumericDaemonField = Exclude<keyof DaemonConfig, 'autoStart'>;
+/** Numeric tunables only — the nested `autoStart`/`notifiers` blocks validate separately. */
+type NumericDaemonField = Exclude<keyof DaemonConfig, 'autoStart' | 'notifiers'>;
 
 const FIELD_CHECKS: { [K in NumericDaemonField]: (value: number) => string | null } = {
   batterySampleSec: checkRange(10, 86_400),
@@ -179,7 +199,7 @@ const FIELD_CHECKS: { [K in NumericDaemonField]: (value: number) => string | nul
 };
 
 const FIELD_NAMES = Object.keys(DEFAULT_DAEMON_CONFIG).filter(
-  (name) => name !== 'autoStart'
+  (name) => name !== 'autoStart' && name !== 'notifiers'
 ) as NumericDaemonField[];
 
 function show(value: unknown): string {
@@ -192,11 +212,16 @@ function cloneAutoStart(source: AutoStartConfig): AutoStartConfig {
   return { ...source, filters: source.filters.map((filter) => ({ ...filter })) };
 }
 
+function cloneNotifiers(source: NotifierConfigEntry[]): NotifierConfigEntry[] {
+  return source.map((entry) => ({ ...entry }));
+}
+
 /** Fresh working copy — resolved configs never share references with defaults. */
 function defaultConfig(): DaemonConfig {
   return {
     ...DEFAULT_DAEMON_CONFIG,
     autoStart: cloneAutoStart(DEFAULT_DAEMON_CONFIG.autoStart),
+    notifiers: cloneNotifiers(DEFAULT_DAEMON_CONFIG.notifiers),
   };
 }
 
@@ -270,6 +295,66 @@ function resolveAutoStart(
   return { value, problems: [] };
 }
 
+const NOTIFIER_TYPES: readonly NotifierType[] = ['log', 'ntfy', 'slack'];
+const NTFTY_PRIORITIES = ['default', 'high'];
+
+/**
+ * Validate the `notifiers` array (design.md §3.7): one entry per configured
+ * client, arrays replaced wholesale like filters, ntfy knobs checked only for
+ * ntfy entries. Absent → the log-only default.
+ */
+function resolveNotifiers(
+  raw: unknown,
+  file: string
+): { value: NotifierConfigEntry[] | null; problems: string[] } {
+  const value = cloneNotifiers(DEFAULT_DAEMON_CONFIG.notifiers);
+  if (raw === undefined || raw === null) return { value, problems: [] };
+  if (!Array.isArray(raw)) {
+    return { value: null, problems: [`${file}: notifiers = ${show(raw)} (must be an array)`] };
+  }
+
+  const problems: string[] = [];
+  const entries: NotifierConfigEntry[] = [];
+  for (const [index, entry] of raw.entries()) {
+    const where = `${file}: notifiers[${index}]`;
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      problems.push(`${where} = ${show(entry)} (must be an object with a type)`);
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const type = record.type;
+    if (typeof type !== 'string' || !NOTIFIER_TYPES.includes(type as NotifierType)) {
+      problems.push(
+        `${where}.type = ${show(type)} (unknown notifier type; expected "log", "ntfy" or "slack")`
+      );
+      continue;
+    }
+    const resolved: NotifierConfigEntry = { type: type as NotifierType };
+    if (type === 'ntfy') {
+      const priority = record.priority;
+      if (priority !== undefined && priority !== null) {
+        if (typeof priority !== 'string' || !NTFTY_PRIORITIES.includes(priority)) {
+          problems.push(`${where}.priority = ${show(priority)} (expected "default" or "high")`);
+          continue;
+        }
+        resolved.priority = priority as 'default' | 'high';
+      }
+      const server = record.server;
+      if (server !== undefined && server !== null) {
+        if (typeof server !== 'string' || !/^https?:\/\/\S+$/.test(server)) {
+          problems.push(`${where}.server = ${show(server)} (must be an http(s) URL)`);
+          continue;
+        }
+        resolved.server = server;
+      }
+    }
+    entries.push(resolved);
+  }
+
+  if (problems.length > 0) return { value: null, problems };
+  return { value: entries, problems: [] };
+}
+
 export interface ResolvedDaemonConfig {
   /** Complete, defaults-merged config — null when anything is invalid. */
   config: DaemonConfig | null;
@@ -324,6 +409,10 @@ export function resolveDaemonConfig(file: string = daemonConfigPath()): Resolved
   const autoStart = resolveAutoStart(record.autoStart, file);
   problems.push(...autoStart.problems);
   if (autoStart.value !== null) config.autoStart = autoStart.value;
+
+  const notifiers = resolveNotifiers(record.notifiers, file);
+  problems.push(...notifiers.problems);
+  if (notifiers.value !== null) config.notifiers = notifiers.value;
 
   // Unknown keys are ignored (hand-edit tolerance), consistent with energy config.
   if (problems.length > 0) return { config: null, problems };

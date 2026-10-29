@@ -215,6 +215,93 @@ describe('autoStart block (P1b decision config)', () => {
   });
 });
 
+describe('notifiers block (P1b notifications, design §3.7)', () => {
+  it('defaults to log-only: visible but harmless', () => {
+    const resolved = resolveDaemonConfig(fixture());
+    expect(resolved.problems).toEqual([]);
+    expect(resolved.config?.notifiers).toEqual([{ type: 'log' }]);
+  });
+
+  it('carries the default in the template (a fresh file notifies to the log)', () => {
+    expect(JSON.parse(DAEMON_CONFIG_TEMPLATE).notifiers).toEqual([{ type: 'log' }]);
+  });
+
+  it('ntfy knobs resolve when present', () => {
+    const resolved = resolveDaemonConfig(
+      fixture(
+        '{"notifiers": [{"type": "ntfy", "priority": "high", "server": "https://ntfy.example.com"}]}'
+      )
+    );
+    expect(resolved.problems).toEqual([]);
+    expect(resolved.config?.notifiers).toEqual([
+      { type: 'ntfy', priority: 'high', server: 'https://ntfy.example.com' },
+    ]);
+  });
+
+  it('ntfy defaults (no priority/server) resolve to the bare entry', () => {
+    const resolved = resolveDaemonConfig(fixture('{"notifiers": [{"type": "ntfy"}]}'));
+    expect(resolved.config?.notifiers).toEqual([{ type: 'ntfy' }]);
+  });
+
+  it('an empty list is valid — notifications fully off', () => {
+    const resolved = resolveDaemonConfig(fixture('{"notifiers": []}'));
+    expect(resolved.problems).toEqual([]);
+    expect(resolved.config?.notifiers).toEqual([]);
+  });
+
+  it('a full list replaces the default wholesale (no element-merge)', () => {
+    const resolved = resolveDaemonConfig(fixture('{"notifiers": [{"type": "slack"}]}'));
+    expect(resolved.config?.notifiers).toEqual([{ type: 'slack' }]);
+  });
+
+  it('resolved config never shares references with the defaults', () => {
+    const first = resolveDaemonConfig(fixture()).config!.notifiers;
+    first.push({ type: 'slack' });
+    expect(DEFAULT_DAEMON_CONFIG.notifiers).toEqual([{ type: 'log' }]);
+    expect(resolveDaemonConfig(fixture()).config?.notifiers).toEqual([{ type: 'log' }]);
+  });
+
+  const invalids: [string, string, RegExp][] = [
+    ['a non-array notifiers', '{"notifiers": {"type": "log"}}', /must be an array/],
+    ['an unknown notifier type', '{"notifiers": [{"type": "pigeon"}]}', /unknown notifier type/],
+    ['a non-object entry', '{"notifiers": ["ntfy"]}', /must be an object with a type/],
+    [
+      'a bad ntfy priority',
+      '{"notifiers": [{"type": "ntfy", "priority": "urgent"}]}',
+      /expected "default" or "high"/,
+    ],
+    [
+      'a non-URL ntfy server',
+      '{"notifiers": [{"type": "ntfy", "server": "ntfy.sh"}]}',
+      /must be an http\(s\) URL/,
+    ],
+  ];
+  for (const [label, content, pattern] of invalids) {
+    it(`rejects ${label}`, () => {
+      const file = fixture(content);
+      const resolved = resolveDaemonConfig(file);
+      expect(resolved.config).toBeNull();
+      expect(resolved.problems).toHaveLength(1);
+      expect(resolved.problems[0]).toMatch(pattern);
+      expect(resolved.problems[0]).toContain(file);
+    });
+  }
+
+  it('reconcile fills a missing notifiers key into an existing file', () => {
+    const target = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-daemon-ensure-')),
+      'daemon-config.json'
+    );
+    dirs.push(path.dirname(target));
+    fs.writeFileSync(target, '{"evSampleIdleSec": 60}');
+
+    expect(ensureDaemonConfigFile(target)).toBe('updated');
+    const parsed = JSON.parse(fs.readFileSync(target, 'utf8'));
+    expect(parsed.notifiers).toEqual([{ type: 'log' }]);
+    expect(parsed.evSampleIdleSec).toBe(60);
+  });
+});
+
 describe('ensureDaemonConfigFile (daemon start only)', () => {
   function dir(): string {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-daemon-ensure-'));
