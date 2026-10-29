@@ -433,6 +433,37 @@ Caveats:
 - **Weather** collects only after `set-home-location` has stored the home
   location; **EV rows** accumulate only while the car is awake (by design).
 
+### Notifications (ntfy, Slack)
+
+The daemon reports its typed events through pluggable notifiers (design.md
+§3.7): a **log-only** client by default (lines in `daemon.log`), plus optional
+**ntfy** and **Slack** push clients. Config selects the list; every client is
+invoked and failures are isolated — a dead webhook never affects a decision or
+a sample.
+
+Events: vehicle plug-in detected, each decision (dry-run, accepted, or
+declined — including the battery-buffer interlock), charge start/stop, and
+service failures (throttled to one push per component per hour).
+
+```bash
+node dist/index.js notify set ntfy --topic my-topic        # secret → credential store (masked prompt without the flag)
+node dist/index.js notify set slack --webhook-url 'https://hooks.slack.com/…'
+node dist/index.js notify test                            # send a labeled test event to every configured client
+node dist/index.js notify clear                           # drop both secrets
+```
+
+Then enable the client in `daemon-config.json` — topics and webhook URLs never
+go here (they are secrets, stored in the credential store):
+
+```json
+"notifiers": [{ "type": "log" }, { "type": "ntfy", "priority": "high" }]
+```
+
+ntfy defaults to `https://ntfy.sh`; set `"server"` for a self-hosted instance.
+A configured client without its secret is skipped at boot with a loud log line
+naming the command that fixes it. Restart the daemon after config changes
+(`evcc daemon restart` re-reads the file).
+
 ## CLI Reference
 
 | Command | Description |
@@ -465,6 +496,9 @@ Caveats:
 | `config --set-efficiency <0-1>` | Set charge efficiency in `config.json` |
 | `config --set-buffer <percent>` | Set the battery buffer reserve, 0-100%, in `config.json` |
 | `pair-tesla-key [--domain <d>] [--vin <vin>] [--check-only] [--skip-registration] [--rotate-key]` | Register the virtual key with Tesla and print the vehicle pairing link |
+| `notify set <ntfy\|slack> [--topic <t>] [--webhook-url <u>]` | Store a notifier secret in the credential store (masked prompt when the flag is omitted) |
+| `notify clear` | Remove the stored ntfy topic and Slack webhook URL |
+| `notify test` | Send a labeled test event through every configured notifier (non-zero exit when nothing could be sent) |
 
 ### Interactive Mode Commands
 

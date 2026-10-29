@@ -51,8 +51,8 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 6.0 — daemon observability complete (2026-10-27, five commits on
-> `p1b/step6-0-daemon-observability`); next: Step 6 — notifiers.**
+> Status: **Step 6 — notifiers complete (2026-10-27, five commits on
+> `p1b/step6-notifiers`); next: Step 7 — surfaces + docs.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -106,7 +106,7 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
    ⇒ zero command calls; interlock-matrix tests. *(branch `p1b/step5-actuation` — complete)*
 6. **Notifiers** — `Notifier` interface + `log-only`/`ntfy`/Slack; typed events (decision,
    start/stop, interlock decline, service failures); secrets in credential store;
-   failure-isolation tests. *(branch `p1b/step6-notifiers`)*
+   failure-isolation tests. *(branch `p1b/step6-notifiers` — complete)*
 7. **Surfaces + docs** — store-report decisions section, `status` shows auto-start mode,
    README auto-start section, workplan. *(branch `p1b/step7-docs-surfaces`)*
 8. **Live validation** (user + car) — disabled-run decision rows → flip `enabled` → real
@@ -1530,4 +1530,44 @@ sampler — EV probes are silent while the car sleeps, which doubled the confusi
 
 - Next: Step 6 — notifiers — branch `p1b/step6-notifiers`. Deploy: `evcc daemon install`
   (rebuild + re-render the caffeinated launcher + bootstrap).
+
+
+### 2026-10-27 — P1b step 6 complete: notifiers (5 commits)
+
+Branch `p1b/step6-notifiers`, gate green after every commit (final: **746
+passed / 3 skipped**). Implements design.md §3.7 with the approved plan's four
+defaults: log-only is the default client, two events per plug-in in dark mode
+(plug-in-detected + decision-made) are intentional, unplug is not notified
+(the seam makes it free later), and charging-started/stopped is state truth
+(it fires for manual/REPL starts too).
+
+1. `10cfc95` — `src/notifiers/`: `NotificationEvent` union (plug-in-detected,
+   decision-made, charging-started/stopped, failure, + `test` for the CLI),
+   `Notifier` interface, single pure formatter (reason-shaped voices: ✅
+   started / 🧪 dry-run / ⛔ interlock / ❌ actuation-failed / ⚠ failure;
+   timestamp-free — push services stamp delivery, daemon.log stamps its own),
+   fanout that isolates every client failure by name and never rejects.
+2. `5806a20` — `DaemonConfig.notifiers` (log|ntfy|slack + ntfy priority/server
+   knobs; default `[{type:'log'}]`; arrays wholesale; fail-loud per-entry
+   problems; reconcile fills the key into existing files; the numeric-field
+   derivation now excludes both nested blocks) + `CredentialStore`
+   get/set/clear notifier secrets (merged partial updates, store-side
+   validation) — topics/webhooks never touch config.json.
+3. `08dbeb2` — ntfy client (POST `<server>/<topic>`, Title + Priority
+   headers, default ntfy.sh) + Slack client (POST `{"text"}`), both rejecting
+   on non-2xx; `buildNotifiers` skips a secretless client with a loud line
+   naming the fix; `evcc notify set|clear|test` (masked prompt when the flag
+   is omitted; test exits non-zero when nothing could be sent).
+4. `d14b544` — wiring: decisionConsumer emits decision-made after the row
+   (duplicate_session excepted — audit rows, not decisions); EvPoller emits
+   plug-in/charging start/stop where the events rows are written (unplug
+   silent); runDaemon builds the fanout (lazy secret read — log-only configs
+   never touch the credential store; `options.notifier` test override) and
+   both scheduler error handlers emit throttled failure events (first per
+   component, then hourly).
+5. This entry.
+
+- Isolation is layered: fanout catches per client → emit helpers catch per
+  site (logged) → daemon call sites belt-and-braces `.catch`.
+- Next: Step 7 — surfaces + docs — branch `p1b/step7-docs-surfaces`.
 
