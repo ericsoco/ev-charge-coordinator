@@ -121,6 +121,12 @@ describe('formatNotificationEvent', () => {
     ).toBe('⚠ battery-sample failed: Franklin 502');
   });
 
+  it('formats the CLI test event', () => {
+    expect(formatNotificationEvent({ type: 'test', tsMs: 1_000 })).toBe(
+      '🧪 evcc test notification — notifiers are wired'
+    );
+  });
+
   it('covers every event type exhaustively (compile-time) with one sample each', () => {
     const events: NotificationEvent[] = [
       { ...base, type: 'plug-in-detected', sessionId: 1, evSocPercent: null },

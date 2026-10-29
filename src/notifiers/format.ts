@@ -19,6 +19,8 @@ export function formatNotificationEvent(event: NotificationEvent): string {
       return `🛑 charging stopped (${soc(event.evSocPercent)})`;
     case 'failure':
       return `⚠ ${event.component} failed: ${event.message}`;
+    case 'test':
+      return '🧪 evcc test notification — notifiers are wired';
   }
 }
 
