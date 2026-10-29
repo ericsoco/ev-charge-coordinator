@@ -17,7 +17,7 @@ FEATURES
     [ ] projected amount of battery storage accrued during EV charging session (based on both of the above)
     [ ] Related -- Franklin poller needs to observe not just battery level but also
         how much energy the house consumes, in order to dynamically set battery buffer
-[ ] 
+[ ] Create dashboard to display time series of the various stores
 
 TASKS / BUGS
 [X] Recreate ev-charge-coordinator application on Tesla dev portal to expire the client secret that was leaked into LLM logs. Will require rerunning `pair-tesla-key` and `authenticate`.
@@ -25,14 +25,13 @@ TASKS / BUGS
 [X] Tab completion for flags
 [X] Replace `keytar` (deprecated) with...? Need to clarify specific needed functionality.
 [X] Replace messy Franklin error logs/tracebacks in daemon log
-[ ] Rename ambiguous battery-related commands like `get-battery-soc`, `charge-from-battery`, and `set-battery-buffer`
+[X] Daemon logging
+    [X] should show charging progress on every poll during a session
+    [X] should start every log with a timestamp first, formatted the same for all logs[ ] Rename ambiguous battery-related commands like `get-battery-soc`, `charge-from-battery`, and `set-battery-buffer`
 [ ] Consider removing `get-ev-bsoc` in favor of `get-charging-state`
 [ ] Clean up README (remove slop; make dev setup steps clear and contiguous; same for end-user steps; ensure unified docs across CLI + REPL, as there is some divergence)
     [ ] So far, have cleaned up up to "## CLI Reference". Continue from there.
          [ ] ...but skipped over Tesla and Franklin setup in ## Configuration
-[ ] Wake before issuing command -- how to ensure app is not keeping vehicle awake and causing phantom drain? Need some research.
-    Note: this is already in place for write (state-changing) commands,
-    but intentionally not for reads.
 [ ] Codebase audit (legibility, organization)
     [ ] Move daemonConfig.ts from utils into src/daemon
     [ ] Move various .md files into /docs: utils/REPLThemes.md, design.md, requirements.md, README.md
@@ -44,6 +43,3 @@ TASKS / BUGS
         Very bloated now, can individual commands be moved out?
         How are REPL + one-shot / Commander kept in sync?
 [ ] Expose common commands in package.json to run via `npm run x`
-[X] Daemon logging
-    [X] should show charging progress on every poll during a session
-    [X] should start every log with a timestamp first, formatted the same for all logs
