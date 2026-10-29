@@ -21,6 +21,7 @@ import { formatLocalTimestamp } from '../utils/time.js';
 import * as homeBatteryStore from '../store/HomeBatteryStore.js';
 import * as sessionStore from '../store/SessionStore.js';
 import { detectTransitions } from './eventDetector.js';
+import type { NotificationEvent } from '../notifiers/types.js';
 import { computeSessionAggregates } from './sessionAggregates.js';
 import type { ScheduledTask } from './scheduler.js';
 
@@ -79,11 +80,25 @@ export interface EvPollerDeps {
    * the new session opens. Absent = collect-only.
    */
   onVehiclePlugIn?: (ctx: VehiclePlugInContext) => Promise<void>;
+  /**
+   * Typed-event sink (design §3.7): plug-in + charge start/stop transitions,
+   * emitted where the events rows are written. Failures are isolated here.
+   */
+  notify?: (event: NotificationEvent) => Promise<void>;
 }
 
 export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
   const nowMs = deps.nowMs ?? Date.now;
   const log = deps.log ?? (() => {});
+  // Typed-event sink: never fatal to sampling (design §3.4 isolation).
+  const notify = async (event: NotificationEvent): Promise<void> => {
+    if (!deps.notify) return;
+    try {
+      await deps.notify(event);
+    } catch (error) {
+      log(`[ev-poll] notify failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   // Restart-safe state reconstruction: the store, not memory, owns history.
   const seed = evStore.latestSample(deps.db, deps.vehicleId);
   let lastChargingState: string | null = seed?.chargingState ?? null;
@@ -211,6 +226,13 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
             homeBatteryId: deps.homeBatteryId,
             plugTsMs: tsMs,
           });
+          await notify({
+            type: 'plug-in-detected',
+            tsMs,
+            sessionId,
+            vehicleId: deps.vehicleId,
+            evSocPercent: battery.soc,
+          });
           if (deps.onVehiclePlugIn) {
             try {
               await deps.onVehiclePlugIn({
@@ -229,6 +251,15 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
               );
             }
           }
+        } else if (event.kind === 'charging_start' || event.kind === 'charging_stop') {
+          const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
+          await notify({
+            type: event.kind === 'charging_start' ? 'charging-started' : 'charging-stopped',
+            tsMs,
+            sessionId: open?.id ?? null,
+            vehicleId: deps.vehicleId,
+            evSocPercent: battery.soc,
+          });
         } else if (event.kind === 'unplug') {
           const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
           const closedId = sessionStore.closeOpenSession(deps.db, deps.vehicleId, tsMs);

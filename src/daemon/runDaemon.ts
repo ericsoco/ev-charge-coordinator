@@ -22,6 +22,10 @@ import { createBatterySampler } from './BatterySampler.js';
 import { createEvPoller } from './EvPoller.js';
 import { createDecisionConsumer } from './decisionConsumer.js';
 import { formatLocalTimestamp } from '../utils/time.js';
+import { buildNotifiers, type NotifierSecrets } from '../notifiers/build.js';
+import { createNotifierFanout } from '../notifiers/fanout.js';
+import { createFailureThrottle } from '../notifiers/throttle.js';
+import type { Notifier } from '../notifiers/types.js';
 import { createWeatherSampler, type FetchForecast } from './WeatherSampler.js';
 import { clearRuntimeState, readRuntimeState, writeRuntimeState } from '../services/ProcessManager.js';
 
@@ -51,6 +55,11 @@ export interface RunDaemonOptions {
     read: () => { pid: number } | null;
     clear: () => void;
   };
+  /**
+   * Pre-built notification sink. Unset (the CLI's case) = one fanout built
+   * from config.notifiers + credential-store secrets.
+   */
+  notifier?: Notifier;
 }
 
 export interface DaemonOutcome {
@@ -68,10 +77,41 @@ interface Prepared {
   runtime: NonNullable<RunDaemonOptions['runtimeState']>;
   /** Pid of the franklin proxy THIS run spawned, or null (attached/no franklin). */
   ownedProxyPid: number | null;
+  /** Notification sink for the chain and task-failure reports. */
+  notifier: Notifier;
 }
 
 /** Retention prunes daily; the interval only needs to be "roughly a day". */
 const RETENTION_TASK_MS = 86_400_000;
+
+/**
+ * The daemon's notification sink: a caller override (tests), else one fanout
+ * built from config.notifiers + credential-store secrets. The secret read is
+ * lazy — log-only configs never touch the credential store — and fails soft:
+ * secretless clients are then skipped by the builder with a loud line.
+ */
+async function resolveNotifier(
+  options: RunDaemonOptions,
+  log: (message: string) => void
+): Promise<Notifier> {
+  if (options.notifier) return options.notifier;
+  let secrets: NotifierSecrets | undefined;
+  if (options.config.notifiers.some((entry) => entry.type !== 'log')) {
+    try {
+      secrets = await credentialStore.getNotifierSecrets();
+    } catch (error) {
+      log(
+        `[notify] could not read notifier secrets: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+  return createNotifierFanout(
+    buildNotifiers({ entries: options.config.notifiers, secrets, log }),
+    log
+  );
+}
 
 async function prepare(options: RunDaemonOptions): Promise<Prepared> {
   const log = options.log ?? console.log;
@@ -99,6 +139,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
 
   const eventVehicleId = options.vehicleId ?? 'daemon';
   const tasks: ScheduledTask[] = [];
+  const notifier = await resolveNotifier(options, log);
 
   // Record the proxy WE spawned so one-shot commands (status attach,
   // charge-from-battery, exit) can find and authenticate against it. Attached
@@ -158,6 +199,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         setChargeLimit: (percent) => tesla.setChargeLimit(percent),
         startCharging: () => tesla.startCharging(),
       },
+      notify: (event) => notifier.notify(event),
       log,
     });
     tasks.push(
@@ -171,6 +213,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         sampleIdleSec: options.config.evSampleIdleSec,
         nowMs,
         log,
+        notify: (event) => notifier.notify(event),
         onVehiclePlugIn: decideOnVehiclePlugIn,
       })
     );
@@ -207,7 +250,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
     tsMs: nowMs(),
     kind: 'daemon_start',
   });
-  return { lock, db, tasks, eventVehicleId, runtime, ownedProxyPid };
+  return { lock, db, tasks, eventVehicleId, runtime, ownedProxyPid, notifier };
 }
 
 async function teardown(
@@ -247,6 +290,7 @@ export async function runDaemonOnce(options: RunDaemonOptions): Promise<DaemonOu
   const nowMs = options.nowMs ?? Date.now;
   const prepared = await prepare({ ...options, log });
   try {
+    const notifyFailure = createFailureThrottle(prepared.notifier, { nowMs });
     const scheduler = createScheduler(
       prepared.tasks,
       (task, error) => {
@@ -255,6 +299,12 @@ export async function runDaemonOnce(options: RunDaemonOptions): Promise<DaemonOu
         (options.errorLog ?? console.error)(
           `[daemon] ${task.name}: ${error instanceof Error ? error.message : String(error)}`
         );
+        void notifyFailure({
+          type: 'failure',
+          tsMs: nowMs(),
+          component: task.name,
+          message: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined); // fanout isolates; this is belt-and-braces
       },
       {
         onLate: (task, gapMs) => {
@@ -287,10 +337,17 @@ export async function startDaemon(options: RunDaemonOptions): Promise<DaemonHand
   const nowMs = options.nowMs ?? Date.now;
   const prepared = await prepare(options);
 
+  const notifyFailure = createFailureThrottle(prepared.notifier, { nowMs });
   const scheduler = createScheduler(prepared.tasks, (task, error) => {
     (options.errorLog ?? console.error)(
       `[daemon] ${task.name}: ${error instanceof Error ? error.message : String(error)}`
     );
+    void notifyFailure({
+      type: 'failure',
+      tsMs: nowMs(),
+      component: task.name,
+      message: error instanceof Error ? error.message : String(error),
+    }).catch(() => undefined); // fanout isolates; this is belt-and-braces
   });
   scheduler.start();
   log(
