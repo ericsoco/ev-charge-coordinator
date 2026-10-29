@@ -12,6 +12,7 @@ import * as decisionStore from '../../src/store/DecisionStore.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import { createDecisionConsumer, type DecisionConsumerDeps } from '../../src/daemon/decisionConsumer.js';
 import type { VehiclePlugInContext } from '../../src/daemon/EvPoller.js';
+import type { NotificationEvent } from '../../src/notifiers/types.js';
 import type { EVStatus } from '../../src/types/ev.js';
 import type { EnergyConfig } from '../../src/utils/energy.js';
 
@@ -82,6 +83,71 @@ function consumer(overrides: Partial<DecisionConsumerDeps> = {}) {
     ...overrides,
   });
 }
+
+describe('notifications (design §3.7)', () => {
+  function recordingConsumer(overrides: Partial<DecisionConsumerDeps> = {}) {
+    const events: NotificationEvent[] = [];
+    const run = consumer({
+      notify: async (event) => {
+        events.push(event);
+      },
+      ...overrides,
+    });
+    return { events, run };
+  }
+
+  it('emits decision-made for the dark dry-run verdict', async () => {
+    const { events, run } = recordingConsumer();
+    await run(CTX);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'decision-made',
+      vehicleId: 'VIN',
+      sessionId: 7,
+      accepted: false, // dry records the verdict without acting
+      dryRun: true,
+      reasonCode: 'dry_run',
+      evSocPercent: 40,
+      targetPercent: expect.any(Number),
+    });
+  });
+
+  it('emits decision-made for a live start', async () => {
+    const { events, run } = recordingConsumer({
+      autoStart: { enabled: true, filters: [{ type: 'always' }] },
+    });
+    await run(CTX);
+    expect(commandCalls).toContain('startCharging');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'decision-made',
+      accepted: true,
+      dryRun: false,
+      reasonCode: 'started',
+    });
+    const event = events[0];
+    if (event.type !== 'decision-made') throw new Error('unexpected event type');
+    expect(typeof event.targetPercent).toBe('number');
+  });
+
+  it('emits nothing for a duplicate-session audit row', async () => {
+    const { events, run } = recordingConsumer();
+    await run(CTX);
+    await run(CTX); // same session: the duplicate guard records, never pushes
+    expect(events).toHaveLength(1);
+  });
+
+  it('isolates a rejecting notifier: the decision still records', async () => {
+    const run = consumer({
+      notify: async () => {
+        throw new Error('webhook down');
+      },
+    });
+    await expect(run(CTX)).resolves.toBeUndefined();
+    expect(decisionStore.decisionForSession(db, 7)).not.toBeNull();
+    expect(logs.join('\n')).toContain('[decision] notify failed: webhook down');
+  });
+});
 
 const CTX: VehiclePlugInContext = {
   tsMs: 1000,

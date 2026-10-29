@@ -15,6 +15,7 @@ import * as evStore from '../../src/store/EvStore.js';
 import * as sessionStore from '../../src/store/SessionStore.js';
 import * as weatherStore from '../../src/store/WeatherForecastStore.js';
 import { createBatterySampler } from '../../src/daemon/BatterySampler.js';
+import type { NotificationEvent } from '../../src/notifiers/types.js';
 import { createEvPoller } from '../../src/daemon/EvPoller.js';
 import { createWeatherSampler, type ForecastHour } from '../../src/daemon/WeatherSampler.js';
 import { formatLocalTimestamp } from '../../src/utils/time.js';
@@ -214,7 +215,8 @@ describe('EvPoller', () => {
     ev: ReturnType<typeof fakeEv>,
     nowMs: () => number,
     idleSec = 0,
-    log?: (message: string) => void
+    log?: (message: string) => void,
+    notify?: (event: NotificationEvent) => Promise<void>
   ) {
     return createEvPoller({
       db,
@@ -226,6 +228,7 @@ describe('EvPoller', () => {
       sampleIdleSec: idleSec,
       nowMs,
       log,
+      notify,
     });
   }
 
@@ -428,6 +431,65 @@ describe('EvPoller', () => {
     const quietLines: string[] = [];
     await poller(quiet, () => 1_000, 0, (message) => quietLines.push(message)).run();
     expect(quietLines.filter((message) => message.includes('charging'))).toEqual([]);
+  });
+
+  it('emits typed events at plug-in and charge transitions (once each)', async () => {
+    const events: NotificationEvent[] = [];
+    let now = 1_000_000;
+    const ev = fakeEv(); // Disconnected baseline
+    const task = poller(ev, () => now, 0, undefined, async (event) => {
+      events.push(event);
+    });
+
+    await task.run(); // seed baseline: nothing to emit
+    expect(events).toEqual([]);
+
+    ev.status.battery.chargingState = 'Stopped';
+    now += 60_000;
+    await task.run(); // cable on
+    expect(events.map((event) => event.type)).toEqual(['plug-in-detected']);
+    expect(events[0]).toMatchObject({ vehicleId: VIN, sessionId: expect.any(Number) });
+
+    ev.status.battery.chargingState = 'Charging';
+    now += 60_000;
+    await task.run();
+    expect(events.map((event) => event.type)).toEqual([
+      'plug-in-detected',
+      'charging-started',
+    ]);
+    expect(events[1]).toMatchObject({ sessionId: expect.any(Number) });
+
+    ev.status.battery.chargingState = 'Stopped';
+    now += 60_000;
+    await task.run();
+    expect(events.map((event) => event.type)).toEqual([
+      'plug-in-detected',
+      'charging-started',
+      'charging-stopped',
+    ]);
+
+    ev.status.battery.chargingState = 'Disconnected';
+    now += 60_000;
+    await task.run(); // unplug: recorded, never notified (design list)
+    expect(events).toHaveLength(3);
+  });
+
+  it('isolates a rejecting notifier — sampling continues', async () => {
+    const lines: string[] = [];
+    let now = 2_000_000;
+    const ev = fakeEv();
+    const task = poller(ev, () => now, 0, (message) => lines.push(message), async () => {
+      throw new Error('webhook down');
+    });
+
+    await task.run(); // seed Disconnected baseline
+    ev.status.battery.chargingState = 'Stopped';
+    now += 60_000;
+    await task.run(); // plug-in → notify throws → isolated
+
+    expect(lines.join('\n')).toContain('[ev-poll] notify failed: webhook down');
+    expect(evStore.latestSample(db, VIN)).not.toBeNull(); // the row still landed
+    expect(eventKinds()).toContain('plug_in');
   });
 
   it('heartbeats while the vehicle sleeps — first observation, then hourly', async () => {

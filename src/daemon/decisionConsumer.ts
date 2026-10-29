@@ -18,6 +18,7 @@ import * as decisionStore from '../store/DecisionStore.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
 import { evaluateDecision } from './engine.js';
 import type { VehiclePlugInContext } from './EvPoller.js';
+import type { NotificationEvent } from '../notifiers/types.js';
 
 export interface DecisionConsumerDeps {
   db: DatabaseSync;
@@ -51,6 +52,11 @@ export interface DecisionConsumerDeps {
   /** Injectable so tests avoid config files; default reads energy config.json. */
   getEnergyConfig?: () => EnergyConfig | null;
   log?: (message: string) => void;
+  /**
+   * Typed-event sink (design §3.7): one `decision-made` per recorded decision
+   * (duplicates excepted). Failures are isolated inside the consumer.
+   */
+  notify?: (event: NotificationEvent) => Promise<void>;
 }
 
 /** Delay before retrying a start the car answered with the OLD limit's state. */
@@ -61,6 +67,18 @@ function isCompleteRejection(error: unknown): boolean {
   return (
     error instanceof Error && /(?:rejected the command|execute command):\s*complete\b/.test(error.message)
   );
+}
+
+/** Never lets a notification failure reach the caller (design §3.4). */
+async function emitNotify(deps: DecisionConsumerDeps, event: NotificationEvent): Promise<void> {
+  if (!deps.notify) return;
+  try {
+    await deps.notify(event);
+  } catch (error) {
+    deps.log?.(
+      `[decision] notify failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 /**
@@ -170,6 +188,22 @@ export function createDecisionConsumer(
           recorded.reasonDetail ? ` — ${recorded.reasonDetail}` : ''
         }`
       );
+
+      // Duplicate replug triggers are audit rows, not decisions — no push.
+      if (recorded.reasonCode !== 'duplicate_session') {
+        await emitNotify(deps, {
+          type: 'decision-made',
+          tsMs: ctx.tsMs,
+          sessionId: ctx.sessionId,
+          vehicleId: deps.vehicleId,
+          accepted: recorded.accepted,
+          dryRun: recorded.dryRun,
+          reasonCode: recorded.reasonCode,
+          reasonDetail: recorded.reasonDetail,
+          targetPercent: recorded.targetPercent ?? null,
+          evSocPercent: ctx.evSocPercent,
+        });
+      }
     } catch (error) {
       deps.log?.(`[decision] failed: ${error instanceof Error ? error.message : String(error)}`);
     }
