@@ -1605,3 +1605,21 @@ commit (final: **759 passed / 2 skipped**).
   `evcc daemon restart` (per-session proxy) or a new one-shot command run.
 
 
+
+### 2026-10-30 — `evcc daemon logs` (one commit, branch `p1b/daemon-logs`)
+
+QoL one-shot: `daemon logs [--lines <n>]` is the install-output `tail -f`
+alias, upgraded to `tail -F` over BOTH streams (`daemon.log` +
+`daemon.err.log`), default 50 recent lines then follow, stdio inherited
+(Ctrl-C ends it). `followLogs` in `daemonLifecycle` behind the same ExecFn
+seam — missing logs dir refuses with the `daemon install` hint; signal exit
+is a clean stop. Pins that moved: drift-map `logs: 'daemon'`, install
+verification hint, README CLI row + verify block.
+
+- Gotcha recorded: commander does **not** catch `argParser` throws —
+  validating `--lines` inside the argParser printed a raw stack trace in
+  smoke; the action validates instead (repo's established pattern).
+- Smoke-proven live with an isolated `ECC_CONFIG_DIR`: headers per file,
+  `-n` respected, alarm-kill = Ctrl-C analog.
+- Next: Step 7 — surfaces + docs — branch `p1b/step7-docs-surfaces`.
+
