@@ -4,7 +4,7 @@
  * All I/O sits behind NotifyDeps so tests dispatch through a fake store.
  */
 import { Command } from 'commander';
-import type { NotifierConfigEntry } from '../utils/daemonConfig.js';
+import type { NotifierConfigEntry } from '../notifiers/types.js';
 import { buildNotifiers, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
 

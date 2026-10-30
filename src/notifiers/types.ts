@@ -65,6 +65,25 @@ export type NotificationEvent =
   | TestEvent;
 
 /**
+ * Runtime list — the single source `NotifierType` is derived from, so error
+ * messages, validation, and types can never drift apart.
+ */
+export const NOTIFIER_TYPES = ['log', 'ntfy', 'slack'] as const;
+export type NotifierType = (typeof NOTIFIER_TYPES)[number];
+
+/**
+ * A configured notification client (design.md §3.7). Non-secret knobs only —
+ * ntfy topics and Slack webhook URLs live in the credential store.
+ */
+export interface NotifierConfigEntry {
+  type: NotifierType;
+  /** ntfy only: push priority. Default 'default'. */
+  priority?: 'default' | 'high';
+  /** ntfy only: self-hosted server URL. Default https://ntfy.sh. */
+  server?: string;
+}
+
+/**
  * Design.md §3.7 — the pluggable surface. A client may reject; isolation is
  * the fanout's job, never the caller's.
  */

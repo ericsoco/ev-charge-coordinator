@@ -3,7 +3,7 @@
  * deny-by-default skips that name the command fixing each missing secret.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { buildNotifiers } from '../../src/notifiers/build.js';
+import { buildNotifiers, notifierRequiresSecret } from '../../src/notifiers/build.js';
 import type { NotificationEvent } from '../../src/notifiers/types.js';
 
 const event: NotificationEvent = { type: 'test', tsMs: 1_000 };
@@ -70,6 +70,12 @@ describe('buildNotifiers', () => {
 
   it('an empty config builds no clients', () => {
     expect(buildNotifiers({ entries: [], log: vi.fn() })).toEqual([]);
+  });
+
+  it('notifierRequiresSecret answers for every entry type', () => {
+    expect(notifierRequiresSecret({ type: 'log' })).toBe(false);
+    expect(notifierRequiresSecret({ type: 'ntfy' })).toBe(true);
+    expect(notifierRequiresSecret({ type: 'slack' })).toBe(true);
   });
 
   it('a mixed list keeps configured clients and skips secretless ones', () => {
