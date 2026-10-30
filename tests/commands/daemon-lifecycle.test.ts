@@ -10,6 +10,7 @@ import * as path from 'path';
 import { Command } from 'commander';
 import {
   deriveLabel,
+  followLogs,
   restartDaemon,
   runDaemonScript,
   stopDaemon,
@@ -46,7 +47,7 @@ afterEach(() => {
 });
 
 /** Exec seam: records every command; handler decides the exit status. */
-function recorder(handler: (command: string[]) => number = () => 0) {
+function recorder(handler: (command: string[]) => number | null = () => 0) {
   const calls: { command: string[]; inherit: boolean | undefined }[] = [];
   const exec: ExecFn = (command, options) => {
     calls.push({ command, inherit: options?.inherit });
@@ -238,6 +239,74 @@ describe('subcommand flag routing (Commander positional-mode guard)', () => {
     expect(daemon.opts()).toEqual({ once: true });
     // The stray guard only runs when a subcommand is executing (the hook's
     // check); with none, the foreground action receives the flag untouched.
+  });
+});
+
+describe('followLogs (evcc daemon logs)', () => {
+  let logsDir: string;
+
+  beforeEach(() => {
+    logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-daemon-logs-'));
+    dirs.push(logsDir);
+  });
+
+  const paths = (dir: string): string[] => [
+    path.join(dir, 'daemon.log'),
+    path.join(dir, 'daemon.err.log'),
+  ];
+
+  it("spawns tail -F on both streams with the default 50 lines, stdio inherited", () => {
+    const { calls, exec } = recorder();
+
+    const result = followLogs({ exec, logsDir });
+
+    expect(result).toEqual({ ok: true, message: '' });
+    expect(calls).toEqual([
+      {
+        command: ['/usr/bin/tail', '-F', '-n', '50', ...paths(logsDir)],
+        inherit: true,
+      },
+    ]);
+  });
+
+  it('passes --lines through', () => {
+    const { calls, exec } = recorder();
+
+    followLogs({ exec, logsDir, lines: 5 });
+
+    expect(calls[0].command).toEqual([
+      '/usr/bin/tail',
+      '-F',
+      '-n',
+      '5',
+      ...paths(logsDir),
+    ]);
+  });
+
+  it('refuses when the logs directory does not exist — install first', () => {
+    const { calls, exec } = recorder();
+
+    const result = followLogs({ exec, logsDir: path.join(logsDir, 'nope') });
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('run `evcc daemon install` first');
+    expect(calls).toEqual([]);
+  });
+
+  it('propagates a non-zero tail exit as a failure', () => {
+    const { exec } = recorder(() => 2);
+
+    const result = followLogs({ exec, logsDir });
+
+    expect(result).toEqual({ ok: false, message: 'following logs failed: tail exited 2' });
+  });
+
+  it('treats a signal exit (Ctrl-C) as a clean stop', () => {
+    const { exec } = recorder(() => null);
+
+    const result = followLogs({ exec, logsDir });
+
+    expect(result).toEqual({ ok: true, message: '' });
   });
 });
 

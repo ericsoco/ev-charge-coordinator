@@ -399,7 +399,7 @@ Verify and operate (label `com.transmote.ev-charge-coordinator.daemon`):
 
 ```bash
 launchctl print gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon | grep -E $'^\t(state|pid) ='
-tail -f ~/.ev-charge-coordinator/logs/daemon.log
+node dist/index.js daemon logs     # follow daemon.log + daemon.err.log (Ctrl-C stops; alias for tail -f)
 launchctl kickstart -k gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon  # restart in place
 launchctl bootout gui/$(id -u)/com.transmote.ev-charge-coordinator.daemon       # stop (until reinstall/login)
 node dist/index.js status                                                       # daemon + store summary
@@ -473,6 +473,7 @@ naming the command that fixes it. Restart the daemon after config changes
 | `start --debug` | Print full stack traces for service startup failures |
 | `exit` | Terminate all services |
 | `daemon [--once]` | Run the collect daemon in the foreground (battery/EV/weather samplers, session tracking, history); `--once` runs a single collection cycle and exits non-zero if any task failed |
+| `daemon logs [--lines <n>]` | Follow the daemon logs in this terminal: `tail -F` on `daemon.log` + `daemon.err.log` (default 50 recent lines, then follow; Ctrl-C stops) |
 | `status [--json]` | Show daemon, store, proxy, and config status — reads only, starts nothing (service lines reflect this process; proxies are probed on localhost) |
 | `sessions [--limit <n>] [--open]` | Show recent charging sessions from the store (default 10; `--open` lists only sessions still open) |
 | `set-home-location [<latitude> <longitude>]` | Set the home location (a secret — stored in the keychain, never config.json or the store). With arguments: manual. With none: wakes the vehicle and reads its current position. Both forms confirm with current → new before writing; requires the `vehicle_location` scope |

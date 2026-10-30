@@ -1,5 +1,6 @@
 /**
- * LaunchAgent lifecycle behind `evcc daemon stop|restart|install|uninstall`.
+ * LaunchAgent lifecycle behind `evcc daemon stop|restart|install|uninstall`,
+ * plus the `logs` terminal follower.
  *
  * The bash scripts stay the single source of truth for install/uninstall
  * (spawned, not re-implemented); stop/restart are the two operations the
@@ -12,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'node:url';
+import { getConfigDir } from '../utils/credentials.js';
 
 export interface ExecResult {
   status: number | null;
@@ -106,6 +108,38 @@ export function restartDaemon(deps: LifecycleDeps = {}): LifecycleResult {
   const bootstrap = exec(['/bin/launchctl', 'bootstrap', guiDomain(), plist]);
   if (bootstrap.status !== 0) return failure(`bootstrap of ${plist} failed`, bootstrap);
   return { ok: true, message: `daemon restarted (${target}).` };
+}
+
+export interface FollowLogsDeps {
+  exec?: ExecFn;
+  /** Default: `<config-dir>/logs`; tests pass temp dirs. */
+  logsDir?: string;
+  /** Recent lines shown before following (default 50). */
+  lines?: number;
+}
+
+/**
+ * Attach this terminal to the running daemon's log output: `tail -F` over
+ * BOTH streams (daemon.log, and daemon.err.log where launchd sends stderr —
+ * [proxy] lines and [daemon] task failures), stdio inherited so Ctrl-C ends
+ * it. `-F` (by name, not descriptor): waits for files the daemon has not
+ * written yet and survives the documented `: > daemon.log` truncation.
+ */
+export function followLogs(deps: FollowLogsDeps = {}): LifecycleResult {
+  const logsDir = deps.logsDir ?? path.join(getConfigDir(), 'logs');
+  if (!fs.existsSync(logsDir)) {
+    return { ok: false, message: `${logsDir} not found — run \`evcc daemon install\` first.` };
+  }
+  const lines = deps.lines ?? 50;
+  const files = ['daemon.log', 'daemon.err.log'].map((name) => path.join(logsDir, name));
+  const exec = deps.exec ?? defaultExec;
+  // stdio inherited: tail's output IS this process's output, and the
+  // foreground group's Ctrl-C reaches both processes.
+  const result = exec(['/usr/bin/tail', '-F', '-n', String(lines), ...files], { inherit: true });
+  if (result.status !== 0 && result.status !== null) {
+    return { ok: false, message: `following logs failed: tail exited ${result.status}` };
+  }
+  return { ok: true, message: '' };
 }
 
 /**
