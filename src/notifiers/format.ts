@@ -14,11 +14,11 @@ export function formatNotificationEvent(event: NotificationEvent): string {
     case 'decision-made':
       return formatDecision(event);
     case 'charging-started':
-      return `⚡ charging started (${soc(event.evSocPercent)})`;
+      return `⚡️ charging started (${soc(event.evSocPercent)})`;
     case 'charging-stopped':
       return `🛑 charging stopped (${soc(event.evSocPercent)})`;
     case 'failure':
-      return `⚠ ${event.component} failed: ${event.message}`;
+      return `⚠️ ${event.component} failed: ${event.message}`;
     case 'test':
       return '🧪 evcc test notification — notifiers are wired';
   }
