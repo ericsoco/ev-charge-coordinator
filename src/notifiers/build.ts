@@ -3,7 +3,7 @@
  * ntfy/Slack entry without its secret is skipped with a loud log naming the
  * command that fixes it (deny-by-default — design.md §3.8).
  */
-import type { NotifierConfigEntry } from '../utils/daemonConfig.js';
+import type { NotifierConfigEntry } from './types.js';
 import { createLogLocalNotifier } from './logLocal.js';
 import { createNtfyNotifier } from './ntfy.js';
 import { createSlackNotifier } from './slack.js';
@@ -12,6 +12,15 @@ import type { NamedNotifier } from './types.js';
 export interface NotifierSecrets {
   ntfyTopic?: string;
   slackWebhookUrl?: string;
+}
+
+/**
+ * Whether this client's secret must exist in the credential store before it
+ * can build. Both the builder and the daemon's lazy secret read ask here —
+ * "which notifiers need secrets" is a notifier concern, not a daemon one.
+ */
+export function notifierRequiresSecret(entry: NotifierConfigEntry): boolean {
+  return entry.type === 'ntfy' || entry.type === 'slack';
 }
 
 export interface BuildNotifiersDeps {

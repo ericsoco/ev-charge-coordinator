@@ -22,7 +22,7 @@ import { createBatterySampler } from './BatterySampler.js';
 import { createEvPoller } from './EvPoller.js';
 import { createDecisionConsumer } from './decisionConsumer.js';
 import { formatLocalTimestamp } from '../utils/time.js';
-import { buildNotifiers, type NotifierSecrets } from '../notifiers/build.js';
+import { buildNotifiers, notifierRequiresSecret, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
 import { createFailureThrottle } from '../notifiers/throttle.js';
 import type { Notifier } from '../notifiers/types.js';
@@ -96,7 +96,7 @@ async function resolveNotifier(
 ): Promise<Notifier> {
   if (options.notifier) return options.notifier;
   let secrets: NotifierSecrets | undefined;
-  if (options.config.notifiers.some((entry) => entry.type !== 'log')) {
+  if (options.config.notifiers.some(notifierRequiresSecret)) {
     try {
       secrets = await credentialStore.getNotifierSecrets();
     } catch (error) {

@@ -12,7 +12,7 @@ import {
   runNotifyTest,
   type NotifyDeps,
 } from '../../src/commands/notify.js';
-import type { NotifierConfigEntry } from '../../src/utils/daemonConfig.js';
+import type { NotifierConfigEntry } from '../../src/notifiers/types.js';
 
 interface FakeState {
   topic?: string;

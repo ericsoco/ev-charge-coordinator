@@ -13,6 +13,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getConfigDir } from './credentials.js';
+import { cloneNotifiers, DEFAULT_NOTIFIERS, validateNotifierEntries } from '../notifiers/config.js';
+import type { NotifierConfigEntry } from '../notifiers/types.js';
 
 /** A filter the decision chain runs at every vehicle plug-in event. */
 export type DecisionFilterType = 'always' | 'geofence';
@@ -31,20 +33,6 @@ export interface AutoStartConfig {
   enabled: boolean;
   /** Ordered filter chain evaluated at every plug-in. */
   filters: DecisionFilterConfig[];
-}
-
-export type NotifierType = 'log' | 'ntfy' | 'slack';
-
-/**
- * A configured notification client (design.md §3.7). Non-secret knobs only —
- * ntfy topics and Slack webhook URLs live in the credential store.
- */
-export interface NotifierConfigEntry {
-  type: NotifierType;
-  /** ntfy only: push priority. Default 'default'. */
-  priority?: 'default' | 'high';
-  /** ntfy only: self-hosted server URL. Default https://ntfy.sh. */
-  server?: string;
 }
 
 export interface DaemonConfig {
@@ -85,7 +73,7 @@ export const DEFAULT_DAEMON_CONFIG: Readonly<DaemonConfig> = Object.freeze<Daemo
     enabled: false,
     filters: [{ type: 'always' }],
   },
-  notifiers: [{ type: 'log' }],
+  notifiers: cloneNotifiers(DEFAULT_NOTIFIERS),
 });
 
 /** Derived from the defaults so template and defaults cannot drift. */
@@ -212,10 +200,6 @@ function cloneAutoStart(source: AutoStartConfig): AutoStartConfig {
   return { ...source, filters: source.filters.map((filter) => ({ ...filter })) };
 }
 
-function cloneNotifiers(source: NotifierConfigEntry[]): NotifierConfigEntry[] {
-  return source.map((entry) => ({ ...entry }));
-}
-
 /** Fresh working copy — resolved configs never share references with defaults. */
 function defaultConfig(): DaemonConfig {
   return {
@@ -295,66 +279,6 @@ function resolveAutoStart(
   return { value, problems: [] };
 }
 
-const NOTIFIER_TYPES: readonly NotifierType[] = ['log', 'ntfy', 'slack'];
-const NTFTY_PRIORITIES = ['default', 'high'];
-
-/**
- * Validate the `notifiers` array (design.md §3.7): one entry per configured
- * client, arrays replaced wholesale like filters, ntfy knobs checked only for
- * ntfy entries. Absent → the log-only default.
- */
-function resolveNotifiers(
-  raw: unknown,
-  file: string
-): { value: NotifierConfigEntry[] | null; problems: string[] } {
-  const value = cloneNotifiers(DEFAULT_DAEMON_CONFIG.notifiers);
-  if (raw === undefined || raw === null) return { value, problems: [] };
-  if (!Array.isArray(raw)) {
-    return { value: null, problems: [`${file}: notifiers = ${show(raw)} (must be an array)`] };
-  }
-
-  const problems: string[] = [];
-  const entries: NotifierConfigEntry[] = [];
-  for (const [index, entry] of raw.entries()) {
-    const where = `${file}: notifiers[${index}]`;
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      problems.push(`${where} = ${show(entry)} (must be an object with a type)`);
-      continue;
-    }
-    const record = entry as Record<string, unknown>;
-    const type = record.type;
-    if (typeof type !== 'string' || !NOTIFIER_TYPES.includes(type as NotifierType)) {
-      problems.push(
-        `${where}.type = ${show(type)} (unknown notifier type; expected "log", "ntfy" or "slack")`
-      );
-      continue;
-    }
-    const resolved: NotifierConfigEntry = { type: type as NotifierType };
-    if (type === 'ntfy') {
-      const priority = record.priority;
-      if (priority !== undefined && priority !== null) {
-        if (typeof priority !== 'string' || !NTFTY_PRIORITIES.includes(priority)) {
-          problems.push(`${where}.priority = ${show(priority)} (expected "default" or "high")`);
-          continue;
-        }
-        resolved.priority = priority as 'default' | 'high';
-      }
-      const server = record.server;
-      if (server !== undefined && server !== null) {
-        if (typeof server !== 'string' || !/^https?:\/\/\S+$/.test(server)) {
-          problems.push(`${where}.server = ${show(server)} (must be an http(s) URL)`);
-          continue;
-        }
-        resolved.server = server;
-      }
-    }
-    entries.push(resolved);
-  }
-
-  if (problems.length > 0) return { value: null, problems };
-  return { value: entries, problems: [] };
-}
-
 export interface ResolvedDaemonConfig {
   /** Complete, defaults-merged config — null when anything is invalid. */
   config: DaemonConfig | null;
@@ -410,7 +334,8 @@ export function resolveDaemonConfig(file: string = daemonConfigPath()): Resolved
   problems.push(...autoStart.problems);
   if (autoStart.value !== null) config.autoStart = autoStart.value;
 
-  const notifiers = resolveNotifiers(record.notifiers, file);
+  // Notifier types + validation are owned by src/notifiers (daemon delegates).
+  const notifiers = validateNotifierEntries(record.notifiers, file);
   problems.push(...notifiers.problems);
   if (notifiers.value !== null) config.notifiers = notifiers.value;
 
