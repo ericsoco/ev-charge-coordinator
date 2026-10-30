@@ -4,7 +4,7 @@
  * command that fixes it (deny-by-default — design.md §3.8).
  */
 import type { NotifierConfigEntry } from '../utils/daemonConfig.js';
-import { createLogNotifier } from './logOnly.js';
+import { createLogLocalNotifier } from './logLocal.js';
 import { createNtfyNotifier } from './ntfy.js';
 import { createSlackNotifier } from './slack.js';
 import type { NamedNotifier } from './types.js';
@@ -28,7 +28,7 @@ export function buildNotifiers(deps: BuildNotifiersDeps): NamedNotifier[] {
   for (const entry of deps.entries) {
     switch (entry.type) {
       case 'log':
-        targets.push({ name: 'log', notifier: createLogNotifier(log) });
+        targets.push({ name: 'log', notifier: createLogLocalNotifier(log) });
         break;
       case 'ntfy':
         if (!deps.secrets?.ntfyTopic) {
