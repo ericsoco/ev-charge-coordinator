@@ -104,7 +104,7 @@ describe('formatNotificationEvent', () => {
   it('formats charge transitions and an unknown SoC', () => {
     expect(
       formatNotificationEvent({ ...base, type: 'charging-started', sessionId: 7, evSocPercent: 46 })
-    ).toBe('⚡ charging started (SoC 46%)');
+    ).toBe('⚡️ charging started (SoC 46%)');
     expect(
       formatNotificationEvent({ ...base, type: 'charging-stopped', sessionId: 7, evSocPercent: null })
     ).toBe('🛑 charging stopped (SoC unknown)');
@@ -118,7 +118,7 @@ describe('formatNotificationEvent', () => {
         component: 'battery-sample',
         message: 'Franklin 502',
       })
-    ).toBe('⚠ battery-sample failed: Franklin 502');
+    ).toBe('⚠️ battery-sample failed: Franklin 502');
   });
 
   it('formats the CLI test event', () => {
