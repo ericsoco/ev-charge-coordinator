@@ -31,6 +31,11 @@ export async function runNotifySet(
   value: string | undefined,
   deps: NotifyDeps
 ): Promise<void> {
+  // SetKind is type-level only — a caller can coerce `any` past it. The
+  // boundary checks for real, before any prompt or store write. (PR #47 ⑬)
+  if (kind !== 'ntfy' && kind !== 'slack') {
+    throw new Error(`unknown notifier kind '${kind}' (expected ntfy or slack)`);
+  }
   const secret = value ?? (await deps.promptSecret(`${kind} ${kind === 'ntfy' ? 'topic' : 'webhook URL'}: `));
   if (kind === 'ntfy') {
     await deps.setNtfyTopic(secret);

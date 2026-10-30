@@ -79,6 +79,16 @@ describe('runNotifySet', () => {
     await expect(runNotifySet('slack', 'not-a-url', deps)).rejects.toThrow('http(s) URL');
     expect(state.logLines).toEqual([]);
   });
+
+  it('rejects an unknown kind at runtime — before any prompt or write', async () => {
+    const { deps, state } = fakeDeps();
+    await expect(
+      runNotifySet('pigeon' as unknown as 'ntfy', 'secret-value', deps)
+    ).rejects.toThrow(/unknown notifier kind 'pigeon'/);
+    expect(state.topic).toBeUndefined();
+    expect(state.webhook).toBeUndefined();
+    expect(state.prompted).toEqual([]);
+  });
 });
 
 describe('runNotifyClear', () => {
