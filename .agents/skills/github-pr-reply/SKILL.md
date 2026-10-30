@@ -22,6 +22,7 @@ Use this skill when invoked directly by name.
 1. Use the GitHub CLI (shell commands) to view the metadata and diff:
     * gh pr view {PR_NUMBER} --json title,body,author
     * gh pr diff {PR_NUMBER}
+1a. If gh auth is absent / fails, stop immediately and prompt the user to run `gh auth login`.
 2. Read all open reviews + comments on the PR.
     * gh api repos/ericsoco/ev-charge-coordinator/pulls/{PR_NUMBER}/comments
     * Extract: path (file name), line (or position), body (comment content), and id / node_id (required to reply or resolve).
