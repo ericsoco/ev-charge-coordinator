@@ -18,6 +18,7 @@ FEATURES
     [ ] Related -- Franklin poller needs to observe not just battery level but also
         how much energy the house consumes, in order to dynamically set battery buffer
 [ ] Create dashboard to display time series of the various stores
+[ ] self-host ntfy on transmote.com to lock down publication to my topic
 
 TASKS / BUGS
 [X] Recreate ev-charge-coordinator application on Tesla dev portal to expire the client secret that was leaked into LLM logs. Will require rerunning `pair-tesla-key` and `authenticate`.
