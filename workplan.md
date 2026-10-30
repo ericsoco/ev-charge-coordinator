@@ -51,8 +51,9 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 6 — notifiers complete (2026-10-27, five commits on
-> `p1b/step6-notifiers`); next: Step 7 — surfaces + docs.**
+> Status: **Step 6 — notifiers complete; PR #47 review round + Franklin proxy
+> timeout hardening applied (2026-10-29, `p1b/step6-notifiers`); next: Step 7 —
+> surfaces + docs.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
@@ -1570,4 +1571,37 @@ defaults: log-only is the default client, two events per plug-in in dark mode
 - Isolation is layered: fanout catches per client → emit helpers catch per
   site (logged) → daemon call sites belt-and-braces `.catch`.
 - Next: Step 7 — surfaces + docs — branch `p1b/step7-docs-surfaces`.
+
+### 2026-10-29 — PR #47 review round + proxy timeout hardening (5 commits)
+
+All PR #47 review comments addressed locally (the reply itself is the code —
+nothing was posted to GitHub), plus the evidence-backed Franklin timeout fix
+(26×/day `httpx.ReadTimeout` on the switch-usage POST). Gate green after each
+commit (final: **759 passed / 2 skipped**).
+
+1. `818ad2c` — emoji pins aligned with the user's formatter fix (`653034e`:
+   ⚠️ / ⚡️); source untouched (review comment 1).
+2. `16eab7e` — named event types (`PlugInDetectedEvent` … `TestEvent`, the
+   union as their sum; comment 2) + `logOnly.ts` → `logLocal.ts`
+   (`createLogLocalNotifier`; comment 4).
+3. `a5dab34` — the leakage cleanup (issue comment + 5–10, 12, 14, 15):
+   `NOTIFIER_TYPES` (as const, single source) / `NotifierType` /
+   `NotifierConfigEntry` in `notifiers/types`; `NTFY_PRIORITIES` +
+   `parseNtfyEntry` in `ntfy.ts`; new `notifiers/config.ts` owns
+   `DEFAULT_NOTIFIERS`/`clone`/`validateNotifierEntries` — daemonConfig
+   delegates and keeps only the field; type-list error strings interpolate;
+   `build.ts` exports `notifierRequiresSecret` for runDaemon's lazy read;
+   `notify.ts` imports from the notifier package. Notifier-land tests added.
+4. `cf623b3` — runtime kind guard in `runNotifySet` (comment 13; type-level
+   SetKind checked at the boundary, before any prompt or write).
+5. `9d90ad7` — proxy: `Client.set_client_factory` injects a 15 s httpx
+   timeout (franklinwh ships none → httpx's 5 s default) + `_is_retried_transient`
+   suppresses timeout tracebacks to one line (`upstream timeout, already
+   retried`); TokenFetcher's explicit `timeout=10` untouched; smoke-test pins
+   for Read/Connect/PoolTimeout + negatives. Comment 3/11 (secrets) resolved
+   by the reviewer: design unchanged.
+
+- Deploy note: proxy changes take effect on the next proxy spawn —
+  `evcc daemon restart` (per-session proxy) or a new one-shot command run.
+
 
