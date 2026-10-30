@@ -8,6 +8,7 @@ This allows the Node.js application to communicate with FranklinWH systems throu
 
 import asyncio
 import hmac
+import httpx
 import json
 import os
 import signal
@@ -33,6 +34,17 @@ try:
 except ImportError:
     print("Error: franklinwh package not installed. Run: pip install franklinwh", file=sys.stderr)
     sys.exit(1)
+
+# franklinwh's default AsyncClient sets no timeout (httpx's 5 s default
+# applies), and Franklin's cloud occasionally takes longer than that to
+# answer the switch-usage POST — seen live as ~26 httpx.ReadTimeout failures
+# per 24 h. 15 s rides out the slow-but-alive answers; run_read still retries
+# what stays down. Only Client's sessions change: TokenFetcher owns a
+# different client with its explicit timeout=10.
+READ_TIMEOUT_SECONDS = 15.0
+Client.set_client_factory(
+    lambda: httpx.AsyncClient(http2=True, timeout=httpx.Timeout(READ_TIMEOUT_SECONDS))
+)
 
 # Shared secret (Phase 3): Node mints a random token per spawn and passes it
 # here; every route except /health then demands it as X-Proxy-Token. Refusing
@@ -136,6 +148,17 @@ def _known_flaky_upstream(error):
     )
 
 
+def _is_retried_transient(error):
+    """True for upstream failures run_read already retried.
+
+    The known flaky TypeErrors plus httpx timeouts (ReadTimeout et al.): the
+    POST went out and Franklin's cloud answered too late or not at all — a
+    final failure after the retries is explained by the attempt lines, so the
+    handler prints one compact line instead of a 30-line traceback.
+    """
+    return _known_flaky_upstream(error) or isinstance(error, httpx.TimeoutException)
+
+
 def require_client(f):
     """Decorator to ensure client is initialized before handling request."""
     @wraps(f)
@@ -188,13 +211,18 @@ def handle_franklin_errors(f):
             # reaches stderr and a 500 is undiagnosable after the fact. Node
             # forwards stderr live as [proxy] lines, so this is what makes the
             # failure visible from the CLI. `details` in the body only has str(e).
-            if _known_flaky_upstream(e):
-                # Known upstream null-data flakiness (run_read already retried):
-                # the traceback repeats what the attempt lines proved and wrecks
+            if _is_retried_transient(e):
+                # Already retried by run_read (attempt lines above): the
+                # traceback repeats what the attempt lines proved and wrecks
                 # the daemon log. One compact line instead.
+                reason = (
+                    "known flaky upstream"
+                    if _known_flaky_upstream(e)
+                    else "upstream timeout, already retried"
+                )
                 print(
                     f"franklinwh gave up: {type(e).__name__}: {str(e) or 'no message'} "
-                    "(known flaky upstream - traceback suppressed)",
+                    f"({reason} - traceback suppressed)",
                     file=sys.stderr,
                 )
             else:

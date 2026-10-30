@@ -204,9 +204,10 @@ suite('proxy security smoke (Phase 3)', () => {
     expect(body.error).toContain('Not authenticated');
   }, 15_000);
 
-  it('suppresses only the known flaky-upstream TypeErrors (traceback policy)', () => {
+  it('suppresses retried upstream failures: flaky TypeErrors + timeouts', () => {
     // Both live NoneType signatures (subscriptable / container) are the same
-    // upstream null-data condition; anything else keeps its traceback.
+    // upstream null-data condition; httpx timeouts were retried by run_read
+    // too. Anything else keeps its traceback.
     const result = spawnSync(
       VENV_PYTHON,
       [
@@ -218,6 +219,11 @@ suite('proxy security smoke (Phase 3)', () => {
           `assert m._known_flaky_upstream(TypeError("argument of type 'NoneType' object is not a container or iterable"))`,
           `assert not m._known_flaky_upstream(TypeError('some other problem'))`,
           `assert not m._known_flaky_upstream(ValueError("'NoneType' object is not subscriptable"))`,
+          `assert m._is_retried_transient(m.httpx.ReadTimeout('timed out'))`,
+          `assert m._is_retried_transient(m.httpx.ConnectTimeout('connect'))`,
+          `assert m._is_retried_transient(m.httpx.PoolTimeout('pool'))`,
+          `assert not m._is_retried_transient(ValueError('boom'))`,
+          `assert not m._is_retried_transient(TypeError('some other problem'))`,
           `print('ok')`,
         ].join('\n'),
       ],
