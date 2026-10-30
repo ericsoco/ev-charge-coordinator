@@ -25,5 +25,6 @@ Use this skill when invoked directly by name.
 2. Read all open reviews + comments on the PR.
     * gh api repos/ericsoco/ev-charge-coordinator/pulls/{PR_NUMBER}/comments
     * Extract: path (file name), line (or position), body (comment content), and id / node_id (required to reply or resolve).
-3a. In Plan mode, offer suggestions locally to address each PR review comment.
+3a. In Plan mode, offer suggestions locally to address all PR review comments.
+    Ensure all comments are addressed; reference each comment explicitly in your plan.
 3b. In Act mode, make code changes and commit locally to address all PR review comments.
