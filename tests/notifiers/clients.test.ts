@@ -42,7 +42,7 @@ describe('createNtfyNotifier', () => {
     expect(calls[0].init?.method).toBe('POST');
     expect(headers(calls[0].init).Title).toBe('evcc failure');
     expect(headers(calls[0].init).Priority).toBe('high');
-    expect(calls[0].init?.body).toBe('⚠ ev-poll failed: boom');
+    expect(calls[0].init?.body).toBe('⚠️ ev-poll failed: boom');
   });
 
   it('defaults to ntfy.sh and omits Priority when unset', async () => {
@@ -72,7 +72,7 @@ describe('createSlackNotifier', () => {
     expect(calls[0].url).toBe('https://hooks.slack.com/services/T00/B00/xxx');
     expect(calls[0].init?.method).toBe('POST');
     expect(headers(calls[0].init)['Content-Type']).toBe('application/json');
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ text: '⚠ ev-poll failed: boom' });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ text: '⚠️ ev-poll failed: boom' });
   });
 
   it('rejects on a non-2xx response (the fanout logs it)', async () => {
