@@ -55,6 +55,7 @@ import { selectAppCredentials } from './commands/authenticate.js';
 import { describeAxiosHttpError, probeClientCredentials } from './services/tesla/oauth.js';
 import * as paint from './utils/color.js';
 import {
+  followLogs,
   restartDaemon,
   runDaemonScript,
   stopDaemon,
@@ -1175,6 +1176,22 @@ daemonCommand
   .description('Remove the LaunchAgent and Login Item launcher (keeps store, logs, credentials)')
   .option('--dry-run', 'Print the actions; change nothing')
   .action(async (options) => reportLifecycle(runDaemonScript('uninstall', options.dryRun === true)));
+
+daemonCommand
+  .command('logs')
+  .description('Follow the daemon logs in this terminal (tail -F on daemon.log + daemon.err.log)')
+  .option('--lines <n>', 'Recent lines to show before following (default 50)')
+  .action(async (options) => {
+    // Validate here, not in an argParser: commander does not catch parser
+    // throws, so a bad value would surface as a raw stack trace.
+    const lines = options.lines === undefined ? 50 : Number(options.lines);
+    if (!Number.isInteger(lines) || lines < 0) {
+      console.log(paint.error('--lines must be a non-negative integer'));
+      process.exitCode = 1;
+      return;
+    }
+    reportLifecycle(followLogs({ lines }));
+  });
 
 // A parent-level flag before a lifecycle subcommand (`daemon --dry-run
 // uninstall`) parses onto the parent, whose action never runs when a

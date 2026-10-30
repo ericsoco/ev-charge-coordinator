@@ -145,6 +145,7 @@ describe('flag tables mirror Commander definitions', () => {
       restart: 'daemon',
       install: 'daemon',
       uninstall: 'daemon',
+      logs: 'daemon',
     };
 
     const commandNames = [...INDEX_SOURCE.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]);
