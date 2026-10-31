@@ -119,6 +119,6 @@ fi
 echo "Installed $LABEL (Login Items title: \"EV Charge Coordinator\")"
 echo "Verify:"
 echo "  launchctl print $DOMAIN/$LABEL | grep -E $'^\t(state|pid) ='"
-echo "  node dist/index.js daemon logs   # follow daemon.log + daemon.err.log"
+echo "  node dist/index.js daemon logs   # print recent daemon.log lines (--follow, --err)"
 echo "  node dist/index.js status"
 echo "First run: choose 'Always Allow' if macOS asks about keychain access."

@@ -1,6 +1,6 @@
 /**
  * LaunchAgent lifecycle behind `evcc daemon stop|restart|install|uninstall`,
- * plus the `logs` terminal follower.
+ * plus the `logs` viewer.
  *
  * The bash scripts stay the single source of truth for install/uninstall
  * (spawned, not re-implemented); stop/restart are the two operations the
@@ -110,34 +110,46 @@ export function restartDaemon(deps: LifecycleDeps = {}): LifecycleResult {
   return { ok: true, message: `daemon restarted (${target}).` };
 }
 
-export interface FollowLogsDeps {
+export interface ShowLogsDeps {
   exec?: ExecFn;
   /** Default: `<config-dir>/logs`; tests pass temp dirs. */
   logsDir?: string;
-  /** Recent lines shown before following (default 50). */
+  /** Recent lines shown (default 50). */
   lines?: number;
+  /** Also show daemon.err.log (default: daemon.log only). */
+  err?: boolean;
+  /** Keep following after printing (tail -F; Ctrl-C ends it). */
+  follow?: boolean;
 }
 
 /**
- * Attach this terminal to the running daemon's log output: `tail -F` over
- * BOTH streams (daemon.log, and daemon.err.log where launchd sends stderr —
- * [proxy] lines and [daemon] task failures), stdio inherited so Ctrl-C ends
- * it. `-F` (by name, not descriptor): waits for files the daemon has not
- * written yet and survives the documented `: > daemon.log` truncation.
+ * Show the daemon's log output in this terminal. Default: print the recent
+ * lines and return — the CLI exits on its own, no ^C. `follow` opts back
+ * into streaming (`tail -F`: waits for files not yet written, survives the
+ * documented `: > daemon.log` truncation) until Ctrl-C. Only daemon.log by
+ * default; `err` adds daemon.err.log, where launchd sends stderr ([proxy]
+ * lines, [daemon] task failures).
  */
-export function followLogs(deps: FollowLogsDeps = {}): LifecycleResult {
+export function showLogs(deps: ShowLogsDeps = {}): LifecycleResult {
   const logsDir = deps.logsDir ?? path.join(getConfigDir(), 'logs');
   if (!fs.existsSync(logsDir)) {
     return { ok: false, message: `${logsDir} not found — run \`evcc daemon install\` first.` };
   }
-  const lines = deps.lines ?? 50;
-  const files = ['daemon.log', 'daemon.err.log'].map((name) => path.join(logsDir, name));
+  const wanted = deps.err ? ['daemon.log', 'daemon.err.log'] : ['daemon.log'];
+  const files = wanted
+    .map((name) => path.join(logsDir, name))
+    .filter((file) => fs.existsSync(file));
+  if (files.length === 0) {
+    return { ok: false, message: `no log files in ${logsDir} yet — the daemon has not started.` };
+  }
+  const tailArgs = [...(deps.follow ? ['-F'] : []), '-n', String(deps.lines ?? 50), ...files];
   const exec = deps.exec ?? defaultExec;
-  // stdio inherited: tail's output IS this process's output, and the
-  // foreground group's Ctrl-C reaches both processes.
-  const result = exec(['/usr/bin/tail', '-F', '-n', String(lines), ...files], { inherit: true });
+  // stdio inherited: tail's output IS this process's output. Print-and-exit
+  // returns here; --follow stays until Ctrl-C (the foreground group's SIGINT
+  // reaches both processes).
+  const result = exec(['/usr/bin/tail', ...tailArgs], { inherit: true });
   if (result.status !== 0 && result.status !== null) {
-    return { ok: false, message: `following logs failed: tail exited ${result.status}` };
+    return { ok: false, message: `showing logs failed: tail exited ${result.status}` };
   }
   return { ok: true, message: '' };
 }

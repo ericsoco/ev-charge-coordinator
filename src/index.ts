@@ -55,9 +55,9 @@ import { selectAppCredentials } from './commands/authenticate.js';
 import { describeAxiosHttpError, probeClientCredentials } from './services/tesla/oauth.js';
 import * as paint from './utils/color.js';
 import {
-  followLogs,
   restartDaemon,
   runDaemonScript,
+  showLogs,
   stopDaemon,
   strayParentFlagProblem,
   type LifecycleResult,
@@ -1179,8 +1179,10 @@ daemonCommand
 
 daemonCommand
   .command('logs')
-  .description('Follow the daemon logs in this terminal (tail -F on daemon.log + daemon.err.log)')
-  .option('--lines <n>', 'Recent lines to show before following (default 50)')
+  .description('Show recent daemon log lines (--follow to stream, --err for the error log)')
+  .option('--lines <n>', 'Recent lines to show (default 50)')
+  .option('-f, --follow', 'Keep streaming after printing (tail -F; Ctrl-C stops)')
+  .option('--err', 'Also show daemon.err.log ([proxy] lines, task failures)')
   .action(async (options) => {
     // Validate here, not in an argParser: commander does not catch parser
     // throws, so a bad value would surface as a raw stack trace.
@@ -1190,7 +1192,9 @@ daemonCommand
       process.exitCode = 1;
       return;
     }
-    reportLifecycle(followLogs({ lines }));
+    reportLifecycle(
+      showLogs({ lines, follow: options.follow === true, err: options.err === true })
+    );
   });
 
 // A parent-level flag before a lifecycle subcommand (`daemon --dry-run
