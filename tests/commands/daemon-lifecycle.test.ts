@@ -10,9 +10,9 @@ import * as path from 'path';
 import { Command } from 'commander';
 import {
   deriveLabel,
-  followLogs,
   restartDaemon,
   runDaemonScript,
+  showLogs,
   stopDaemon,
   strayParentFlagProblem,
   type ExecFn,
@@ -242,69 +242,106 @@ describe('subcommand flag routing (Commander positional-mode guard)', () => {
   });
 });
 
-describe('followLogs (evcc daemon logs)', () => {
+describe('showLogs (evcc daemon logs)', () => {
   let logsDir: string;
+  let logFile: string;
+  let errFile: string;
 
   beforeEach(() => {
     logsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-daemon-logs-'));
     dirs.push(logsDir);
+    logFile = path.join(logsDir, 'daemon.log');
+    errFile = path.join(logsDir, 'daemon.err.log');
+    fs.writeFileSync(logFile, 'line\n');
+    fs.writeFileSync(errFile, 'err\n');
   });
 
-  const paths = (dir: string): string[] => [
-    path.join(dir, 'daemon.log'),
-    path.join(dir, 'daemon.err.log'),
-  ];
-
-  it("spawns tail -F on both streams with the default 50 lines, stdio inherited", () => {
+  it('by default prints recent daemon.log lines and returns (no -F, no err)', () => {
     const { calls, exec } = recorder();
 
-    const result = followLogs({ exec, logsDir });
+    const result = showLogs({ exec, logsDir });
 
     expect(result).toEqual({ ok: true, message: '' });
     expect(calls).toEqual([
-      {
-        command: ['/usr/bin/tail', '-F', '-n', '50', ...paths(logsDir)],
-        inherit: true,
-      },
+      { command: ['/usr/bin/tail', '-n', '50', logFile], inherit: true },
     ]);
+  });
+
+  it('--err adds daemon.err.log (still print-and-exit)', () => {
+    const { calls, exec } = recorder();
+
+    showLogs({ exec, logsDir, err: true });
+
+    expect(calls[0].command).toEqual(['/usr/bin/tail', '-n', '50', logFile, errFile]);
+  });
+
+  it('--follow streams instead (tail -F), daemon.log only', () => {
+    const { calls, exec } = recorder();
+
+    showLogs({ exec, logsDir, follow: true });
+
+    expect(calls[0].command).toEqual(['/usr/bin/tail', '-F', '-n', '50', logFile]);
+  });
+
+  it('--follow --err streams both files', () => {
+    const { calls, exec } = recorder();
+
+    showLogs({ exec, logsDir, follow: true, err: true });
+
+    expect(calls[0].command).toEqual(['/usr/bin/tail', '-F', '-n', '50', logFile, errFile]);
   });
 
   it('passes --lines through', () => {
     const { calls, exec } = recorder();
 
-    followLogs({ exec, logsDir, lines: 5 });
+    showLogs({ exec, logsDir, lines: 5 });
 
-    expect(calls[0].command).toEqual([
-      '/usr/bin/tail',
-      '-F',
-      '-n',
-      '5',
-      ...paths(logsDir),
-    ]);
+    expect(calls[0].command).toEqual(['/usr/bin/tail', '-n', '5', logFile]);
   });
 
   it('refuses when the logs directory does not exist — install first', () => {
     const { calls, exec } = recorder();
 
-    const result = followLogs({ exec, logsDir: path.join(logsDir, 'nope') });
+    const result = showLogs({ exec, logsDir: path.join(logsDir, 'nope') });
 
     expect(result.ok).toBe(false);
     expect(result.message).toContain('run `evcc daemon install` first');
     expect(calls).toEqual([]);
   });
 
+  it('refuses when the directory exists but no log file does yet', () => {
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-daemon-logs-empty-'));
+    dirs.push(empty);
+    const { calls, exec } = recorder();
+
+    const result = showLogs({ exec, logsDir: empty });
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('the daemon has not started');
+    expect(calls).toEqual([]);
+  });
+
+  it('skips a missing file when another exists (--err)', () => {
+    fs.rmSync(errFile);
+    const { calls, exec } = recorder();
+
+    showLogs({ exec, logsDir, err: true });
+
+    expect(calls[0].command).toEqual(['/usr/bin/tail', '-n', '50', logFile]);
+  });
+
   it('propagates a non-zero tail exit as a failure', () => {
     const { exec } = recorder(() => 2);
 
-    const result = followLogs({ exec, logsDir });
+    const result = showLogs({ exec, logsDir });
 
-    expect(result).toEqual({ ok: false, message: 'following logs failed: tail exited 2' });
+    expect(result).toEqual({ ok: false, message: 'showing logs failed: tail exited 2' });
   });
 
-  it('treats a signal exit (Ctrl-C) as a clean stop', () => {
+  it('treats a signal exit (--follow under Ctrl-C) as a clean stop', () => {
     const { exec } = recorder(() => null);
 
-    const result = followLogs({ exec, logsDir });
+    const result = showLogs({ exec, logsDir, follow: true });
 
     expect(result).toEqual({ ok: true, message: '' });
   });
