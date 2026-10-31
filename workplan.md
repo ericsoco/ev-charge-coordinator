@@ -1604,4 +1604,61 @@ commit (final: **759 passed / 2 skipped**).
 - Deploy note: proxy changes take effect on the next proxy spawn —
   `evcc daemon restart` (per-session proxy) or a new one-shot command run.
 
+## One-shot ↔ REPL drift audit (2026-10-31)
+
+Branch `fix/repl-cli-parity`. Audited every command surface against its
+one-shot counterpart and corrected the deviations found. The shared-handler
+refactor plus `parseCommandArgs` had already fixed most historical drift; what
+remained:
+
+1. **`set-ev-charge-limit` ignored its argument in the REPL** — the dispatch
+   case discarded `args` and always prompted. Now accepts an optional inline
+   `<percent>` (validated by the shared handler, same message as the one-shot),
+   honors `--help`/`-h` via `printCommandHelp`, rejects stray positionals with
+   Commander's wording, and keeps the numeric prompt as the no-argument
+   fallback (`src/index.ts`).
+2. **`set-home-location --help` parsed `--help` as a latitude in the REPL** —
+   now intercepted and rendered from the Commander definition, and >2
+   positionals are rejected like the one-shot.
+3. **`notify` was one-shot-only** — invisible to both the REPL and the
+   drift-guard scan (registered via `program.addCommand`, which the guard's
+   `.command('name')` regex cannot see). Wired in: `NOTIFY_SUBCOMMANDS` /
+   `NOTIFY_SET_VALUE_FLAGS` / `parseNotifyArgs` in `src/commands/repl.ts`
+   (subcommand + kind + flags with Commander-style errors; a subcommand
+   structure the flat `parseCommandArgs` cannot express), a `notify` dispatch
+   case in `index.ts` sharing `buildNotifyDeps()` with the one-shot
+   registration and the same `runNotifySet`/`runNotifyClear`/`runNotifyTest`
+   runners, `printCommandHelp` gained an optional subcommand parameter, and
+   the completer offers subcommands/kind values/flags in their slots.
+4. **One-shot silently ignored stray positionals** (`config extra`,
+   `set-ev-charge-limit 80 90` ran anyway) while the REPL rejected them —
+   `repl.ts`'s doc comment claimed both rejected, which was false. Fixed the
+   one-shot side: `program.allowExcessArguments(false)` (inherited by all
+   `.command()` subcommands) and explicitly on the notify command
+   (`addCommand` does not copy inherited settings — verified in Commander
+   12.1.0 source).
+5. **One-shot rejected negative home coordinates** (`set-home-location -33.9
+   151.2` → `unknown option '-33.9'`) while the REPL accepted them — anyone
+   south of the equator or west of the prime meridian could not set a home
+   location from the one-shot CLI. New `src/utils/argv.ts`:
+   `normalizeNegativePositionals` inserts `--` before the first
+   negative-number operand of that command before `program.parse` (respects an
+   existing `--`; `-h`/`--help` untouched).
+
+Tests: `tests/utils/argv.test.ts` (7 cases for the normalizer);
+`repl-commands.test.ts` grew notify parity pins (subcommand/flag sync against
+the real `notify.ts` source — closing the `addCommand` blind spot — plus
+wiring pins through `parseNotifyArgs`/`buildNotifyDeps`/the runners),
+`parseNotifyArgs` behavior (10 cases), notify completer slots, and
+positional-command pins (inline value, `--help`, strictness, normalization).
+Gate green: **788 passed / 2 skipped**; live-verified the one-shot behaviors
+(`config extra` → error, `set-home-location -33.9 151.2` → confirmation
+prompt, `notify --help`/`notify clear extra`/`notify bogus` mirror the REPL
+parse, `set-ev-charge-limit 80 --help` → help).
+
+Deliberate asymmetries that stay: exit codes (a REPL failure never exits the
+session), sidecar teardown timing (`runCommand` stops per-run sidecars; the
+REPL stops at session close), REPL error wording for single-dash typos vs
+Commander's phrasing (both reject).
+
 

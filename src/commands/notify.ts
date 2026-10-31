@@ -96,6 +96,9 @@ export async function runNotifyTest(deps: NotifyDeps): Promise<boolean> {
 export function createNotifyCommand(deps: NotifyDeps): Command {
   const notify = new Command('notify')
     .description('Manage notification secrets (ntfy, Slack) and test delivery')
+    // addCommand does not inherit the program's setting, so stray positionals
+    // (`notify clear extra`) must be rejected here to match the REPL parser.
+    .allowExcessArguments(false)
     .showHelpAfterError();
 
   notify

@@ -7,9 +7,22 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { BOOLEAN_FLAGS, REPL_COMMANDS, VALUE_FLAGS, completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from '../../src/commands/repl.js';
+import {
+  BOOLEAN_FLAGS,
+  NOTIFY_SET_VALUE_FLAGS,
+  NOTIFY_SUBCOMMANDS,
+  parseNotifyArgs,
+  REPL_COMMANDS,
+  VALUE_FLAGS,
+  completeCommand,
+  isReplCommand,
+  LOCAL_WHILE_BUSY,
+  parseCommandArgs,
+  renderHelp,
+} from '../../src/commands/repl.js';
 
 const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+const NOTIFY_SOURCE = readFileSync(new URL('../../src/commands/notify.ts', import.meta.url), 'utf8');
 
 const names = REPL_COMMANDS.map((command) => command.name);
 
@@ -313,6 +326,62 @@ describe('index.ts wiring', () => {
   });
 });
 
+describe('notify: one-shot and REPL dispatch parity', () => {
+  it('keeps NOTIFY_SUBCOMMANDS in sync with notify.ts registrations', () => {
+    // notify is registered via program.addCommand(createNotifyCommand(...)),
+    // which the index.ts `.command('name')` scan cannot see — the exact blind
+    // spot that let notify go REPL-less. Its subcommands are pinned from the
+    // real source instead. `help` is Commander's implicit subcommand.
+    const subs = [...NOTIFY_SOURCE.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]);
+    expect(subs.sort()).toEqual(['clear', 'set', 'test']);
+    expect([...NOTIFY_SUBCOMMANDS].sort()).toEqual(['clear', 'help', 'set', 'test']);
+  });
+
+  it('keeps NOTIFY_SET_VALUE_FLAGS in sync with the notify set definition', () => {
+    const start = NOTIFY_SOURCE.indexOf(".command('set')");
+    const end = NOTIFY_SOURCE.indexOf('.action(', start);
+    const block = NOTIFY_SOURCE.slice(start, end === -1 ? undefined : end);
+    const commanderFlags = [...block.matchAll(/\.option\('--([a-z0-9-]+)/g)].map((m) => m[1]);
+    expect([...NOTIFY_SET_VALUE_FLAGS].sort()).toEqual([...new Set(commanderFlags)].sort());
+  });
+
+  it('rejects stray positionals on the one-shot notify command too', () => {
+    // addCommand does not copy inherited settings, so the program-level
+    // allowExcessArguments(false) never reaches notify; it is set explicitly.
+    expect(NOTIFY_SOURCE).toContain('allowExcessArguments(false)');
+    // And the program rejects them for every other command.
+    expect(INDEX_SOURCE).toContain('program.allowExcessArguments(false)');
+  });
+
+  it('routes the REPL notify case through parseNotifyArgs and the shared deps', () => {
+    expect(INDEX_SOURCE).toContain("case 'notify':");
+    expect(INDEX_SOURCE).toContain('parseNotifyArgs(args)');
+    // One deps factory serves both surfaces.
+    const depBuilds = INDEX_SOURCE.match(/buildNotifyDeps\(\)/g) ?? [];
+    expect(depBuilds.length).toBeGreaterThanOrEqual(2);
+    expect(INDEX_SOURCE).toContain('createNotifyCommand(buildNotifyDeps())');
+    // And the same runners the one-shot dispatches to.
+    for (const runner of ['runNotifySet(', 'runNotifyClear(', 'runNotifyTest(']) {
+      expect(INDEX_SOURCE).toContain(runner);
+    }
+  });
+
+  it('renders notify (sub)command help from the Commander definitions', () => {
+    expect(INDEX_SOURCE).toContain("printCommandHelp('notify')");
+    expect(INDEX_SOURCE).toContain(
+      "printCommandHelp('notify', parsed.helpFor === 'notify' ? undefined : parsed.helpFor)"
+    );
+  });
+
+  it('does not whitelist notify as one-shot-only', () => {
+    const guard = INDEX_SOURCE.slice(
+      INDEX_SOURCE.indexOf('const oneShotOnly'),
+      INDEX_SOURCE.indexOf('const subcommands')
+    );
+    expect(guard).not.toContain('notify');
+  });
+});
+
 describe('parseCommandArgs - REPL inline flags match Commander', () => {
   it('returns empty options for no tokens', () => {
     expect(parseCommandArgs('config', [])).toEqual({ options: {}, error: null });
@@ -442,5 +511,176 @@ describe('parseCommandArgs - REPL inline flags match Commander', () => {
       options: {},
       error: "error: option '--domain <value>' argument missing",
     });
+  });
+});
+
+describe('completeCommand - notify subcommand slots', () => {
+  it('offers the subcommands after `notify `', () => {
+    expect(completeCommand('notify ')).toEqual([
+      ['set', 'clear', 'test', 'help', '--help', '-h'],
+      '',
+    ]);
+    expect(completeCommand('notify s')).toEqual([['set'], 's']);
+  });
+
+  it('offers the kind values and flags inside `notify set `', () => {
+    expect(completeCommand('notify set ')).toEqual([
+      ['ntfy', 'slack', '--topic', '--webhook-url', '--help', '-h'],
+      '',
+    ]);
+    expect(completeCommand('notify set ntfy ')).toEqual([
+      ['--topic', '--webhook-url', '--help', '-h'],
+      '',
+    ]);
+  });
+
+  it('offers nothing inside a value slot; subcommands for help topics', () => {
+    expect(completeCommand('notify set --topic ')).toEqual([[], '']);
+    expect(completeCommand('notify clear ')).toEqual([[], '']);
+    expect(completeCommand('notify test ')).toEqual([[], '']);
+    expect(completeCommand('notify help ')).toEqual([['set', 'clear', 'test', 'help'], '']);
+  });
+});
+
+describe('positional-argument commands - inline value, help, and strictness', () => {
+  const sliceCase = (from: string, to: string): string => {
+    const start = INDEX_SOURCE.indexOf(from);
+    const end = INDEX_SOURCE.indexOf(to, start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return INDEX_SOURCE.slice(start, end);
+  };
+
+  it('gives set-ev-charge-limit an inline value, --help, and the prompt fallback', () => {
+    const block = sliceCase("case 'set-ev-charge-limit':", "case 'start-ev-charging':");
+    expect(block).toContain("printCommandHelp('set-ev-charge-limit')");
+    // Inline argument mirrors the one-shot `<percent>`; prompt stays as fallback.
+    expect(block).toContain('limit = parseInt(args[0])');
+    expect(block).toContain("promptNumeric('Enter charge limit (50-100%, ESC to cancel): ')");
+    // Stray positionals match the one-shot's Commander rejection.
+    expect(block).toContain("too many arguments for 'set-ev-charge-limit'");
+  });
+
+  it('intercepts --help in the set-home-location case before the handler sees it', () => {
+    const block = sliceCase("case 'set-home-location':", "case 'get-ev-bsoc':");
+    expect(block).toContain("printCommandHelp('set-home-location')");
+    expect(block).toContain("too many arguments for 'set-home-location'");
+    // Positionals still flow raw to the handler (negatives included).
+    expect(block).toContain('setHomeLocationCommand(currentContext(), args[0], args[1])');
+  });
+
+  it('normalizes negative coordinates before the one-shot parse', () => {
+    // The REPL passes positionals raw, so it always accepted them; the one-shot
+    // now inserts `--` so Commander reads them as operands too.
+    expect(INDEX_SOURCE).toContain('program.parse(normalizeNegativePositionals(process.argv))');
+    expect(INDEX_SOURCE).toContain(
+      "import { normalizeNegativePositionals } from './utils/argv.js'"
+    );
+  });
+});
+
+describe('parseNotifyArgs - REPL mirrors the one-shot notify command', () => {
+  it('treats bare `notify` as pass-through (the one-shot prints help)', () => {
+    expect(parseNotifyArgs([])).toEqual({
+      subcommand: null,
+      kind: null,
+      options: {},
+      helpFor: null,
+      error: null,
+    });
+  });
+
+  it('maps `set <kind>` with its value flags in any order', () => {
+    expect(parseNotifyArgs(['set', 'ntfy', '--topic', 'my-topic'])).toEqual({
+      subcommand: 'set',
+      kind: 'ntfy',
+      options: { topic: 'my-topic' },
+      helpFor: null,
+      error: null,
+    });
+    expect(parseNotifyArgs(['set', '--webhook-url', 'https://hooks.example/x', 'slack'])).toEqual({
+      subcommand: 'set',
+      kind: 'slack',
+      options: { webhookUrl: 'https://hooks.example/x' },
+      helpFor: null,
+      error: null,
+    });
+  });
+
+  it('passes `set` with no flags through — the runner prompts (masked) for the secret', () => {
+    expect(parseNotifyArgs(['set', 'ntfy'])).toEqual({
+      subcommand: 'set',
+      kind: 'ntfy',
+      options: {},
+      helpFor: null,
+      error: null,
+    });
+  });
+
+  it('rejects a missing kind like the one-shot missingArgument', () => {
+    expect(parseNotifyArgs(['set'])).toEqual({
+      subcommand: 'set',
+      kind: null,
+      options: {},
+      helpFor: null,
+      error: "error: missing required argument 'kind'",
+    });
+  });
+
+  it('rejects an unknown kind with the one-shot action message', () => {
+    expect(parseNotifyArgs(['set', 'pigeon']).error).toBe(
+      "error: unknown notifier kind 'pigeon' (expected ntfy or slack)"
+    );
+  });
+
+  it('parses clear and test, and rejects stray positionals like the one-shot', () => {
+    expect(parseNotifyArgs(['clear']).subcommand).toBe('clear');
+    expect(parseNotifyArgs(['test']).subcommand).toBe('test');
+    expect(parseNotifyArgs(['clear', 'extra']).error).toBe(
+      "error: too many arguments for 'clear'. Expected 0 arguments but got 1."
+    );
+    expect(parseNotifyArgs(['set', 'ntfy', 'extra']).error).toBe(
+      "error: too many arguments for 'set'. Expected 1 argument but got 2."
+    );
+  });
+
+  it('rejects unknown subcommands and options with Commander-style text', () => {
+    expect(parseNotifyArgs(['bogus']).error).toBe("error: unknown command 'bogus'");
+    expect(parseNotifyArgs(['--nope']).error).toBe("error: unknown option '--nope'");
+    expect(parseNotifyArgs(['-nope']).error).toBe("error: unknown option '-nope'");
+    expect(parseNotifyArgs(['set', 'ntfy', '--nope']).error).toBe(
+      "error: unknown option '--nope'"
+    );
+    expect(parseNotifyArgs(['test', '--topic', 'x']).error).toBe(
+      "error: unknown option '--topic'"
+    );
+  });
+
+  it('rejects a value flag missing its value', () => {
+    expect(parseNotifyArgs(['set', 'ntfy', '--topic']).error).toBe(
+      "error: option '--topic <value>' argument missing"
+    );
+    expect(parseNotifyArgs(['set', 'ntfy', '--topic', '--webhook-url', 'u']).error).toBe(
+      "error: option '--topic <value>' argument missing"
+    );
+  });
+
+  it('turns --help/-h into the matching (sub)command help', () => {
+    expect(parseNotifyArgs(['--help'])).toEqual({
+      subcommand: null,
+      kind: null,
+      options: {},
+      helpFor: 'notify',
+      error: null,
+    });
+    expect(parseNotifyArgs(['set', 'ntfy', '--help']).helpFor).toBe('set');
+    expect(parseNotifyArgs(['clear', '-h']).helpFor).toBe('clear');
+  });
+
+  it('routes `notify help [sub]` like the implicit help subcommand', () => {
+    expect(parseNotifyArgs(['help']).helpFor).toBe('notify');
+    expect(parseNotifyArgs(['help', 'set']).helpFor).toBe('set');
+    // Unknown topic: the one-shot prints notify's usage and exits 1.
+    expect(parseNotifyArgs(['help', 'bogus']).helpFor).toBe('notify');
   });
 });

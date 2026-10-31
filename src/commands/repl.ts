@@ -49,6 +49,10 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
     name: 'set-home-location',
     description: 'Set the home location (secret): from arguments, or from the vehicle',
   },
+  {
+    name: 'notify',
+    description: 'Manage notification secrets (ntfy, Slack) and test delivery',
+  },
   { name: 'exit', description: 'Exit the application' },
 ];
 
@@ -89,6 +93,122 @@ export interface ParsedArgs {
 
 function camelCase(kebab: string): string {
   return kebab.replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase());
+}
+
+/**
+ * Subcommands of `notify`, mirroring the one-shot command's structure
+ * (`help` is Commander's implicit subcommand, pinned by the drift guard).
+ */
+export const NOTIFY_SUBCOMMANDS: readonly string[] = ['set', 'clear', 'test', 'help'];
+
+/** Value flags of `notify set`, mirroring commands/notify.ts. */
+export const NOTIFY_SET_VALUE_FLAGS: readonly string[] = ['topic', 'webhook-url'];
+
+export interface ParsedNotify {
+  /** The subcommand (set | clear | test | help); null when none was given. */
+  subcommand: string | null;
+  /** The positional after `set` — the notifier kind (ntfy | slack). */
+  kind: string | null;
+  /** Commander-shaped options for the subcommand. */
+  options: Record<string, string | boolean>;
+  /** Set when help was requested; names the command it was requested for. */
+  helpFor: string | null;
+  /** Commander-style error text, or null when the tokens are valid. */
+  error: string | null;
+}
+
+/**
+ * Parse the tokens after `notify` into its subcommand, kind, and flags.
+ *
+ * `notify` has a subcommand structure that parseCommandArgs (flat flags for one
+ * command) cannot express, so it gets its own parser — same contract: mirror
+ * the one-shot command's accepts/rejects exactly, with Commander-style error
+ * text. The one-shot rejects stray positionals and unknown flags here too
+ * (allowExcessArguments(false) on the notify command, which addCommand does
+ * not inherit from the program).
+ */
+export function parseNotifyArgs(tokens: string[]): ParsedNotify {
+  const empty: ParsedNotify = {
+    subcommand: null,
+    kind: null,
+    options: {},
+    helpFor: null,
+    error: null,
+  };
+  const [first, ...rest] = tokens;
+  if (first === undefined) return empty; // bare `notify`: the caller shows help
+  if (first === 'help') {
+    // `notify help [sub]`: an unknown or absent topic falls back to notify's
+    // own help, exactly like the one-shot's implicit help subcommand.
+    const topic = rest[0];
+    return {
+      ...empty,
+      subcommand: 'help',
+      helpFor: topic !== undefined && NOTIFY_SUBCOMMANDS.includes(topic) ? topic : 'notify',
+    };
+  }
+  if (first === '--help' || first === '-h') return { ...empty, helpFor: 'notify' };
+  if (!NOTIFY_SUBCOMMANDS.includes(first)) {
+    return {
+      ...empty,
+      error: first.startsWith('-')
+        ? `error: unknown option '${first}'`
+        : `error: unknown command '${first}'`,
+    };
+  }
+
+  const valueFlags = new Set(first === 'set' ? NOTIFY_SET_VALUE_FLAGS : []);
+  const options: Record<string, string | boolean> = {};
+  let kind: string | null = null;
+
+  for (let i = 0; i < rest.length; i += 1) {
+    const token = rest[i];
+    if (token === '-h' || token === '--help') {
+      return { ...empty, subcommand: first, helpFor: first };
+    }
+    if (token.startsWith('-')) {
+      const flag = token.startsWith('--') ? token.slice(2) : null;
+      if (flag !== null && valueFlags.has(flag)) {
+        const value = rest[i + 1];
+        if (value === undefined || value.startsWith('--')) {
+          return { ...empty, error: `error: option '--${flag} <value>' argument missing` };
+        }
+        options[camelCase(flag)] = value;
+        i += 1;
+        continue;
+      }
+      return { ...empty, error: `error: unknown option '${token}'` };
+    }
+    if (first !== 'set') {
+      // clear/test declare no positional; the one-shot rejects these as excess.
+      return {
+        ...empty,
+        error: `error: too many arguments for '${first}'. Expected 0 arguments but got 1.`,
+      };
+    }
+    if (kind !== null) {
+      return {
+        ...empty,
+        error: `error: too many arguments for 'set'. Expected 1 argument but got 2.`,
+      };
+    }
+    kind = token;
+  }
+
+  if (first === 'set') {
+    if (kind === null) {
+      return { ...empty, subcommand: 'set', error: "error: missing required argument 'kind'" };
+    }
+    if (kind !== 'ntfy' && kind !== 'slack') {
+      return {
+        ...empty,
+        subcommand: 'set',
+        error: `error: unknown notifier kind '${kind}' (expected ntfy or slack)`,
+      };
+    }
+  }
+
+  return { subcommand: first, kind, options, helpFor: null, error: null };
 }
 
 /**
@@ -159,6 +279,54 @@ function completeCommandNames(current: string): [string[], string] {
 }
 
 /**
+ * Completion inside `notify`: subcommand names, then the kind values and
+ * flags of `notify set`. `clear`/`test` take no arguments, and `help` takes
+ * a subcommand name — all matching what parseNotifyArgs would accept.
+ */
+function completeNotify(args: string[], current: string): [string[], string] {
+  if (args.length === 0) {
+    if (current !== '' && !current.startsWith('-')) {
+      return [NOTIFY_SUBCOMMANDS.filter((name) => name.startsWith(current)), current];
+    }
+    const flags = [...NOTIFY_SUBCOMMANDS, '--help', '-h'];
+    return [flags.filter((flag) => flag.startsWith(current)), current];
+  }
+
+  const [sub, ...rest] = args;
+  if (!NOTIFY_SUBCOMMANDS.includes(sub)) return [[], current];
+  if (sub === 'help') {
+    return [NOTIFY_SUBCOMMANDS.filter((name) => name.startsWith(current)), current];
+  }
+
+  // A value slot: the previous token expects its value, not another flag.
+  const previous = rest[rest.length - 1];
+  if (previous !== undefined && NOTIFY_SET_VALUE_FLAGS.includes(previous.slice(2))) {
+    return [[], current];
+  }
+
+  // `set` takes the kind as its first positional; clear/test take nothing.
+  // Walk the tokens, skipping flag values, to see whether the kind was given.
+  let kindGiven = false;
+  for (let i = 0; i < rest.length; i += 1) {
+    const token = rest[i];
+    if (token.startsWith('--')) {
+      if (NOTIFY_SET_VALUE_FLAGS.includes(token.slice(2))) i += 1; // skip its value
+      continue;
+    }
+    if (!token.startsWith('-')) kindGiven = true;
+  }
+  if (sub !== 'set' || (kindGiven && current !== '' && !current.startsWith('-'))) {
+    return [[], current];
+  }
+  const flags = [...NOTIFY_SET_VALUE_FLAGS.map((flag) => `--${flag}`), '--help', '-h'];
+  const values = sub === 'set' && !kindGiven ? ['ntfy', 'slack'] : [];
+  return [
+    [...values, ...flags].filter((hit) => hit.startsWith(current)),
+    current,
+  ];
+}
+
+/**
  * readline completer: command names while a command is being typed, its flags
  * once one has been, and accepted values inside a value flag's slot.
  *
@@ -180,6 +348,7 @@ export function completeCommand(line: string): [string[], string] {
   const [command, ...args] = before.trim().split(/\s+/);
   if (!COMMAND_NAMES.includes(command)) return [[], current];
   if (command === 'help') return completeCommandNames(current);
+  if (command === 'notify') return completeNotify(args, current);
 
   // A value slot: the previous token expects its value, not another flag.
   const previous = args[args.length - 1];

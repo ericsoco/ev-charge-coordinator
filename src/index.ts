@@ -49,8 +49,21 @@ import {
   type CommandResult,
 } from './commands/context.js';
 import { pendingQuestion, prompt, promptNumeric, promptSecret, setReplReadline } from './commands/prompt.js';
-import { createNotifyCommand } from './commands/notify.js';
-import { completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from './commands/repl.js';
+import {
+  createNotifyCommand,
+  runNotifyClear,
+  runNotifySet,
+  runNotifyTest,
+  type NotifyDeps,
+} from './commands/notify.js';
+import {
+  completeCommand,
+  isReplCommand,
+  LOCAL_WHILE_BUSY,
+  parseCommandArgs,
+  parseNotifyArgs,
+  renderHelp,
+} from './commands/repl.js';
 import { selectAppCredentials } from './commands/authenticate.js';
 import { describeAxiosHttpError, probeClientCredentials } from './services/tesla/oauth.js';
 import * as paint from './utils/color.js';
@@ -84,6 +97,7 @@ import {
   terminateProcess,
   writeRuntimeState,
 } from './services/ProcessManager.js';
+import { normalizeNegativePositionals } from './utils/argv.js';
 
 /** Loopback port the Python proxy listens on. Mirrors FranklinWHService's default. */
 const DEFAULT_PROXY_PORT = 3001;
@@ -253,6 +267,11 @@ const program = new Command();
 // flag like `daemon uninstall --dry-run` is not swallowed by the parent's
 // same-named option.
 program.enablePositionalOptions();
+// Reject stray positional arguments (`config extra`, `set-ev-charge-limit 80 90`).
+// These used to be silently ignored, so a typo ran a different command than the
+// user typed — while the REPL's parseCommandArgs already refused them. Both
+// surfaces now reject, and the REPL parser's claim to mirror Commander holds.
+program.allowExcessArguments(false);
 let franklinService: FranklinWHService | null = null;
 let teslaService: TeslaService | null = null;
 
@@ -771,12 +790,26 @@ program
           break;
         }
 
-        case 'set-home-location':
+        case 'set-home-location': {
           // Positional arguments only, no flags: `set-home-location` uses the
           // vehicle; `set-home-location <lat> <lng>` sets manually. The handler
-          // always confirms before writing (the stored value is otherwise invisible).
+          // always confirms before writing (the stored value is otherwise
+          // invisible). --help is intercepted so it prints the command help
+          // rather than being parsed as a latitude, like the one-shot CLI.
+          if (args.includes('--help') || args.includes('-h')) {
+            printCommandHelp('set-home-location');
+            break;
+          }
+          if (args.length > 2) {
+            // Mirrors the one-shot's Commander rejection of stray positionals.
+            console.log(
+              paint.warning(`error: too many arguments for 'set-home-location'. Expected 2 arguments but got ${args.length}.`)
+            );
+            break;
+          }
           await setHomeLocationCommand(currentContext(), args[0], args[1]);
           break;
+        }
 
         // Everything below dispatches to the same handler the one-shot CLI path
         // uses. These cases used to carry their own copies of the logic and had
@@ -795,16 +828,37 @@ program
           break;
 
         case 'set-ev-charge-limit': {
-          const limitStr = await promptNumeric('Enter charge limit (50-100%, ESC to cancel): ');
-          if (limitStr === null) {
-            // ESC never submits a line, so start a fresh one for the notice.
-            console.log(paint.info('\nCancelled.'));
+          // Inline value mirrors the one-shot `<percent>` argument; no value
+          // falls back to the REPL's numeric prompt. --help prints the same
+          // help the one-shot command would show (Commander renders it from
+          // its own definition, so the two cannot drift).
+          if (args.includes('--help') || args.includes('-h')) {
+            printCommandHelp('set-ev-charge-limit');
             break;
           }
-          const limit = parseInt(limitStr);
-          if (isNaN(limit)) {
-            console.log(paint.warning('Invalid charge limit. Must be a number between 50 and 100.'));
+          if (args.length > 1) {
+            console.log(
+              paint.warning(`error: too many arguments for 'set-ev-charge-limit'. Expected 1 argument but got ${args.length}.`)
+            );
             break;
+          }
+          let limit: number;
+          if (args.length === 1) {
+            // The handler validates NaN and range with the same message the
+            // one-shot action prints, so no check is needed here.
+            limit = parseInt(args[0]);
+          } else {
+            const limitStr = await promptNumeric('Enter charge limit (50-100%, ESC to cancel): ');
+            if (limitStr === null) {
+              // ESC never submits a line, so start a fresh one for the notice.
+              console.log(paint.info('\nCancelled.'));
+              break;
+            }
+            limit = parseInt(limitStr);
+            if (isNaN(limit)) {
+              console.log(paint.warning('Invalid charge limit. Must be a number between 50 and 100.'));
+              break;
+            }
           }
           await setEvChargeLimit(currentContext(), limit);
           break;
@@ -861,6 +915,50 @@ program
             break;
           }
           await runPairTeslaKey(options);
+          break;
+        }
+
+        case 'notify': {
+          // Subcommand structure (`set <kind> [--topic|--webhook-url]`,
+          // `clear`, `test`) that parseCommandArgs cannot express — same
+          // accepts/rejects via parseNotifyArgs, shared deps via
+          // buildNotifyDeps, and the same runners the one-shot dispatches to.
+          const parsed = parseNotifyArgs(args);
+          if (parsed.error !== null) {
+            console.log(paint.warning(parsed.error));
+            break;
+          }
+          if (parsed.helpFor !== null) {
+            printCommandHelp('notify', parsed.helpFor === 'notify' ? undefined : parsed.helpFor);
+            break;
+          }
+          if (parsed.subcommand === null) {
+            // Bare `notify`: the one-shot prints its help; do the same here.
+            printCommandHelp('notify');
+            break;
+          }
+          const deps = buildNotifyDeps();
+          try {
+            if (parsed.subcommand === 'set') {
+              const kind = parsed.kind as 'ntfy' | 'slack';
+              const value =
+                kind === 'ntfy'
+                  ? typeof parsed.options.topic === 'string'
+                    ? parsed.options.topic
+                    : undefined
+                  : typeof parsed.options.webhookUrl === 'string'
+                    ? parsed.options.webhookUrl
+                    : undefined;
+              await runNotifySet(kind, value, deps);
+            } else if (parsed.subcommand === 'clear') {
+              await runNotifyClear(deps);
+            } else if (parsed.subcommand === 'test') {
+              // false = nothing sent; the reason is already logged by the runner.
+              await runNotifyTest(deps);
+            }
+          } catch (error) {
+            console.log(paint.error(`error: ${describeError(error)}`));
+          }
           break;
         }
           
@@ -1441,11 +1539,19 @@ program
  * Print a subcommand's help from its Commander definition, so the REPL shows
  * exactly what `node dist/index.js <command> --help` prints and the option
  * descriptions live in one place. helpInformation() renders without exiting,
- * unlike Commander's own --help option. Returns false for unknown names.
+ * unlike Commander's own --help option. With a subcommand name, prints that
+ * subcommand's help (e.g. printCommandHelp('notify', 'set')). Returns false
+ * for unknown names.
  */
-function printCommandHelp(name: string): boolean {
+function printCommandHelp(name: string, subcommand?: string): boolean {
   const command = program.commands.find((candidate) => candidate.name() === name);
   if (!command) return false;
+  if (subcommand !== undefined) {
+    const sub = command.commands.find((candidate) => candidate.name() === subcommand);
+    if (!sub) return false;
+    console.log(sub.helpInformation());
+    return true;
+  }
   console.log(command.helpInformation());
   return true;
 }
@@ -1574,8 +1680,14 @@ async function runConfig(options: ConfigOptions): Promise<boolean> {
   return true;
 }
 
-program.addCommand(
-  createNotifyCommand({
+/**
+ * Build the notify command's dependencies.
+ *
+ * Shared by the one-shot `notify` registration and the REPL dispatch case, so
+ * the two surfaces cannot wire the credential store differently.
+ */
+function buildNotifyDeps(): NotifyDeps {
+  return {
     getNotifierEntries: () => resolveDaemonConfig().config?.notifiers ?? null,
     getSecrets: () => credentialStore.getNotifierSecrets(),
     setNtfyTopic: (topic) => credentialStore.setNtfyTopic(topic),
@@ -1584,8 +1696,10 @@ program.addCommand(
     promptSecret,
     log: (message) => console.log(message),
     nowMs: () => Date.now(),
-  })
-);
+  };
+}
+
+program.addCommand(createNotifyCommand(buildNotifyDeps()));
 
 program
   .command('config')
@@ -1995,4 +2109,7 @@ async function reportKeyState(
 
 }
 
-program.parse();
+// Negative coordinates (`set-home-location -33.9 151.2`) reach Commander as
+// option-like tokens; normalize them to positionals before parsing (see
+// utils/argv.ts — the REPL already accepted them, so this closes the drift).
+program.parse(normalizeNegativePositionals(process.argv));

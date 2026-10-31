@@ -475,7 +475,7 @@ naming the command that fixes it. Restart the daemon after config changes
 | `daemon [--once]` | Run the collect daemon in the foreground (battery/EV/weather samplers, session tracking, history); `--once` runs a single collection cycle and exits non-zero if any task failed |
 | `status [--json]` | Show daemon, store, proxy, and config status — reads only, starts nothing (service lines reflect this process; proxies are probed on localhost) |
 | `sessions [--limit <n>] [--open]` | Show recent charging sessions from the store (default 10; `--open` lists only sessions still open) |
-| `set-home-location [<latitude> <longitude>]` | Set the home location (a secret — stored in the keychain, never config.json or the store). With arguments: manual. With none: wakes the vehicle and reads its current position. Both forms confirm with current → new before writing; requires the `vehicle_location` scope |
+| `set-home-location [<latitude> <longitude>]` | Set the home location (a secret — stored in the keychain, never config.json or the store). With arguments: manual (negative coordinates accepted, e.g. `-33.9 151.2`). With none: wakes the vehicle and reads its current position. Both forms confirm with current → new before writing; requires the `vehicle_location` scope |
 | `get-ev-bsoc` | Get the current battery state of charge from the EV |
 | `authenticate [--client-id <id>] [--client-secret <secret>] [--reauth]` | Sign in to Tesla and store credentials (no other side effects); `--reauth` re-authorizes, detecting a rejected (recreated) app and prompting for the new pair |
 | `get-battery-soc` | Get the current battery state of charge from the solar battery |
@@ -508,15 +508,17 @@ When running in interactive mode (`start`), the following commands are available
 - `status` - Show daemon, store, proxy, and config status (reads only; `--json`
   for machine-readable output)
 - `sessions` - Show recent charging sessions (`--limit <n>`, `--open`)
-- `set-home-location` - Set the home location (secret): with `<lat> <lng>`
-  sets manually; with no arguments wakes the vehicle and uses its current
-  position; both forms confirm with current → new before writing
+- `set-home-location [<lat> <lng>]` - Set the home location (secret): with
+  `<lat> <lng>` sets manually (negative coordinates accepted); with no
+  arguments wakes the vehicle and uses its current position; both forms
+  confirm with current → new before writing; `--help` prints the command help
 - `authenticate` - Sign in to Tesla and store the credentials (`--reauth` to
   re-authorize; `--client-id` / `--client-secret` to override the stored app pair)
 - `get-ev-bsoc` - Get EV battery state of charge
 - `get-battery-soc` - Get solar battery state of charge
 - `get-charging-state` - Get the EV's charging state (does not wake the vehicle)
-- `set-ev-charge-limit` - Set EV charge limit (prompts for value)
+- `set-ev-charge-limit [<percent>]` - Set the EV's charge limit (50-100%); with
+  no value it prompts for one, `--help` prints the command help
 - `start-ev-charging` - Start EV charging
 - `stop-ev-charging` - Stop EV charging
 - `charge-from-battery` - Smart charging based on solar battery (shows the
@@ -529,6 +531,10 @@ When running in interactive mode (`start`), the following commands are available
   prints the flag list
 - `pair-tesla-key` - Register the virtual key with Tesla; accepts `--domain`,
   `--vin`, `--check-only`, `--skip-registration`, `--rotate-key`; `--help` prints the flag list
+- `notify` - Manage notification secrets and test delivery; same subcommands
+  and flags as the one-shot: `notify set <ntfy|slack> [--topic <t> |
+  --webhook-url <u>]` (masked prompt when the flag is omitted), `notify clear`,
+  `notify test`; `notify --help` / `notify help <sub>` prints the flag list
 - `exit` - Exit the application
 
 `help <command>` inside the REPL prints that command's help, matching the
@@ -536,7 +542,9 @@ one-shot `node dist/index.js help <command>`.
 
 Tab completion covers command names, the flags of the typed command (e.g.
 `config --se` → `--set-`, double-Tab lists the matches), the accepted values
-of `config --tesla-region`, and `help` topics.
+of `config --tesla-region` and `notify set`, and `help` topics. Both surfaces
+reject stray positional arguments, so a typo like `sessions 5` is an error
+rather than a silently different command.
 
 ## How It Works
 
