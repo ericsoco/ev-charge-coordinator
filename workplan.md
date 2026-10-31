@@ -1623,3 +1623,28 @@ verification hint, README CLI row + verify block.
   `-n` respected, alarm-kill = Ctrl-C analog.
 - Next: Step 7 — surfaces + docs — branch `p1b/step7-docs-surfaces`.
 
+
+### 2026-10-30 — `daemon logs` behavior change + silent-log incident diagnosed
+
+Follow-up on the same branch, **one commit** (`0280487`; gate: **769 passed /
+2 skipped**): `followLogs` → `showLogs` —
+
+1. Default is **print-and-exit** (`tail -n 50 daemon.log`): the command
+   returns on its own, no ^C. `-f/--follow` opts back into the `tail -F`
+   stream (original alias semantics, Ctrl-C stops).
+2. `daemon.err.log` only when **`--err`** is passed (headers per file).
+   Existing-file filtering; empty logs dir refuses with "the daemon has not
+   started". Ten unit tests cover every flag combination + refusals; live
+   smoke: default exits 0 immediately, `--err` gates the stream.
+
+**Incident (diagnosis, 2026-10-30):** "no daemon.log writes since ~9am" —
+`daemon.log` is ONLY the launchd job's redirected stdout/stderr (plist
+`StandardOutPath`/`StandardErrorPath`); a **foreground daemon logs to its
+terminal, never to the file**. Timeline: 09:00 `daemon install` (plist
+mtime), 09:01:15 the user's `npm start daemon stop` → bootout → job unloaded
+(`RunAtLoad`/`KeepAlive` don't resurrect a booted-out job); the evening
+foreground daemon was healthy but terminal-only. Remember: KeepAlive covers
+crashes, not explicit bootouts — back to background needs `daemon restart`.
+Launcher stderr noise (`getcwd … not permitted`, `nvm.sh: PWD: unbound
+variable`) noted as a possible future hardening target; did not block starts.
+
