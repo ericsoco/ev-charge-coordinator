@@ -1747,6 +1747,47 @@ modules during conflict resolution.
 Gate: `npm run check` green (798 passed / 2 skipped); `node dist/index.js
 --help` order verified unchanged.
 
+
+### 2026-11-01 — REPL dispatch extracted + factory/dispatch unit tests
+
+Follow-up to the extraction, in three parts (branch
+`refactor/extract-command-modules`):
+
+1. **`exit` NOT moved to repl.ts** — checked the precondition first and it is
+   false: `exit` is a one-shot command (`node dist/index.js exit`, advertised
+   cross-process by `start --daemon`) and the REPL's `exit`/`quit` case never
+   used `exit.ts` (it closes the readline; teardown runs in the close
+   handler). `repl.ts` stays metadata-only.
+2. **Dispatch extracted for testability**: the `start` action's switch is now
+   the module-level `dispatchCommand(cmd, args, env: DispatchEnv)` in
+   `start.ts` (env = session, printCommandHelp, buildNotifyDeps, onExit).
+   Behavior unchanged — the busy gate, prompt handling, and readline lifecycle
+   stay in the action; two repl-commands pins updated to the new call shape
+   (`dispatchCommand(cmd, rest, env)`).
+3. **New executing tests** (the gap from the extraction review):
+   - `tests/commands/command-factories.test.ts` (50): every createXCommand
+     constructed with fake deps — name/description/options/arguments/
+     subcommands pinned; `allowExcessArguments(false)` proven per command by
+     replacing actions with a recorder (19 excess cases incl. daemon/notify
+     subcommands); action routing through a fake session (requireService order,
+     Franklin teardown, exit-1 on bad limit); notify set/clear through hermetic
+     deps; `--help` registration order pinned from index.ts source.
+   - `tests/commands/repl-dispatch.test.ts` (28): every dispatch case executed
+     against a fake DispatchEnv. Discovery recorded in the file header: the
+     REPL dispatch calls handlers DIRECTLY (session.runCommand is the
+     one-shot seam), so handlers with real I/O (`status`, `set-home-location`
+     manual flow) are exercised only via help/error branches here — their
+     valid paths stay covered by their handler tests + source pins.
+
+Gotchas: Commander's `exitOverride`/`configureOutput` do not propagate to
+subcommands created earlier (settings copy at `.command()` time) — the excess
+helper hardens every level recursively. BSD `sed -i` broke the first
+extraction attempt mid-pipeline (no files mutated); the redo used a validated
+Node script.
+
+Gate: `npm run check` green (**876 passed / 2 skipped**); `--help` output
+verified unchanged.
+
 ### 2026-11-01 — docs moved into `/docs/`: workplan pointers updated (branch `docs/doc-sort`)
 
 The user reorganized docs (`d7f2252`): `TODO.md`, `design.md`, `requirements.md`, and

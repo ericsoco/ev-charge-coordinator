@@ -1,7 +1,7 @@
 /**
  * REPL command metadata: `help` and tab completion share one source.
  *
- * The dispatch switch in index.ts cannot be enumerated at runtime, so the
+ * The dispatch switch in start.ts cannot be enumerated at runtime, so the
  * sync between it and REPL_COMMANDS is asserted against the real source --
  * a mirrored list alone could drift while every test stayed green.
  */
@@ -20,8 +20,8 @@ import {
   parseCommandArgs,
   renderHelp,
 } from '../../src/commands/repl.js';
+import { COMMAND_SOURCE as INDEX_SOURCE } from '../helpers/commandSources.js';
 
-const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
 const NOTIFY_SOURCE = readFileSync(new URL('../../src/commands/notify.ts', import.meta.url), 'utf8');
 
 const names = REPL_COMMANDS.map((command) => command.name);
@@ -151,23 +151,39 @@ describe('flag tables mirror Commander definitions', () => {
     // not a REPL command at all (it enters the REPL) and `daemon` has no
     // dispatch case (one-shot only) — neither has flag tables, by design.
     const oneShotOnly = new Set(['start', 'daemon']);
-    // Subcommands of `daemon`; the top-level scan sees their registrations
-    // too. Pinned under their parent so neither side can rot silently.
+    // Subcommands; the top-level scan sees their registrations too. Pinned
+    // under their parent so neither side can rot silently.
     const subcommands: Record<string, string> = {
       stop: 'daemon',
       restart: 'daemon',
       install: 'daemon',
       uninstall: 'daemon',
       logs: 'daemon',
+      set: 'notify',
+      clear: 'notify',
+      test: 'notify',
     };
 
-    const commandNames = [...INDEX_SOURCE.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]);
+    // Command factories are written either as a chained .command('name') or as
+    // a returned `new Command('name')` (the createXCommand pattern); both are
+    // registered with program.addCommand in index.ts.
+    const commandNames = [
+      ...INDEX_SOURCE.matchAll(/(?:\.command|new Command)\('([a-z-]+)'\)/g),
+    ].map((m) => m[1]);
     expect(commandNames.length).toBeGreaterThan(0);
 
     const drift: string[] = [];
     for (const name of commandNames) {
       if (name in subcommands) continue;
-      const start = INDEX_SOURCE.indexOf(`.command('${name}')`);
+      // `notify`'s flags live on its subcommands and are parsed by
+      // parseNotifyArgs, not the flat tables — pinned by the notify parity
+      // tests below (NOTIFY_SUBCOMMANDS / NOTIFY_SET_VALUE_FLAGS).
+      if (name === 'notify') continue;
+      const start = Math.max(
+        INDEX_SOURCE.indexOf(`.command('${name}')`),
+        INDEX_SOURCE.indexOf(`new Command('${name}')`)
+      );
+      expect(start, name).toBeGreaterThanOrEqual(0);
       const end = INDEX_SOURCE.indexOf('.action(', start);
       const block = INDEX_SOURCE.slice(start, end === -1 ? undefined : end);
       const commanderFlags = [...block.matchAll(/\.option\('--([a-z0-9-]+)/g)].map((m) => m[1]);
@@ -187,7 +203,7 @@ describe('flag tables mirror Commander definitions', () => {
       }
     }
 
-    // The whitelist cannot rot silently: both commands must still exist.
+    // The whitelist cannot rot silently: every entry must still exist.
     expect(commandNames.filter((name) => oneShotOnly.has(name)).sort()).toEqual([
       'daemon',
       'start',
@@ -250,7 +266,7 @@ describe('index.ts wiring', () => {
     // Asserted on the real source: a mirrored gate could drift while its tests
     // stayed green -- the same failure mode as the start-reporting mirror.
     const gate = INDEX_SOURCE.indexOf('skipped: a command is still running');
-    const dispatch = INDEX_SOURCE.indexOf('const dispatchCommand');
+    const dispatch = INDEX_SOURCE.indexOf('await dispatchCommand(cmd, rest, env)');
     expect(gate).toBeGreaterThan(-1);
     expect(dispatch).toBeGreaterThan(gate);
     expect(INDEX_SOURCE).toContain('if (blocker && !LOCAL_WHILE_BUSY.has(cmd))');
@@ -310,7 +326,7 @@ describe('index.ts wiring', () => {
 
   it('splits the command token from its inline flags', () => {
     expect(INDEX_SOURCE).toContain('const [first, ...rest] = input.trim().split(/\\s+/)');
-    expect(INDEX_SOURCE).toContain('await dispatchCommand(cmd, rest)');
+    expect(INDEX_SOURCE).toContain('await dispatchCommand(cmd, rest, env)');
   });
 
   it('turns --help into the command help, before anything runs', () => {
