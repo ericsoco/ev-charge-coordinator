@@ -6,11 +6,7 @@ FEATURES
 [ ] Auto-start charging refinements
     [ ] Add analytics to ensure the poll-while-awake algo does not regress and cause
         unintended vehicle wake (watch for lack of poll requests returning 'asleep')
-    [ ] enable long-running process during sleep via /usr/bin/caffeinate (in plist, with `-is` flags)
-[ ] Host application online somewhere
-    Ideally this is part of the install + build process, and can leverage publicly available tooling for hosting (GH pages?)
-    Need to think about what other functionality we'll need in the future,
-    e.g. limited data storage for historical battery usage, past charging sessions, etc
+    [X] enable long-running process during sleep via /usr/bin/caffeinate (in plist, with `-is` flags)
 [ ] Base charge amount on:
     [ ] Solar battery historical usage (average / seasonal / day of week) -- build local record over time and/or try to find an API?
     [ ] weather forecast (solar irradiation)
@@ -18,7 +14,26 @@ FEATURES
     [ ] Related -- Franklin poller needs to observe not just battery level but also
         how much energy the house consumes, in order to dynamically set battery buffer
 [ ] Create dashboard to display time series of the various stores
-[ ] self-host ntfy on transmote.com to lock down publication to my topic
+    [X] Research charting libs (done -- see docs/charts-research.md)
+        Use eCharts: licensing, bundle size (tree-shaking), some advanced func.
+    [ ] review stores and decide on included data sources + functionality
+    [ ] design layout
+    [ ] implemment
+[ ] 
+
+SCALING
+[ ] Host application online somewhere
+    Ideally this is part of the install + build process, and can leverage publicly available tooling for hosting (GH pages?)
+    Need to think about what other functionality we'll need in the future,
+    e.g. limited data storage for historical battery usage, past charging sessions, etc
+    [ ] Host ntfy on ntfy.transmote.com -- plan written to workplan.md (2026-11-01)
+    [ ] If I host on dreamhost / transmote.com, will need to upgrade to VPS
+        https://panel.dreamhost.com/index.cgi?tree=server.dashboard#/marketing/selfmanaged-vps
+        (DH admin panel > Serves & Usage > Add Service)
+[ ] Evaluate other similar apps:
+    - evcc.io
+    - HACS: https://github.com/antbald/ha-ev-smart-charger
+    - Home Assistant integrations (for both, for my app)
 
 TASKS / BUGS
 [X] Recreate ev-charge-coordinator application on Tesla dev portal to expire the client secret that was leaked into LLM logs. Will require rerunning `pair-tesla-key` and `authenticate`.
@@ -29,6 +44,8 @@ TASKS / BUGS
 [X] Daemon logging
     [X] should show charging progress on every poll during a session
     [X] should start every log with a timestamp first, formatted the same for all logs[ ] Rename ambiguous battery-related commands like `get-battery-soc`, `charge-from-battery`, and `set-battery-buffer`
+
+[ ] Expose common commands in package.json to run via `npm run x`
 [ ] Consider removing `get-ev-bsoc` in favor of `get-charging-state`
 [ ] Clean up README (remove slop; make dev setup steps clear and contiguous; same for end-user steps; ensure unified docs across CLI + REPL, as there is some divergence)
     [ ] So far, have cleaned up up to "## CLI Reference". Continue from there.
@@ -40,7 +57,6 @@ TASKS / BUGS
     [ ] Organize /services into one folder per service, with only index + ProcessManager in root folder
         [ ] Franklin gets its own folder
         [ ] TeslaService + TeslaCommandProxy move into /tesla
-    [ ] Clean up index.ts?
+    [X] Clean up index.ts?
         Very bloated now, can individual commands be moved out?
         How are REPL + one-shot / Commander kept in sync?
-[ ] Expose common commands in package.json to run via `npm run x`
