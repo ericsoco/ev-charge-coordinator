@@ -10,16 +10,22 @@
  * the thing works, so the exact wording is pinned here rather than left to a
  * manual read.
  *
- * The rendering is mirrored from the `start` action because index.ts runs
- * program.parse() on import and cannot be imported by a test.
+ * The rendering is mirrored from the `start` action; the wiring assertions
+ * below scan the real source (src/commands/start.ts) rather than importing it,
+ * because importing the module would pull in the whole service stack.
  */
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { COMMAND_SOURCE, commandSource } from '../helpers/commandSources.js';
 
 type ServiceStart = { ok: true } | { ok: false; error: string; cause?: unknown };
 
-/** The real source, so these assertions can describe what actually ships. */
-const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+/**
+ * The real source, so these assertions can describe what actually ships.
+ * start.ts comes first so its shared strings (e.g. the energy-config check,
+ * which runConfig also contains) resolve against the start action before the
+ * other command modules in the concatenation.
+ */
+const INDEX_SOURCE = commandSource('start.ts') + '\n' + COMMAND_SOURCE;
 
 /** Mirrors the per-service block in the `start` action. */
 function report(status: { tesla: ServiceStart; franklin: ServiceStart }): string {
@@ -109,7 +115,7 @@ describe('exit guidance in start --daemon', () => {
     expect(guidance(null)).toContain('has nothing to stop');
   });
 
-  it('gates the guidance in src/index.ts, not just in this mirror', () => {
+  it('gates the guidance in the start action, not just in this mirror', () => {
     // Assert against the real source. A mirrored helper can drift from the code
     // it mirrors, and then its tests pass while the bug is live -- which is
     // exactly what happened the first time this was written.
