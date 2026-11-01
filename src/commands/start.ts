@@ -141,10 +141,281 @@ export interface StartCommandDeps {
   buildNotifyDeps: () => NotifyDeps;
 }
 
+/**
+ * REPL command dispatch: the interactive switch the `start` session runs.
+ *
+ * Extracted as a module-level function so tests can dispatch commands against
+ * a fake environment (tests/commands/repl-dispatch.test.ts) without starting
+ * the services. The busy gate, prompt handling, and readline lifecycle stay
+ * in the start action, which owns the interface.
+ */
+export interface DispatchEnv {
+  session: Session;
+  printCommandHelp: (name: string, subcommand?: string) => boolean;
+  buildNotifyDeps: () => NotifyDeps;
+  /** Close the REPL: marks the session closed and closes the readline. */
+  onExit: () => void;
+}
+
+export async function dispatchCommand(
+  cmd: string,
+  args: string[],
+  env: DispatchEnv
+): Promise<void> {
+  const { session, printCommandHelp, buildNotifyDeps } = env;
+  const currentContext = () => session.currentContext();
+
+  switch (cmd) {
+    case 'help': {
+      // `help <command>` matches the CLI's `help <command>`; unknown or
+      // bare `help` falls through to the general list.
+      const topic = args[0];
+      if (topic !== undefined && printCommandHelp(topic)) break;
+      console.log(renderHelp());
+      break;
+    }
+
+    case 'authenticate': {
+      // Same helper the standalone command uses, so the REPL and
+      // `ev-charge-coordinator authenticate` cannot drift apart — flags
+      // included: parseCommandArgs mirrors Commander's definitions.
+      const { options, error } = parseCommandArgs('authenticate', args);
+      if (error) {
+        console.log(paint.warning(error));
+        break;
+      }
+      if (options.help) {
+        printCommandHelp('authenticate');
+        break;
+      }
+      await runAuthenticate({
+        clientId: typeof options.clientId === 'string' ? options.clientId : undefined,
+        clientSecret:
+          typeof options.clientSecret === 'string' ? options.clientSecret : undefined,
+        reauth: options.reauth === true,
+      });
+      break;
+    }
+
+    case 'status': {
+      const { options, error } = parseCommandArgs('status', args);
+      if (error) {
+        console.log(paint.warning(error));
+        break;
+      }
+      if (options.help) {
+        printCommandHelp('status');
+        break;
+      }
+      await showStatus(currentContext(), { json: options.json === true });
+      break;
+    }
+
+    case 'sessions': {
+      const { options, error } = parseCommandArgs('sessions', args);
+      if (error) {
+        console.log(paint.warning(error));
+        break;
+      }
+      if (options.help) {
+        printCommandHelp('sessions');
+        break;
+      }
+      const limit = options.limit === undefined ? 10 : Number(options.limit);
+      await showSessions(currentContext(), {
+        limit,
+        openOnly: options.open === true,
+      });
+      break;
+    }
+
+    case 'set-home-location': {
+      // Positional arguments only, no flags: `set-home-location` uses the
+      // vehicle; `set-home-location <lat> <lng>` sets manually. The handler
+      // always confirms before writing (the stored value is otherwise
+      // invisible). --help is intercepted so it prints the command help
+      // rather than being parsed as a latitude, like the one-shot CLI.
+      if (args.includes('--help') || args.includes('-h')) {
+        printCommandHelp('set-home-location');
+        break;
+      }
+      if (args.length > 2) {
+        // Mirrors the one-shot's Commander rejection of stray positionals.
+        console.log(
+          paint.warning(`error: too many arguments for 'set-home-location'. Expected 2 arguments but got ${args.length}.`)
+        );
+        break;
+      }
+      await setHomeLocationCommand(currentContext(), args[0], args[1]);
+      break;
+    }
+
+    // Everything below dispatches to the same handler the one-shot CLI path
+    // uses. These cases used to carry their own copies of the logic and had
+    // already drifted: the REPL printed 'Setting EV limit to' and offered to
+    // start charging, the one-shot path did neither.
+    case 'get-ev-bsoc':
+      await getEvBatterySoc(currentContext());
+      break;
+
+    case 'get-battery-soc':
+      await getBatterySoc(currentContext());
+      break;
+
+    case 'get-charging-state':
+      await getChargingState(currentContext());
+      break;
+
+    case 'set-ev-charge-limit': {
+      // Inline value mirrors the one-shot `<percent>` argument; no value
+      // falls back to the REPL's numeric prompt. --help prints the same
+      // help the one-shot command would show (Commander renders it from
+      // its own definition, so the two cannot drift).
+      if (args.includes('--help') || args.includes('-h')) {
+        printCommandHelp('set-ev-charge-limit');
+        break;
+      }
+      if (args.length > 1) {
+        console.log(
+          paint.warning(`error: too many arguments for 'set-ev-charge-limit'. Expected 1 argument but got ${args.length}.`)
+        );
+        break;
+      }
+      let limit: number;
+      if (args.length === 1) {
+        // The handler validates NaN and range with the same message the
+        // one-shot action prints, so no check is needed here.
+        limit = parseInt(args[0]);
+      } else {
+        const limitStr = await promptNumeric('Enter charge limit (50-100%, ESC to cancel): ');
+        if (limitStr === null) {
+          // ESC never submits a line, so start a fresh one for the notice.
+          console.log(paint.info('\nCancelled.'));
+          break;
+        }
+        limit = parseInt(limitStr);
+        if (isNaN(limit)) {
+          console.log(paint.warning('Invalid charge limit. Must be a number between 50 and 100.'));
+          break;
+        }
+      }
+      await setEvChargeLimit(currentContext(), limit);
+      break;
+    }
+
+    case 'start-ev-charging':
+      await startEvCharging(currentContext());
+      break;
+
+    case 'stop-ev-charging':
+      await stopEvCharging(currentContext());
+      break;
+
+    case 'charge-from-battery': {
+      const { options, error } = parseCommandArgs('charge-from-battery', args);
+      if (error) {
+        console.log(paint.warning(error));
+        break;
+      }
+      if (options.help) {
+        printCommandHelp('charge-from-battery');
+        break;
+      }
+      await chargeFromBattery(currentContext(), {
+        start: options.start === true,
+        dryRun: options.dryRun === true,
+      });
+      break;
+    }
+
+    case 'config': {
+      const { options, error } = parseCommandArgs('config', args);
+      if (error) {
+        console.log(paint.warning(error));
+        break;
+      }
+      // --help wins over the other flags, exactly like Commander.
+      if (options.help) {
+        printCommandHelp('config');
+        break;
+      }
+      await runConfig(options);
+      break;
+    }
+
+    case 'pair-tesla-key': {
+      const { options, error } = parseCommandArgs('pair-tesla-key', args);
+      if (error) {
+        console.log(paint.warning(error));
+        break;
+      }
+      if (options.help) {
+        printCommandHelp('pair-tesla-key');
+        break;
+      }
+      await runPairTeslaKey(options);
+      break;
+    }
+
+    case 'notify': {
+      // Subcommand structure (`set <kind> [--topic|--webhook-url]`,
+      // `clear`, `test`) that parseCommandArgs cannot express — same
+      // accepts/rejects via parseNotifyArgs, shared deps via
+      // buildNotifyDeps, and the same runners the one-shot dispatches to.
+      const parsed = parseNotifyArgs(args);
+      if (parsed.error !== null) {
+        console.log(paint.warning(parsed.error));
+        break;
+      }
+      if (parsed.helpFor !== null) {
+        printCommandHelp('notify', parsed.helpFor === 'notify' ? undefined : parsed.helpFor);
+        break;
+      }
+      if (parsed.subcommand === null) {
+        // Bare `notify`: the one-shot prints its help; do the same here.
+        printCommandHelp('notify');
+        break;
+      }
+      const notifyDeps = buildNotifyDeps();
+      try {
+        if (parsed.subcommand === 'set') {
+          const kind = parsed.kind as 'ntfy' | 'slack';
+          const value =
+            kind === 'ntfy'
+              ? typeof parsed.options.topic === 'string'
+                ? parsed.options.topic
+                : undefined
+              : typeof parsed.options.webhookUrl === 'string'
+                ? parsed.options.webhookUrl
+                : undefined;
+          await runNotifySet(kind, value, notifyDeps);
+        } else if (parsed.subcommand === 'clear') {
+          await runNotifyClear(notifyDeps);
+        } else if (parsed.subcommand === 'test') {
+          // false = nothing sent; the reason is already logged by the runner.
+          await runNotifyTest(notifyDeps);
+        }
+      } catch (error) {
+        console.log(paint.error(`error: ${describeError(error)}`));
+      }
+      break;
+    }
+
+    case 'exit':
+    case 'quit':
+      env.onExit();
+      return;
+
+    case '':
+      break;
+
+    default:
+      console.log(paint.warning(`Unknown command: ${cmd}. Type \"help\" for available commands.`));
+  }
+}
+
 export function createStartCommand(deps: StartCommandDeps): Command {
   const { session } = deps;
-  const printCommandHelp = deps.printCommandHelp;
-  const currentContext = () => session.currentContext();
 
   return new Command('start')
     .allowExcessArguments(false)
@@ -291,6 +562,16 @@ export function createStartCommand(deps: StartCommandDeps): Command {
       let active = 0;
       let closed = false;
 
+      const env: DispatchEnv = {
+        session,
+        printCommandHelp: deps.printCommandHelp,
+        buildNotifyDeps: deps.buildNotifyDeps,
+        onExit: () => {
+          closed = true;
+          rl.close();
+        },
+      };
+
       const handleCommand = async (input: string): Promise<void> => {
         // First token is the command; the rest are its inline flags (config,
         // pair-tesla-key). Values keep their case -- only the command name is
@@ -311,7 +592,7 @@ export function createStartCommand(deps: StartCommandDeps): Command {
         // Blank prompt while busy: typing must not render a stale `ev-charge> `.
         rl.setPrompt('');
         try {
-          await dispatchCommand(cmd, rest);
+          await dispatchCommand(cmd, rest, env);
         } finally {
           if (!LOCAL_WHILE_BUSY.has(cmd)) blocker = false;
           // Clamp at zero: a stray extra decrement must not drive the counter
@@ -329,258 +610,6 @@ export function createStartCommand(deps: StartCommandDeps): Command {
             rl.setPrompt(paint.question(openQuestion));
             rl.prompt();
           }
-        }
-      };
-
-      const dispatchCommand = async (cmd: string, args: string[]): Promise<void> => {
-
-        switch (cmd) {
-          case 'help': {
-            // `help <command>` matches the CLI's `help <command>`; unknown or
-            // bare `help` falls through to the general list.
-            const topic = args[0];
-            if (topic !== undefined && printCommandHelp(topic)) break;
-            console.log(renderHelp());
-            break;
-          }
-
-          case 'authenticate': {
-            // Same helper the standalone command uses, so the REPL and
-            // `ev-charge-coordinator authenticate` cannot drift apart — flags
-            // included: parseCommandArgs mirrors Commander's definitions.
-            const { options, error } = parseCommandArgs('authenticate', args);
-            if (error) {
-              console.log(paint.warning(error));
-              break;
-            }
-            if (options.help) {
-              printCommandHelp('authenticate');
-              break;
-            }
-            await runAuthenticate({
-              clientId: typeof options.clientId === 'string' ? options.clientId : undefined,
-              clientSecret:
-                typeof options.clientSecret === 'string' ? options.clientSecret : undefined,
-              reauth: options.reauth === true,
-            });
-            break;
-          }
-
-          case 'status': {
-            const { options, error } = parseCommandArgs('status', args);
-            if (error) {
-              console.log(paint.warning(error));
-              break;
-            }
-            if (options.help) {
-              printCommandHelp('status');
-              break;
-            }
-            await showStatus(currentContext(), { json: options.json === true });
-            break;
-          }
-
-          case 'sessions': {
-            const { options, error } = parseCommandArgs('sessions', args);
-            if (error) {
-              console.log(paint.warning(error));
-              break;
-            }
-            if (options.help) {
-              printCommandHelp('sessions');
-              break;
-            }
-            const limit = options.limit === undefined ? 10 : Number(options.limit);
-            await showSessions(currentContext(), {
-              limit,
-              openOnly: options.open === true,
-            });
-            break;
-          }
-
-          case 'set-home-location': {
-            // Positional arguments only, no flags: `set-home-location` uses the
-            // vehicle; `set-home-location <lat> <lng>` sets manually. The handler
-            // always confirms before writing (the stored value is otherwise
-            // invisible). --help is intercepted so it prints the command help
-            // rather than being parsed as a latitude, like the one-shot CLI.
-            if (args.includes('--help') || args.includes('-h')) {
-              printCommandHelp('set-home-location');
-              break;
-            }
-            if (args.length > 2) {
-              // Mirrors the one-shot's Commander rejection of stray positionals.
-              console.log(
-                paint.warning(`error: too many arguments for 'set-home-location'. Expected 2 arguments but got ${args.length}.`)
-              );
-              break;
-            }
-            await setHomeLocationCommand(currentContext(), args[0], args[1]);
-            break;
-          }
-
-          // Everything below dispatches to the same handler the one-shot CLI path
-          // uses. These cases used to carry their own copies of the logic and had
-          // already drifted: the REPL printed 'Setting EV limit to' and offered to
-          // start charging, the one-shot path did neither.
-          case 'get-ev-bsoc':
-            await getEvBatterySoc(currentContext());
-            break;
-
-          case 'get-battery-soc':
-            await getBatterySoc(currentContext());
-            break;
-
-          case 'get-charging-state':
-            await getChargingState(currentContext());
-            break;
-
-          case 'set-ev-charge-limit': {
-            // Inline value mirrors the one-shot `<percent>` argument; no value
-            // falls back to the REPL's numeric prompt. --help prints the same
-            // help the one-shot command would show (Commander renders it from
-            // its own definition, so the two cannot drift).
-            if (args.includes('--help') || args.includes('-h')) {
-              printCommandHelp('set-ev-charge-limit');
-              break;
-            }
-            if (args.length > 1) {
-              console.log(
-                paint.warning(`error: too many arguments for 'set-ev-charge-limit'. Expected 1 argument but got ${args.length}.`)
-              );
-              break;
-            }
-            let limit: number;
-            if (args.length === 1) {
-              // The handler validates NaN and range with the same message the
-              // one-shot action prints, so no check is needed here.
-              limit = parseInt(args[0]);
-            } else {
-              const limitStr = await promptNumeric('Enter charge limit (50-100%, ESC to cancel): ');
-              if (limitStr === null) {
-                // ESC never submits a line, so start a fresh one for the notice.
-                console.log(paint.info('\nCancelled.'));
-                break;
-              }
-              limit = parseInt(limitStr);
-              if (isNaN(limit)) {
-                console.log(paint.warning('Invalid charge limit. Must be a number between 50 and 100.'));
-                break;
-              }
-            }
-            await setEvChargeLimit(currentContext(), limit);
-            break;
-          }
-
-          case 'start-ev-charging':
-            await startEvCharging(currentContext());
-            break;
-
-          case 'stop-ev-charging':
-            await stopEvCharging(currentContext());
-            break;
-
-          case 'charge-from-battery': {
-            const { options, error } = parseCommandArgs('charge-from-battery', args);
-            if (error) {
-              console.log(paint.warning(error));
-              break;
-            }
-            if (options.help) {
-              printCommandHelp('charge-from-battery');
-              break;
-            }
-            await chargeFromBattery(currentContext(), {
-              start: options.start === true,
-              dryRun: options.dryRun === true,
-            });
-            break;
-          }
-
-          case 'config': {
-            const { options, error } = parseCommandArgs('config', args);
-            if (error) {
-              console.log(paint.warning(error));
-              break;
-            }
-            // --help wins over the other flags, exactly like Commander.
-            if (options.help) {
-              printCommandHelp('config');
-              break;
-            }
-            await runConfig(options);
-            break;
-          }
-
-          case 'pair-tesla-key': {
-            const { options, error } = parseCommandArgs('pair-tesla-key', args);
-            if (error) {
-              console.log(paint.warning(error));
-              break;
-            }
-            if (options.help) {
-              printCommandHelp('pair-tesla-key');
-              break;
-            }
-            await runPairTeslaKey(options);
-            break;
-          }
-
-          case 'notify': {
-            // Subcommand structure (`set <kind> [--topic|--webhook-url]`,
-            // `clear`, `test`) that parseCommandArgs cannot express — same
-            // accepts/rejects via parseNotifyArgs, shared deps via
-            // buildNotifyDeps, and the same runners the one-shot dispatches to.
-            const parsed = parseNotifyArgs(args);
-            if (parsed.error !== null) {
-              console.log(paint.warning(parsed.error));
-              break;
-            }
-            if (parsed.helpFor !== null) {
-              printCommandHelp('notify', parsed.helpFor === 'notify' ? undefined : parsed.helpFor);
-              break;
-            }
-            if (parsed.subcommand === null) {
-              // Bare `notify`: the one-shot prints its help; do the same here.
-              printCommandHelp('notify');
-              break;
-            }
-            const notifyDeps = deps.buildNotifyDeps();
-            try {
-              if (parsed.subcommand === 'set') {
-                const kind = parsed.kind as 'ntfy' | 'slack';
-                const value =
-                  kind === 'ntfy'
-                    ? typeof parsed.options.topic === 'string'
-                      ? parsed.options.topic
-                      : undefined
-                    : typeof parsed.options.webhookUrl === 'string'
-                      ? parsed.options.webhookUrl
-                      : undefined;
-                await runNotifySet(kind, value, notifyDeps);
-              } else if (parsed.subcommand === 'clear') {
-                await runNotifyClear(notifyDeps);
-              } else if (parsed.subcommand === 'test') {
-                // false = nothing sent; the reason is already logged by the runner.
-                await runNotifyTest(notifyDeps);
-              }
-            } catch (error) {
-              console.log(paint.error(`error: ${describeError(error)}`));
-            }
-            break;
-          }
-
-          case 'exit':
-          case 'quit':
-            closed = true;
-            rl.close();
-            return;
-
-          case '':
-            break;
-
-          default:
-            console.log(paint.warning(`Unknown command: ${cmd}. Type \"help\" for available commands.`));
         }
       };
 

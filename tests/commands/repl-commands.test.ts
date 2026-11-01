@@ -266,7 +266,7 @@ describe('index.ts wiring', () => {
     // Asserted on the real source: a mirrored gate could drift while its tests
     // stayed green -- the same failure mode as the start-reporting mirror.
     const gate = INDEX_SOURCE.indexOf('skipped: a command is still running');
-    const dispatch = INDEX_SOURCE.indexOf('const dispatchCommand');
+    const dispatch = INDEX_SOURCE.indexOf('await dispatchCommand(cmd, rest, env)');
     expect(gate).toBeGreaterThan(-1);
     expect(dispatch).toBeGreaterThan(gate);
     expect(INDEX_SOURCE).toContain('if (blocker && !LOCAL_WHILE_BUSY.has(cmd))');
@@ -326,7 +326,7 @@ describe('index.ts wiring', () => {
 
   it('splits the command token from its inline flags', () => {
     expect(INDEX_SOURCE).toContain('const [first, ...rest] = input.trim().split(/\\s+/)');
-    expect(INDEX_SOURCE).toContain('await dispatchCommand(cmd, rest)');
+    expect(INDEX_SOURCE).toContain('await dispatchCommand(cmd, rest, env)');
   });
 
   it('turns --help into the command help, before anything runs', () => {
