@@ -2,12 +2,12 @@
 
 > **Current context and forward decisions.** Created 2026-10-18 after Phases 0–5 landed on
 > `main` (`6891126`). The full Phase 0–5 execution record was archived to
-> [workplan-history.md](./workplan-history.md) — **historical, backup context only**; read
+> [workplan-history.md](./docs/workplan-history.md) — **historical, backup context only**; read
 > this file first and consult history only when deeper context is needed. Product
-> requirements live in [requirements.md](./requirements.md); the user's backlog lives in
-> [TODO.md](./TODO.md) (keep it there — do not mirror backlog items into this file).
+> requirements live in [requirements.md](./docs/requirements.md); the user's backlog lives in
+> [TODO.md](./docs/TODO.md) (keep it there — do not mirror backlog items into this file).
 > The Phase 1 design (long-running daemon, auto-start event filters, storage, hosting)
-> lives in [design.md](./design.md) (approved 2026-10-18).
+> lives in [design.md](./docs/design.md) (approved 2026-10-18).
 
 ## Current state (verified 2026-10-18)
 
@@ -36,7 +36,7 @@
   scheduled charging windows + solar-aware rate timing, Fleet Telemetry WebSocket instead of
   polling, `npx` publishing. (The keytar replacement formerly listed here was done 2026-10-18:
   `@napi-rs/keyring`, see Log.)
-- **Battery-buffer product evolution** (`requirements.md` Oct 10 / Oct 14 entries:
+- **Battery-buffer product evolution** (`docs/requirements.md` Oct 10 / Oct 14 entries:
   trigger on charger-plug-in event, sub-50% target handling with polling stop) is open
   product work — record design decisions here when it is picked up.
 - **P1b Tesla resilience pointer (noted 2026-10-21, from P1a step 6):** the Franklin
@@ -56,7 +56,7 @@
 > surfaces + docs.**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
-> step to `main`. Design rationale: [design.md](./design.md) §3.9 + the decisions below.
+> step to `main`. Design rationale: [design.md](./docs/design.md) §3.9 + the decisions below.
 > After each step: update the status line here, append a dated Log entry.
 
 **Goal:** plug-in decisions the daemon records and — once enabled — acts on: evaluate the
@@ -166,7 +166,7 @@ Phase 6+.
 
 > Status: **Complete — steps 1–7 landed; daemon installed on launchd and in validated
 > long-run operation (Log 2026-10-24 entries).** Historical detail below; the active plan
-> is P1b above. Design rationale: [design.md](./design.md) §3/§5.
+> is P1b above. Design rationale: [design.md](./docs/design.md) §3/§5.
 
 **Goal:** long-running `evcc daemon` on this Mac that only observes and records — home-battery
 samples, poll-while-awake EV samples, plug-in/session events, daily weather forecasts — into a
@@ -540,7 +540,7 @@ untouched):
 ### 2026-10-18 — Phase 1 design recorded (daemon, auto-start, storage, hosting)
 
 Branch `docs/phase1-design`: design discussed and approved in plan mode; full
-write-up in [design.md](./design.md) — the forward reference for Phase 1 work:
+write-up in [design.md](./docs/design.md) — the forward reference for Phase 1 work:
 
 - **Scope:** keep the CLI UX; add (1) plug-in event detection → auto-start
   charging and (2) stored history (battery depletion, charging efficiency,
@@ -1704,6 +1704,60 @@ foreground daemon was healthy but terminal-only. Remember: KeepAlive covers
 crashes, not explicit bootouts — back to background needs `daemon restart`.
 Launcher stderr noise (`getcwd … not permitted`, `nvm.sh: PWD: unbound
 variable`) noted as a possible future hardening target; did not block starts.
+
+
+### 2026-10-31 — index.ts extraction: one file per command (branch `refactor/extract-command-modules`)
+
+Pure refactor: `src/index.ts` went 2,019 → 98 lines — wiring only
+(program setup, one session object, `program.addCommand` per command in
+the original registration order, so `--help` output is unchanged). Each
+command's behavior now lives in its `createXCommand` factory, following
+the `createNotifyCommand` pattern:
+
+- `session.ts` (new): the service singletons (`initializeFranklin` /
+  `initializeTesla`), `currentContext`, `runCommand`, `requireService`,
+  `ServiceStart`, `reportDebugDetails`, `DEFAULT_PROXY_PORT`. The
+  existing process-lifetime state (the two service instances) moved here
+  unchanged — no new state added; relocation flagged for approval.
+- `start.ts` (new): the `start` action incl. the REPL dispatch switch
+  (each case still calls the shared handlers, unchanged).
+  `printCommandHelp` stays in index.ts (it needs the Commander program)
+  and is injected into `createStartCommand`.
+- `exit.ts`, `daemon.ts`, `config.ts`, `pairTeslaKey.ts` (new): logic
+  moved verbatim out of index.ts.
+- `authenticate.ts` gains `runAuthenticate`; `vehicle.ts` / `system.ts`
+  gain their per-command factories co-located with the handlers
+  (approved choice over seven wiring-only files).
+- Tests: the source-scanning drift guards now read
+  `tests/helpers/commandSources.ts` (index.ts + src/commands/*
+  concatenation, file-marked); the `daemon-config` wiring test reads
+  `daemon.ts`; the flag-table guard accepts `new Command('name')`, skips
+  `notify` (a real REPL command since the drift audit — its flags are
+  pinned by the NOTIFY_* parity tests), and pins its subcommands under
+  their renamed `notifyCommand` parent.
+
+Rebased onto `main` after the one-shot ↔ REPL drift audit: the audit's
+dispatch changes (inline `set-ev-charge-limit`, `--help` interception,
+`notify` REPL case, `buildNotifyDeps`, subcommand-aware
+`printCommandHelp`, `allowExcessArguments(false)` on every factory —
+`addCommand` does not inherit the program's setting — and
+`normalizeNegativePositionals` at parse) were ported into the new
+modules during conflict resolution.
+
+Gate: `npm run check` green (798 passed / 2 skipped); `node dist/index.js
+--help` order verified unchanged.
+
+### 2026-11-01 — docs moved into `/docs/`: workplan pointers updated (branch `docs/doc-sort`)
+
+The user reorganized docs (`d7f2252`): `TODO.md`, `design.md`, `requirements.md`, and
+`workplan-history.md` now live in `docs/`, alongside a new `docs/charts-research.md`
+(dashboard charting-library evaluation). Updated every pointer in this file to the new
+locations: the header block's links (workplan-history / requirements / TODO / design),
+the §Battery-buffer `requirements.md` mention, both "Design rationale: design.md" links,
+and the Phase 1 design write-up link. Historical log entries below keep bare filename
+mentions (`design.md §7`, `TODO.md item 26`) as written at the time — they name, not
+link. No code changes; docs only. Gate not required (markdown-only), but note AGENTS.md
+was already updated in the move commit.
 
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
