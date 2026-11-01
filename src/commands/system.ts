@@ -10,12 +10,14 @@
 import * as fs from 'fs';
 import axios from 'axios';
 import { createConnection } from 'node:net';
+import { Command } from 'commander';
 import {
   describeError,
   log,
   type CommandContext,
   type CommandResult,
 } from './context.js';
+import type { Session } from './session.js';
 import * as paint from '../utils/color.js';
 import { resolveDaemonConfig, daemonConfigPath } from '../utils/daemonConfig.js';
 import { resolveEnergyConfig } from '../utils/config.js';
@@ -596,6 +598,44 @@ export async function setHomeLocationCommand(
     log(ctx, paint.error(`Error: ${message}`));
     return { ok: false, error: message };
   }
+}
+
+/** Commander wiring for the system commands; the REPL dispatch calls the same handlers. */
+
+export function createStatusCommand(deps: { session: Session }): Command {
+  return new Command('status')
+    .description('Show daemon, store, proxy, and config status (reads only — starts nothing)')
+    .option('--json', 'Machine-readable output')
+    .action(async (options) => {
+      await deps.session.runCommand((ctx) => showStatus(ctx, { json: options.json === true }));
+    });
+}
+
+export function createSessionsCommand(deps: { session: Session }): Command {
+  return new Command('sessions')
+    .description('Show recent charging sessions from the store')
+    .option('--limit <n>', 'How many sessions to show (default 10)')
+    .option('--open', 'Only sessions that are still open')
+    .action(async (options) => {
+      const limit = options.limit === undefined ? 10 : Number(options.limit);
+      await deps.session.runCommand((ctx) =>
+        showSessions(ctx, { limit, openOnly: options.open === true })
+      );
+    });
+}
+
+export function createSetHomeLocationCommand(deps: { session: Session }): Command {
+  return new Command('set-home-location')
+    .description('Set the home location (a secret): from arguments, or from the vehicle when given none')
+    .argument('[latitude]', 'Latitude (-90..90)')
+    .argument('[longitude]', 'Longitude (-180..180)')
+    .action(async (latitude?: string, longitude?: string) => {
+      // Only the vehicle flow needs Tesla; the manual flow stays service-free.
+      if (latitude === undefined && longitude === undefined) {
+        deps.session.requireService('Tesla', await deps.session.initializeTesla());
+      }
+      await deps.session.runCommand((ctx) => setHomeLocationCommand(ctx, latitude, longitude));
+    });
 }
 
 

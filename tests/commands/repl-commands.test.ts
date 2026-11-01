@@ -1,15 +1,13 @@
 /**
  * REPL command metadata: `help` and tab completion share one source.
  *
- * The dispatch switch in index.ts cannot be enumerated at runtime, so the
+ * The dispatch switch in start.ts cannot be enumerated at runtime, so the
  * sync between it and REPL_COMMANDS is asserted against the real source --
  * a mirrored list alone could drift while every test stayed green.
  */
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { BOOLEAN_FLAGS, REPL_COMMANDS, VALUE_FLAGS, completeCommand, isReplCommand, LOCAL_WHILE_BUSY, parseCommandArgs, renderHelp } from '../../src/commands/repl.js';
-
-const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+import { COMMAND_SOURCE as INDEX_SOURCE } from '../helpers/commandSources.js';
 
 const names = REPL_COMMANDS.map((command) => command.name);
 
@@ -135,26 +133,40 @@ describe('flag tables mirror Commander definitions', () => {
   // CLI accepts (which is exactly what happened to --set-buffer).
   it('has no command whose flags diverge from Commander', () => {
     // Commands whose flags the REPL deliberately does not parse: `start` is
-    // not a REPL command at all (it enters the REPL) and `daemon` has no
-    // dispatch case (one-shot only) — neither has flag tables, by design.
-    const oneShotOnly = new Set(['start', 'daemon']);
-    // Subcommands of `daemon`; the top-level scan sees their registrations
-    // too. Pinned under their parent so neither side can rot silently.
+    // not a REPL command at all (it enters the REPL), `daemon` has no
+    // dispatch case (one-shot only), and `notify` is likewise one-shot
+    // only — none has flag tables, by design.
+    const oneShotOnly = new Set(['start', 'daemon', 'notify']);
+    // Subcommands of `daemon` and `notify`; the top-level scan sees their
+    // registrations too. Pinned under their parent so neither side can rot
+    // silently.
     const subcommands: Record<string, string> = {
       stop: 'daemon',
       restart: 'daemon',
       install: 'daemon',
       uninstall: 'daemon',
       logs: 'daemon',
+      set: 'notify',
+      clear: 'notify',
+      test: 'notify',
     };
 
-    const commandNames = [...INDEX_SOURCE.matchAll(/\.command\('([a-z-]+)'\)/g)].map((m) => m[1]);
+    // Command factories are written either as a chained .command('name') or as
+    // a returned `new Command('name')` (the createXCommand pattern); both are
+    // registered with program.addCommand in index.ts.
+    const commandNames = [
+      ...INDEX_SOURCE.matchAll(/(?:\.command|new Command)\('([a-z-]+)'\)/g),
+    ].map((m) => m[1]);
     expect(commandNames.length).toBeGreaterThan(0);
 
     const drift: string[] = [];
     for (const name of commandNames) {
       if (name in subcommands) continue;
-      const start = INDEX_SOURCE.indexOf(`.command('${name}')`);
+      const start = Math.max(
+        INDEX_SOURCE.indexOf(`.command('${name}')`),
+        INDEX_SOURCE.indexOf(`new Command('${name}')`)
+      );
+      expect(start, name).toBeGreaterThanOrEqual(0);
       const end = INDEX_SOURCE.indexOf('.action(', start);
       const block = INDEX_SOURCE.slice(start, end === -1 ? undefined : end);
       const commanderFlags = [...block.matchAll(/\.option\('--([a-z0-9-]+)/g)].map((m) => m[1]);
@@ -174,9 +186,10 @@ describe('flag tables mirror Commander definitions', () => {
       }
     }
 
-    // The whitelist cannot rot silently: both commands must still exist.
+    // The whitelist cannot rot silently: every entry must still exist.
     expect(commandNames.filter((name) => oneShotOnly.has(name)).sort()).toEqual([
       'daemon',
+      'notify',
       'start',
     ]);
     // Subcommands must stay registered under their parent (chain may wrap).

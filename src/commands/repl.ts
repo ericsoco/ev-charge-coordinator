@@ -3,7 +3,7 @@
  *
  * One source for what `help` prints, what tab completion offers, and how the
  * dispatch switch parses inline flags. The names mirror the dispatch switch in
- * index.ts's `start` action (a switch cannot be enumerated at runtime without
+ * start.ts's `start` action (a switch cannot be enumerated at runtime without
  * indirection that would obscure it), so a new REPL command must be added both
  * here and there.
  */

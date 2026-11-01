@@ -402,17 +402,21 @@ describe('ensureDaemonConfigFile (daemon start only)', () => {
 });
 
 describe('creation wiring', () => {
-  const indexSource = fs.readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+  // The daemon command moved out of index.ts into src/commands/daemon.ts.
+  const daemonSource = fs.readFileSync(
+    new URL('../../src/commands/daemon.ts', import.meta.url),
+    'utf8'
+  );
   const systemSource = fs.readFileSync(
     new URL('../../src/commands/system.ts', import.meta.url),
     'utf8'
   );
 
   it('only the daemon command ensures the file — status never creates', () => {
-    expect(indexSource).toContain('ensureDaemonConfigFile()');
-    expect(indexSource).toContain('daemon-config.json not found');
-    expect(indexSource).toContain('migrated legacy daemon.json');
-    expect(indexSource).toContain('daemon-config.json updated');
+    expect(daemonSource).toContain('ensureDaemonConfigFile()');
+    expect(daemonSource).toContain('daemon-config.json not found');
+    expect(daemonSource).toContain('migrated legacy daemon.json');
+    expect(daemonSource).toContain('daemon-config.json updated');
     expect(systemSource).not.toContain('ensureDaemonConfigFile');
   });
 });

@@ -6,6 +6,7 @@
  * `src/utils/energy.ts`; this file owns I/O and user-facing reporting.
  */
 
+import { Command } from 'commander';
 import {
   describeError,
   log,
@@ -14,6 +15,7 @@ import {
   type CommandContext,
   type CommandResult,
 } from './context.js';
+import type { Session } from './session.js';
 import * as paint from '../utils/color.js';
 import { describeConfigProblems, energyConfigPath } from '../utils/config.js';
 import {
@@ -358,3 +360,101 @@ export async function chargeFromBattery(
 
 // showStatus moved to ./system.ts — it was never vehicle-specific, and the
 // system-status surface (daemon/store/proxies/config) lives there now.
+
+/**
+ * Commander wiring for the vehicle/battery commands.
+ *
+ * Each factory is the one-shot CLI definition; the REPL dispatch switch (in
+ * start.ts) calls the same handlers directly, so the behavior lives once above.
+ */
+
+export function createGetEvBsocCommand(deps: { session: Session }): Command {
+  return new Command('get-ev-bsoc')
+    .description('Get the current battery state of charge from the EV')
+    .action(async () => {
+      deps.session.requireService('Tesla', await deps.session.initializeTesla());
+      await deps.session.runCommand(getEvBatterySoc);
+    });
+}
+
+export function createGetBatterySocCommand(deps: { session: Session }): Command {
+  return new Command('get-battery-soc')
+    .description('Get the current battery state of charge from the solar battery')
+    .action(async () => {
+      deps.session.requireService('FranklinWH', await deps.session.initializeFranklin());
+      try {
+        await deps.session.runCommand(getBatterySoc);
+      } finally {
+        // Phase 2 fixes the teardown bug: this stops a proxy this command started,
+        // but today it also stops one an earlier `start` owns.
+        await deps.session.getFranklin()!.disconnect();
+      }
+    });
+}
+
+export function createGetChargingStateCommand(deps: { session: Session }): Command {
+  return new Command('get-charging-state')
+    .description('Get the current charging state from the EV (charge_state)')
+    .action(async () => {
+      deps.session.requireService('Tesla', await deps.session.initializeTesla());
+      await deps.session.runCommand(getChargingState);
+    });
+}
+
+export function createSetEvChargeLimitCommand(deps: { session: Session }): Command {
+  return new Command('set-ev-charge-limit')
+    .description('Set the EV charge limit')
+    .argument('<percent>', 'Charge limit percentage (50-100)')
+    .action(async (percent: string) => {
+      const limit = parseInt(percent);
+      if (isNaN(limit) || limit < MIN_EV_CHARGE_LIMIT || limit > MAX_EV_CHARGE_LIMIT) {
+        console.error(paint.warning(`Charge limit must be between ${MIN_EV_CHARGE_LIMIT} and ${MAX_EV_CHARGE_LIMIT}`));
+        process.exit(1);
+      }
+
+      deps.session.requireService('Tesla', await deps.session.initializeTesla());
+      await deps.session.runCommand((ctx) => setEvChargeLimit(ctx, limit));
+    });
+}
+
+export function createStartEvChargingCommand(deps: { session: Session }): Command {
+  return new Command('start-ev-charging')
+    .description('Start charging the EV')
+    .action(async () => {
+      deps.session.requireService('Tesla', await deps.session.initializeTesla());
+      await deps.session.runCommand(startEvCharging);
+    });
+}
+
+export function createStopEvChargingCommand(deps: { session: Session }): Command {
+  return new Command('stop-ev-charging')
+    .description('Stop charging the EV')
+    .action(async () => {
+      deps.session.requireService('Tesla', await deps.session.initializeTesla());
+      await deps.session.runCommand(stopEvCharging);
+    });
+}
+
+export function createChargeFromBatteryCommand(deps: { session: Session }): Command {
+  return new Command('charge-from-battery')
+    .description('Set the EV charge limit from the energy the solar battery can spare (kWh math)')
+    .option('--start', 'Set the charge limit and start charging, without prompting')
+    .option('--dry-run', 'Compute and print the limit without sending anything to the vehicle')
+    .action(async (options) => {
+      // Short-circuit preserved: Franklin's failure exits before Tesla is asked
+      // for anything, which is also what `||` did here.
+      deps.session.requireService('FranklinWH', await deps.session.initializeFranklin());
+      deps.session.requireService('Tesla', await deps.session.initializeTesla());
+
+      try {
+        await deps.session.runCommand((ctx) =>
+          chargeFromBattery(ctx, { start: options.start === true, dryRun: options.dryRun === true })
+        );
+      } catch (error) {
+        console.error(paint.error(`Error: ${error instanceof Error ? error.message : error}`));
+        process.exit(1);
+      } finally {
+        await deps.session.getFranklin()!.disconnect();
+      }
+    });
+}

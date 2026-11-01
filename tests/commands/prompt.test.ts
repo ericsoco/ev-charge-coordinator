@@ -7,11 +7,11 @@
  * The fake REPL below is a real readline over PassThrough streams -- the
  * same arrangement production has: one interface, terminal mode, completer.
  */
-import { readFileSync } from 'node:fs';
 import { createInterface, type Interface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { pendingQuestion, prompt, promptNumeric, promptSecret, setReplReadline } from '../../src/commands/prompt.js';
+import { COMMAND_SOURCE, INDEX_SOURCE } from '../helpers/commandSources.js';
 
 interface Repl {
   rl: Interface;
@@ -262,23 +262,25 @@ describe('promptSecret', () => {
   });
 });
 
-describe('index.ts wiring', () => {
-  const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+describe('command wiring', () => {
+  // Positive assertions scan the real sources (the REPL loop in start.ts, the
+  // credential prompts in session.ts); the negative one stays scoped to
+  // index.ts, which must not grow a prompt factory of its own again.
 
   it('registers the REPL interface instead of opening a second one', () => {
-    expect(INDEX_SOURCE).toContain('setReplReadline(rl)');
-    expect(INDEX_SOURCE).toContain('setReplReadline(null)');
+    expect(COMMAND_SOURCE).toContain('setReplReadline(rl)');
+    expect(COMMAND_SOURCE).toContain('setReplReadline(null)');
     // The old implementation was a second-interface factory inside index.ts.
     expect(INDEX_SOURCE).not.toMatch(/async function prompt\(/);
   });
 
   it('routes every numeric sub-prompt through promptNumeric with a cancel path', () => {
-    expect(INDEX_SOURCE).toContain("promptNumeric('Enter charge limit");
-    expect(INDEX_SOURCE).toContain("promptNumeric('Select vehicle number");
-    expect(INDEX_SOURCE).toContain("paint.info('\\nCancelled.')");
+    expect(COMMAND_SOURCE).toContain("promptNumeric('Enter charge limit");
+    expect(COMMAND_SOURCE).toContain("promptNumeric('Select vehicle number");
+    expect(COMMAND_SOURCE).toContain("paint.info('\\nCancelled.')");
     // The battery-buffer sub-prompt is gone: the buffer moved to
     // `config --set-buffer` (see repl-commands.test.ts).
-    expect(INDEX_SOURCE).not.toContain("promptNumeric('Enter battery buffer");
+    expect(COMMAND_SOURCE).not.toContain("promptNumeric('Enter battery buffer");
   });
 
   it('redraws the open question after a whitelisted command', () => {
@@ -286,8 +288,8 @@ describe('index.ts wiring', () => {
     // block command letters by design, and the free-text check was blocked by
     // Tesla's upstream 403 on setChargeLimit (recorded in the workplan), so
     // the branch itself is pinned here.
-    expect(INDEX_SOURCE).toContain('const openQuestion = pendingQuestion();');
-    expect(INDEX_SOURCE).toMatch(/else if \(openQuestion && !closed\)/);
+    expect(COMMAND_SOURCE).toContain('const openQuestion = pendingQuestion();');
+    expect(COMMAND_SOURCE).toMatch(/else if \(openQuestion && !closed\)/);
   });
 });
 
