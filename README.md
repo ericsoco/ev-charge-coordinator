@@ -466,52 +466,59 @@ naming the command that fixes it. Restart the daemon after config changes
 
 ## CLI Reference
 
-Every command in one table, whichever mode you run it in. The **Mode** column
-says where each command works: ➡️ one-shot only (`node dist/index.js <command>`
-or `npm start <command>`), 🔁 interactive only (inside `start`), 👯 both.
+One-shot and interactive CLI commands. Commands marked with ➡️ are one-shot only (`node dist/index.js <command>` or `npm start <command>`); those marked with 🔁 work only in the interactive CLI (inside `start`).
 
-| Command | Mode | Description |
-|---------|------|-------------|
-| `start [--daemon] [--debug]` | ➡️ | Start the Python API proxy and enter interactive mode; `--daemon` starts and stays resident without a prompt, for running in the background; `--debug` prints full stack traces for service startup failures |
-| `exit` (REPL alias `quit`) | 👯 | Terminate all services; in the REPL, also ends the interactive session |
-| `help [<command>]` | 👯 | List the available commands, or one command's flags (`help config`) |
-| `daemon [--once] [--dry-run] [--debug]` | ➡️ | Run the collect daemon in the foreground (battery/EV/weather samplers, session tracking, history); `--once` runs a single collection cycle and exits non-zero if any task failed; `--dry-run` evaluates and records auto-start decisions without actuating; `--debug` prints full stack traces for startup failures |
-| `daemon logs [--lines <n>] [--err] [--follow]` | ➡️ | Show recent `daemon.log` lines and exit (default 50; `--err` also shows `daemon.err.log`; `--follow` streams with `tail -F`, Ctrl-C stops) |
-| `daemon stop` | ➡️ | Stop the launchd daemon (bootout; the agent stays installed) |
-| `daemon restart` | ➡️ | Restart the launchd daemon (stop + bootstrap the installed plist; no file changes) |
-| `daemon install [--dry-run]` | ➡️ | Install (or upgrade) the LaunchAgent and Login Item launcher; `--dry-run` prints the actions and changes nothing |
-| `daemon uninstall [--dry-run]` | ➡️ | Remove the LaunchAgent and Login Item launcher (keeps store, logs, credentials); `--dry-run` prints the actions and changes nothing |
-| `status [--json]` | 👯 | Show daemon, store, proxy, and config status — reads only, starts nothing (service lines reflect this process; proxies are probed on localhost) |
-| `sessions [--limit <n>] [--open]` | 👯 | Show recent charging sessions from the store (default 10; `--open` lists only sessions still open) |
-| `set-home-location [<latitude> <longitude>]` | 👯 | Set the home location (a secret — stored in the keychain, never config.json or the store). With arguments: manual (negative coordinates accepted, e.g. `-33.9 151.2`). With none: wakes the vehicle and reads its current position. Both forms confirm with current → new before writing; requires the `vehicle_location` scope. `--help` prints the command help |
-| `get-ev-bsoc` | 👯 | Get the current battery state of charge from the EV |
-| `authenticate [--client-id <id>] [--client-secret <secret>] [--reauth]` | 👯 | Sign in to Tesla and store credentials (no other side effects); `--reauth` re-authorizes, detecting a rejected (recreated) app and prompting for the new pair |
-| `get-battery-soc` | 👯 | Get the current battery state of charge from the solar battery |
-| `get-charging-state` | 👯 | Get the EV's charging state, battery level, and charge limit (`charge_state`; does not wake the vehicle — a sleeping car returns HTTP 408 with asleep/offline advice) |
-| `set-ev-charge-limit <percent>` | 👯 | Set the EV's charge limit (50-100%); in the REPL the percent may be given inline (`set-ev-charge-limit 80`) or omitted to be prompted for, and `--help` prints the command help |
-| `start-ev-charging` | 👯 | Start charging the EV |
-| `stop-ev-charging` | 👯 | Stop charging the EV |
-| `charge-from-battery [--start] [--dry-run]` | 👯 | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is shown the computed plan and prompted `Set the EV charge limit to N% and start charging? (y/n)`; declining sends nothing, and a non-TTY run is a no-op that points at the flags; `--start` sets the limit and starts charging without prompting; `--dry-run` calculates and prints BSoC and the computed charge target, without issuing any commands |
-| `config` | 👯 | Show current credentials and the energy config (with its file path); `--help` prints the flag list |
-| `config --clear-franklin` | 👯 | Clear FranklinWH credentials |
-| `config --clear-tesla` | 👯 | Clear Tesla credentials |
-| `config --clear-credentials` | 👯 | Clear all stored credentials |
-| `config --tesla-region <na\|eu\|cn>` | 👯 | Choose the Tesla Fleet API deployment |
-| `config --tesla-domain <domain>` | 👯 | Set the domain that hosts the virtual key public key |
-| `config --show-public-key` | 👯 | Print the virtual key public key Tesla reads |
-| `config --set-battery-kwh <n>` | 👯 | Set house battery capacity in `config.json` |
-| `config --set-ev-kwh <n>` | 👯 | Set EV battery capacity in `config.json` |
-| `config --set-efficiency <0-1>` | 👯 | Set charge efficiency in `config.json` |
-| `config --set-buffer <percent>` | 👯 | Set the battery buffer reserve, 0-100%, in `config.json` |
-| `pair-tesla-key [--domain <d>] [--vin <vin>] [--check-only] [--skip-registration] [--rotate-key]` | 👯 | Register the virtual key with Tesla and print the vehicle pairing link; `--help` prints the flag list |
-| `notify set <ntfy\|slack> [--topic <t>] [--webhook-url <u>]` | 👯 | Store a notifier secret in the credential store (masked prompt when the flag is omitted) |
-| `notify clear` | 👯 | Remove the stored ntfy topic and Slack webhook URL |
-| `notify test` | 👯 | Send a labeled test event through every configured notifier (non-zero exit when nothing could be sent) |
+### Managing and observing processes
+| Command | Description |
+|---------|-------------|
+| `start [--daemon] [--debug]` ➡️ | Start the Python API proxy and enter interactive mode; `--daemon` starts and stays resident without a prompt, for running in the background; `--debug` prints full stack traces for service startup failures |
+| `exit` (REPL alias `quit`) | Terminate all services; in the REPL, also ends the interactive session |
+| `help [<command>]` | List the available commands, or one command's flags (`help config`) |
+| `status [--json]` | Show daemon, store, proxy, and config status — reads only, starts nothing (service lines reflect this process; proxies are probed on localhost) |
+| `sessions [--limit <n>] [--open]` | Show recent charging sessions from the store (default 10; `--open` lists only sessions still open) |
+| `daemon [--once] [--dry-run] [--debug]` ➡️ | Run the collect daemon in the foreground (battery/EV/weather samplers, session tracking, history); `--once` runs a single collection cycle and exits non-zero if any task failed; `--dry-run` evaluates and records auto-start decisions without actuating; `--debug` prints full stack traces for startup failures |
+| `daemon logs [--lines <n>] [--err] [--follow]` ➡️ | Show recent `daemon.log` lines and exit (default 50; `--err` also shows `daemon.err.log`; `--follow` streams with `tail -F`, Ctrl-C stops) |
+| `daemon stop` ➡️ | Stop the launchd daemon (bootout; the agent stays installed) |
+| `daemon restart` ➡️ | Restart the launchd daemon (stop + bootstrap the installed plist; no file changes) |
+| `daemon install [--dry-run]` ➡️ | Install (or upgrade) the LaunchAgent and Login Item launcher; `--dry-run` prints the actions and changes nothing |
+| `daemon uninstall [--dry-run]` ➡️ | Remove the LaunchAgent and Login Item launcher (keeps store, logs, credentials); `--dry-run` prints the actions and changes nothing |
+
+### Read + write commands
+| Command | Description |
+|---------|-------------|
+| `get-ev-bsoc` | Get the current battery state of charge from the EV |
+| `get-battery-soc` | Get the current battery state of charge from the solar battery |
+| `get-charging-state` | Get the EV's charging state, battery level, and charge limit (`charge_state`; does not wake the vehicle — a sleeping car returns HTTP 408 with asleep/offline advice) |
+| `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is shown the computed plan and prompted `Set the EV charge limit to N% and start charging? (y/n)`; declining sends nothing, and a non-TTY run is a no-op that points at the flags; `--start` sets the limit and starts charging without prompting; `--dry-run` calculates and prints BSoC and the computed charge target, without issuing any commands |
+| `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%); in the REPL the percent may be given inline (`set-ev-charge-limit 80`) or omitted to be prompted for, and `--help` prints the command help |
+| `start-ev-charging` | Start charging the EV |
+| `stop-ev-charging` | Stop charging the EV |
+
+### Configuring
+| Command | Description |
+|---------|-------------|
+| `authenticate [--client-id <id>] [--client-secret <secret>] [--reauth]` | Sign in to Tesla and store credentials (no other side effects); `--reauth` re-authorizes, detecting a rejected (recreated) app and prompting for the new pair |
+| `pair-tesla-key [--domain <d>] [--vin <vin>] [--check-only] [--skip-registration] [--rotate-key]` | Register the virtual key with Tesla and print the vehicle pairing link; `--help` prints the flag list |
+| `set-home-location [<latitude> <longitude>]` | Set the home location (a secret — stored in the keychain, never config.json or the store). With arguments: manual (negative coordinates accepted, e.g. `-33.9 151.2`). With none: wakes the vehicle and reads its current position. Both forms confirm with current → new before writing; requires the `vehicle_location` scope. `--help` prints the command help |
+| `notify set <ntfy\|slack> [--topic <t>] [--webhook-url <u>]` | Store a notifier secret in the credential store (masked prompt when the flag is omitted) |
+| `notify clear` | Remove the stored ntfy topic and Slack webhook URL |
+| `notify test` | Send a labeled test event through every configured notifier (non-zero exit when nothing could be sent) |
+| `config` | Show current credentials and the energy config (with its file path); `--help` prints the flag list |
+| `config --clear-franklin` | Clear FranklinWH credentials |
+| `config --clear-tesla` | Clear Tesla credentials |
+| `config --clear-credentials` | Clear all stored credentials |
+| `config --tesla-region <na\|eu\|cn>` | Choose the Tesla Fleet API deployment |
+| `config --tesla-domain <domain>` | Set the domain that hosts the virtual key public key |
+| `config --show-public-key` | Print the virtual key public key Tesla reads |
+| `config --set-battery-kwh <n>` | Set house battery capacity in `config.json` |
+| `config --set-ev-kwh <n>` | Set EV battery capacity in `config.json` |
+| `config --set-efficiency <0-1>` | Set charge efficiency in `config.json` |
+| `config --set-buffer <percent>` | Set the battery buffer reserve, 0-100%, in `config.json` |
 
 ### Interactive mode notes
 
-Every 👯 command above works inside `start` with the same flags the one-shot
-accepts; the differences are:
+All commands not marked above as one-shot only (➡️) work inside `start` with the same flags the one-shot
+accepts, with the following differences:
 
 - `set-ev-charge-limit` takes the percent inline (`set-ev-charge-limit 80`);
   with no value it prompts for one.
