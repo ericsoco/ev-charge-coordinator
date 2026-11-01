@@ -10,6 +10,7 @@ import {
   type ClientCredentialProbe,
   type CredentialIO,
 } from '../../src/commands/authenticate.js';
+import { COMMAND_SOURCE } from '../helpers/commandSources.js';
 
 const STORED = { clientId: 'OLD_ID', clientSecret: 'OLD_SECRET' };
 
@@ -170,7 +171,9 @@ describe('selectAppCredentials', () => {
 });
 
 describe('wiring', () => {
-  const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+  // runAuthenticate and runPairTeslaKey moved out of index.ts into their
+  // command modules; scan the concatenation of index.ts + src/commands/*.
+  const INDEX_SOURCE = COMMAND_SOURCE;
   const SERVICE_SOURCE = readFileSync(
     new URL('../../src/services/TeslaService.ts', import.meta.url),
     'utf8'

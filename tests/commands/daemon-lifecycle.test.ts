@@ -17,6 +17,7 @@ import {
   strayParentFlagProblem,
   type ExecFn,
 } from '../../src/commands/daemonLifecycle.js';
+import { COMMAND_SOURCE } from '../helpers/commandSources.js';
 
 const TEMPLATE = `<?xml version="1.0"?>
 <plist><dict>
@@ -190,11 +191,14 @@ describe('strayParentFlagProblem (flag before a lifecycle subcommand)', () => {
 });
 
 describe('subcommand flag routing (Commander positional-mode guard)', () => {
-  const INDEX_SOURCE = fs.readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+  // index.ts keeps enablePositionalOptions; the daemon command itself moved to
+  // src/commands/daemon.ts — scan both via the concatenation.
+  const INDEX_SOURCE = COMMAND_SOURCE;
 
   it('index pins the wiring this quirk requires', () => {
     expect(INDEX_SOURCE).toContain('program.enablePositionalOptions()');
-    const start = INDEX_SOURCE.indexOf(`.command('daemon')`);
+    const start = INDEX_SOURCE.indexOf(`new Command('daemon')`);
+    expect(start).toBeGreaterThan(-1);
     const block = INDEX_SOURCE.slice(start, INDEX_SOURCE.indexOf('.action(', start));
     expect(block).toContain('.passThroughOptions()');
     expect(INDEX_SOURCE).toContain("daemonCommand.hook('preAction'");
