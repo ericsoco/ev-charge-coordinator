@@ -10,8 +10,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { COMMAND_SOURCE } from '../helpers/commandSources.js';
 
-const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
 const PROMPT_SOURCE = readFileSync(new URL('../../src/commands/prompt.ts', import.meta.url), 'utf8');
 const PACKAGE = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
@@ -32,8 +32,8 @@ describe('promptSecret', () => {
 
   it('uses no prompt library', () => {
     expect(PROMPT_SOURCE).not.toContain('inquirer');
-    expect(INDEX_SOURCE).not.toContain('inquirer');
-    expect(INDEX_SOURCE).not.toMatch(/async function promptPassword\(/);
+    expect(COMMAND_SOURCE).not.toContain('inquirer');
+    expect(COMMAND_SOURCE).not.toMatch(/async function promptPassword\(/);
     expect(PACKAGE.dependencies ?? {}).not.toHaveProperty('inquirer');
   });
 
@@ -46,12 +46,12 @@ describe('promptSecret', () => {
 
   it('borrows the shared interface instead of opening a second one', () => {
     expect(PROMPT_SOURCE).toContain('export function promptSecret');
-    expect(INDEX_SOURCE).toContain('setReplReadline(rl)');
-    expect(INDEX_SOURCE).not.toMatch(/async function promptSecret\(/);
+    expect(COMMAND_SOURCE).toContain('setReplReadline(rl)');
+    expect(COMMAND_SOURCE).not.toMatch(/async function promptSecret\(/);
   });
 
   it('is used for both the gateway password and the client secret', () => {
-    expect(INDEX_SOURCE).toMatch(/promptSecret\('Client Secret: '\)/);
-    expect(INDEX_SOURCE).toMatch(/promptSecret\('Password: '\)/);
+    expect(COMMAND_SOURCE).toMatch(/promptSecret\('Client Secret: '\)/);
+    expect(COMMAND_SOURCE).toMatch(/promptSecret\('Password: '\)/);
   });
 });

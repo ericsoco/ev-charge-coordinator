@@ -94,14 +94,16 @@ export async function runNotifyTest(deps: NotifyDeps): Promise<boolean> {
 
 /** Top-level `notify` command with set/clear/test subcommands. */
 export function createNotifyCommand(deps: NotifyDeps): Command {
-  const notify = new Command('notify')
+  // Named `notifyCommand` (not `notify`) so the drift guard in
+  // repl-commands.test.ts can pin each subcommand under its parent.
+  const notifyCommand = new Command('notify')
     .description('Manage notification secrets (ntfy, Slack) and test delivery')
     // addCommand does not inherit the program's setting, so stray positionals
     // (`notify clear extra`) must be rejected here to match the REPL parser.
     .allowExcessArguments(false)
     .showHelpAfterError();
 
-  notify
+  notifyCommand
     .command('set')
     .description('Store an ntfy topic or Slack webhook URL in the credential store')
     .argument('<kind>', 'ntfy | slack')
@@ -109,7 +111,7 @@ export function createNotifyCommand(deps: NotifyDeps): Command {
     .option('--webhook-url <url>', 'Slack incoming-webhook URL (masked prompt when omitted)')
     .action(async (kind: string, options: { topic?: string; webhookUrl?: string }) => {
       if (kind !== 'ntfy' && kind !== 'slack') {
-        notify.error(`error: unknown notifier kind '${kind}' (expected ntfy or slack)`);
+        notifyCommand.error(`error: unknown notifier kind '${kind}' (expected ntfy or slack)`);
         return;
       }
       try {
@@ -120,7 +122,7 @@ export function createNotifyCommand(deps: NotifyDeps): Command {
       }
     });
 
-  notify
+  notifyCommand
     .command('clear')
     .description('Remove the stored ntfy topic and Slack webhook URL')
     .action(async () => {
@@ -132,12 +134,12 @@ export function createNotifyCommand(deps: NotifyDeps): Command {
       }
     });
 
-  notify
+  notifyCommand
     .command('test')
     .description('Send a test event through every configured notifier')
     .action(async () => {
       if (!(await runNotifyTest(deps))) process.exitCode = 1;
     });
 
-  return notify;
+  return notifyCommand;
 }
