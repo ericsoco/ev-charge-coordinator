@@ -1800,6 +1800,39 @@ link. No code changes; docs only. Gate not required (markdown-only), but note AG
 was already updated in the move commit.
 
 
+### 2026-10-31 — README command reference unified with a mode column (branch `docs/unify-cli-reference-table`)
+
+Task 9aab3, executed after the extraction refactor landed (user's option (c):
+wait, so the project tree reflects the final file layout). Docs only; gate green.
+
+- **One table:** README's `## CLI Reference` table and the `### Interactive Mode
+  Commands` bullet list are merged into a single `Command | Mode | Description`
+  table with a legend — ➡️ one-shot only, 🔁 interactive only, 👯 both. The bullet
+  list is replaced by a short "Interactive mode notes" (inline
+  `set-ev-charge-limit [<percent>]`, `exit`/`quit`, `help <command>` /
+  `notify help <sub>`, tab completion, stray-positional rejection).
+- **Mode column derived from code, not the old docs:** `REPL_COMMANDS` in
+  `repl.ts`, the dispatch switch in `start.ts`, and `--help` from the built CLI.
+  Notably `notify set/clear/test` is 👯 — the drift-audit fix (`a3a7cf6`) gave
+  the REPL a notify parser; `daemon …`/`start` stay ➡️; nothing is 🔁-only (the
+  `quit` alias rides in the `exit` row).
+- **Accuracy fixes:** `<command> -help` → `--help` in Usage (the REPL rejects
+  single-dash `-help`); missing rows added (`help`, `daemon
+  stop|restart|install [--dry-run]|uninstall [--dry-run]`); the `daemon` row
+  gains `--dry-run`/`--debug`; `set-home-location`/`set-ev-charge-limit` rows
+  note `--help` and the REPL's inline-percent/prompt fallback;
+  `config`/`pair-tesla-key` rows note `--help`; `(design.md §3.7)` →
+  `(docs/design.md §3.7)` (broken by the docs move).
+- **Project tree refreshed (option c):** all 15 `src/commands/` modules
+  (post-refactor), `notifiers/`, updated `daemon/` + `utils/` listings, the new
+  `docs/` folder, and `workplan.md` itself.
+- Validation: `node dist/index.js --help` plus `daemon --help`/`notify --help`
+  diffed against the table (17 commands + help; registration order unchanged);
+  stale-reference sweep clean; `npm run check` green — **876 passed / 2 skipped**.
+- Environment note: this worktree's `dist` was a symlink into the main checkout
+  (which has no `node_modules`); replaced with a real build directory so the CLI
+  runs from here. `dist/` is gitignored — no repo impact.
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"
