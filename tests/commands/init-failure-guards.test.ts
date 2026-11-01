@@ -12,26 +12,29 @@
  *    fell through to the credential prompt -- asking for a password that could
  *    not fix a dead proxy.
  */
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-
-const INDEX_SOURCE = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8');
+import { COMMAND_SOURCE } from '../helpers/commandSources.js';
 
 describe('one-shot service initialization', () => {
   it('checks the .ok field through requireService, not the always-truthy object', () => {
-    expect(INDEX_SOURCE).not.toContain('!(await initialize');
-    expect(INDEX_SOURCE).toContain('function requireService');
-    expect(INDEX_SOURCE).toContain('if (init.ok) return;');
+    expect(COMMAND_SOURCE).not.toContain('!(await initialize');
+    // The guard itself lives in session.ts; the call sites are each command's
+    // factory (vehicle.ts, system.ts).
+    expect(COMMAND_SOURCE).toContain('function requireService');
+    expect(COMMAND_SOURCE).toContain('if (init.ok) return;');
 
-    const sites = INDEX_SOURCE.match(/requireService\('(Tesla|FranklinWH)', await initialize/g) ?? [];
+    const sites =
+      COMMAND_SOURCE.match(
+        /requireService\('(Tesla|FranklinWH)', await (?:deps\.)?session\.initialize/g
+      ) ?? [];
     // Six single-service actions, charge-from-battery (both services), and
     // set-home-location's vehicle flow (Tesla, only when no arguments given).
     expect(sites).toHaveLength(9);
   });
 
   it('skips the credential prompt when the proxy itself failed to start', () => {
-    const guard = INDEX_SOURCE.indexOf('instanceof ProxyStartupError');
-    const prompt = INDEX_SOURCE.indexOf('FranklinWH authentication required.');
+    const guard = COMMAND_SOURCE.indexOf('instanceof ProxyStartupError');
+    const prompt = COMMAND_SOURCE.indexOf('FranklinWH authentication required.');
     expect(guard).toBeGreaterThan(-1);
     expect(prompt).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(prompt);

@@ -1706,6 +1706,47 @@ Launcher stderr noise (`getcwd … not permitted`, `nvm.sh: PWD: unbound
 variable`) noted as a possible future hardening target; did not block starts.
 
 
+### 2026-10-31 — index.ts extraction: one file per command (branch `refactor/extract-command-modules`)
+
+Pure refactor: `src/index.ts` went 2,019 → 98 lines — wiring only
+(program setup, one session object, `program.addCommand` per command in
+the original registration order, so `--help` output is unchanged). Each
+command's behavior now lives in its `createXCommand` factory, following
+the `createNotifyCommand` pattern:
+
+- `session.ts` (new): the service singletons (`initializeFranklin` /
+  `initializeTesla`), `currentContext`, `runCommand`, `requireService`,
+  `ServiceStart`, `reportDebugDetails`, `DEFAULT_PROXY_PORT`. The
+  existing process-lifetime state (the two service instances) moved here
+  unchanged — no new state added; relocation flagged for approval.
+- `start.ts` (new): the `start` action incl. the REPL dispatch switch
+  (each case still calls the shared handlers, unchanged).
+  `printCommandHelp` stays in index.ts (it needs the Commander program)
+  and is injected into `createStartCommand`.
+- `exit.ts`, `daemon.ts`, `config.ts`, `pairTeslaKey.ts` (new): logic
+  moved verbatim out of index.ts.
+- `authenticate.ts` gains `runAuthenticate`; `vehicle.ts` / `system.ts`
+  gain their per-command factories co-located with the handlers
+  (approved choice over seven wiring-only files).
+- Tests: the source-scanning drift guards now read
+  `tests/helpers/commandSources.ts` (index.ts + src/commands/*
+  concatenation, file-marked); the `daemon-config` wiring test reads
+  `daemon.ts`; the flag-table guard accepts `new Command('name')`, skips
+  `notify` (a real REPL command since the drift audit — its flags are
+  pinned by the NOTIFY_* parity tests), and pins its subcommands under
+  their renamed `notifyCommand` parent.
+
+Rebased onto `main` after the one-shot ↔ REPL drift audit: the audit's
+dispatch changes (inline `set-ev-charge-limit`, `--help` interception,
+`notify` REPL case, `buildNotifyDeps`, subcommand-aware
+`printCommandHelp`, `allowExcessArguments(false)` on every factory —
+`addCommand` does not inherit the program's setting — and
+`normalizeNegativePositionals` at parse) were ported into the new
+modules during conflict resolution.
+
+Gate: `npm run check` green (798 passed / 2 skipped); `node dist/index.js
+--help` order verified unchanged.
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"

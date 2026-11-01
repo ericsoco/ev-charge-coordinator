@@ -7,8 +7,8 @@
  * confusing error, which is precisely what this module exists to prevent.
  */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { COMMAND_SOURCE } from '../helpers/commandSources.js';
 import {
   buildAuthorizationCodeTokenForm,
   buildAuthorizeUrl,
@@ -362,15 +362,12 @@ describe('describeTeslaError', () => {
     // Regression guard. Three advice strings named an `authenticate` command that
     // was never registered, and one named `register-key` after it was renamed --
     // each time the test asserted the stale text, so the suite protected the bug.
-    // This walks the real command names out of src/index.ts and checks every
-    // message that mentions one, so renaming a command can no longer silently
-    // orphan its advice.
-    const source = readFileSync(
-      new URL('../../src/index.ts', import.meta.url),
-      'utf8'
-    );
+    // This walks the real command names out of the CLI source (index.ts + the
+    // per-command modules) and checks every message that mentions one, so
+    // renaming a command can no longer silently orphan its advice.
+    const source = COMMAND_SOURCE;
     const commands = new Set(
-      [...source.matchAll(/\.command\('([^']+)'\)/g)].map((m) => m[1])
+      [...source.matchAll(/(?:\.command|new Command)\('([^']+)'\)/g)].map((m) => m[1])
     );
     expect(commands.size).toBeGreaterThan(5);
 
