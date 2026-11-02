@@ -10,11 +10,13 @@ import * as path from 'path';
 import type { CommandContext } from '../../src/commands/context.js';
 import {
   formatAge,
+  formatAutoStart,
   formatDuration,
   setHomeLocationCommand,
   showSessions,
   showStatus,
 } from '../../src/commands/system.js';
+import { DEFAULT_DAEMON_CONFIG } from '../../src/utils/daemonConfig.js';
 import { openStore } from '../../src/store/database.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import * as sessions from '../../src/store/SessionStore.js';
@@ -98,12 +100,15 @@ describe('showStatus', () => {
     const holder = await acquireLock(lockFile);
     const { ctx, lines } = makeCtx();
 
+    // Injected so the auto-start pin does not depend on the shared config dir.
+    const autoStart = { enabled: true, filters: [{ type: 'geofence' as const, radiusM: 500 }] };
     const result = await showStatus(ctx, {
       json: true,
       dbPath,
       lockFile,
       nowMs: () => 100_000,
       getHomeLocation: async () => undefined,
+      daemonConfig: { config: { ...DEFAULT_DAEMON_CONFIG, autoStart }, problems: [] },
       ...STUB_PROXIES,
     });
     holder.release();
@@ -120,6 +125,7 @@ describe('showStatus', () => {
     });
     expect(report.vehicle).toEqual({ state: 'online', error: null });
     expect(report.config.homeLocation).toBe('not set');
+    expect(report.config.daemon.autoStart).toEqual(autoStart);
     // collectStatus resolves the real config file — none exists in the vitest
     // env, so the energy buffer is null here (the human-mode test covers the
     // rendered 20% via the ctx-provided config).
@@ -146,6 +152,42 @@ describe('showStatus', () => {
     expect(out).toContain('Battery Buffer: 20%');
     expect(out).toContain('home location: set');
     expect(out).not.toContain('1.00000');
+    // Shipped default rendered from the injected resolved config.
+    expect(out).toContain(
+      'auto-start: disabled (dark) — decisions are recorded, nothing actuates · filters: always'
+    );
+  });
+
+  it('renders an enabled auto-start with its filter chain', async () => {
+    const { ctx, lines } = makeCtx();
+    await showStatus(ctx, {
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      daemonConfig: {
+        config: {
+          ...DEFAULT_DAEMON_CONFIG,
+          autoStart: { enabled: true, filters: [{ type: 'geofence', radiusM: 500 }] },
+        },
+        problems: [],
+      },
+      ...STUB_PROXIES,
+    });
+    expect(lines.join('\n')).toContain('auto-start: enabled · filters: geofence ≤500 m');
+  });
+
+  it('prints config problems instead of an auto-start line when config is invalid', async () => {
+    const { ctx, lines } = makeCtx();
+    await showStatus(ctx, {
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      daemonConfig: { config: null, problems: ['daemon-config.json: autoStart.enabled bad'] },
+      ...STUB_PROXIES,
+    });
+    const out = lines.join('\n');
+    expect(out).toContain('daemon-config.json: autoStart.enabled bad');
+    expect(out).not.toContain('auto-start:');
   });
 
   it('renders vehicle probe variants and the unrecorded proxy honestly', async () => {
@@ -411,6 +453,25 @@ describe('formatters', () => {
     expect(formatAge(50 * 86_400_000)).toBe('50d ago');
     expect(formatDuration(51_000)).toBe('51s');
     expect(formatDuration(8 * 3_600_000 + 12 * 60_000)).toBe('8h 12m');
+  });
+
+  it('renders the auto-start mode and filter chain', () => {
+    expect(formatAutoStart({ enabled: false, filters: [{ type: 'always' }] })).toBe(
+      'auto-start: disabled (dark) — decisions are recorded, nothing actuates · filters: always'
+    );
+    expect(formatAutoStart({ enabled: true, filters: [] })).toBe(
+      'auto-start: enabled · filters: (none — all plug-ins)'
+    );
+    expect(
+      formatAutoStart({
+        enabled: true,
+        filters: [
+          { type: 'always' },
+          { type: 'geofence', radiusM: 100 },
+          { type: 'geofence' }, // radius missing renders the type alone (config validation rejects this)
+        ],
+      })
+    ).toBe('auto-start: enabled · filters: always, geofence ≤100 m, geofence');
   });
 });
 
