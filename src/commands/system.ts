@@ -19,7 +19,13 @@ import {
 } from './context.js';
 import type { Session } from './session.js';
 import * as paint from '../utils/color.js';
-import { resolveDaemonConfig, daemonConfigPath } from '../utils/daemonConfig.js';
+import {
+  resolveDaemonConfig,
+  daemonConfigPath,
+  type AutoStartConfig,
+  type DaemonConfig,
+  type ResolvedDaemonConfig,
+} from '../utils/daemonConfig.js';
 import { resolveEnergyConfig } from '../utils/config.js';
 import { credentialStore, type HomeLocation } from '../utils/credentials.js';
 import { TeslaService } from '../services/TeslaService.js';
@@ -66,7 +72,7 @@ export interface StatusReport {
     teslaCommand: { state: 'running' | 'not running' };
   };
   config: {
-    daemon: Record<string, number> | null;
+    daemon: DaemonConfig | null;
     daemonProblems: string[];
     energyBufferPercent: number | null;
     energyInvalid: string[];
@@ -80,6 +86,8 @@ export interface StatusOptions {
   lockFile?: string;
   nowMs?: () => number;
   getHomeLocation?: () => Promise<HomeLocation | undefined>;
+  /** Resolved daemon config injected for tests; default reads daemon-config.json. */
+  daemonConfig?: ResolvedDaemonConfig;
   /** Probes injected for tests; defaults probe localhost for real. */
   franklinProxyState?: (
     live: { pid: number; port: number } | null
@@ -106,6 +114,28 @@ export function formatDuration(ms: number): string {
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ${Math.round((ms % 3_600_000) / 60_000)}m`;
   return `${Math.floor(ms / 86_400_000)}d ${Math.floor((ms % 86_400_000) / 3_600_000)}h`;
+}
+
+/**
+ * Human line for the auto-start decision block: mode + effective filter
+ * chain. "disabled (dark)" is the shipped default — decisions are recorded,
+ * nothing actuates — so it reads as a neutral state, not a problem.
+ */
+export function formatAutoStart(autoStart: AutoStartConfig): string {
+  const filters =
+    autoStart.filters.length === 0
+      ? '(none — all plug-ins)'
+      : autoStart.filters
+          .map((filter) =>
+            filter.type === 'geofence' && filter.radiusM !== undefined
+              ? `geofence ≤${filter.radiusM} m`
+              : filter.type
+          )
+          .join(', ');
+  const mode = autoStart.enabled
+    ? 'enabled'
+    : 'disabled (dark) — decisions are recorded, nothing actuates';
+  return `auto-start: ${mode} · filters: ${filters}`;
 }
 
 /**
@@ -265,7 +295,7 @@ async function collectStatus(options: StatusOptions): Promise<StatusReport> {
     vehicle = { state: null, error: error instanceof Error ? error.message : String(error) };
   }
 
-  const daemonCfg = resolveDaemonConfig();
+  const daemonCfg = options.daemonConfig ?? resolveDaemonConfig();
   const energyCfg = resolveEnergyConfig();
   const home = await (options.getHomeLocation ?? (() => credentialStore.getHomeLocation()))();
 
@@ -275,7 +305,7 @@ async function collectStatus(options: StatusOptions): Promise<StatusReport> {
     store: { path: dbPath, exists, schemaVersion, sizeBytes, counts, lastSample },
     proxies: { franklin, teslaCommand },
     config: {
-      daemon: daemonCfg.config as Record<string, number> | null,
+      daemon: daemonCfg.config,
       daemonProblems: daemonCfg.problems,
       energyBufferPercent: energyCfg.config?.bufferPercent ?? null,
       energyInvalid: energyCfg.invalid,
@@ -414,6 +444,7 @@ export async function showStatus(
         `(plugged ${cfg.evSamplePluggedSec}s / idle ${cfg.evSampleIdleSec}s) · ` +
         `weather ${cfg.weatherFetchSec}s · retention ${cfg.retentionDays}d`
     );
+    log(ctx, formatAutoStart(cfg.autoStart));
   } else {
     log(ctx, 'daemon config: (unavailable — see problems above)');
   }
