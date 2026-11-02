@@ -4,7 +4,10 @@
  * `vehicle_data` read happens only when the car is online AND the
  * plugged-or-idle cadence (pure: shouldSampleRich) has elapsed. Each rich
  * read lands a sample, runs the pure transition detector, and maintains
- * sessions — open on plug_in, close+finalize on unplug.
+ * sessions — open on plug_in, close+finalize on unplug. On the first rich
+ * read it also runs the program-init reconciliation: a plugged,
+ * not-charging car with no session (or an undecided one) is treated as a
+ * vehicle plug-in, covering daemon-off → plug-in → daemon-on.
  *
  * Known limitation: an unplug the car sleeps through is
  * observed only at the next wake; if the next visit's state matches the
@@ -20,6 +23,7 @@ import * as evStore from '../store/EvStore.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import * as homeBatteryStore from '../store/HomeBatteryStore.js';
 import * as sessionStore from '../store/SessionStore.js';
+import * as decisionStore from '../store/DecisionStore.js';
 import { detectTransitions } from './eventDetector.js';
 import type { NotificationEvent } from '../notifiers/types.js';
 import { computeSessionAggregates } from './sessionAggregates.js';
@@ -81,6 +85,14 @@ export interface EvPollerDeps {
    */
   onVehiclePlugIn?: (ctx: VehiclePlugInContext) => Promise<void>;
   /**
+   * One-time init wake, gated by wakeAtInit: the init plug-in check needs
+   * charge_state, which only an awake car answers. Attempted at most once
+   * per process, only while the init check is still pending.
+   */
+  wakeUp?: () => Promise<void>;
+  /** Live auto-start mode — collect-only and --dry-run never wake the car. */
+  wakeAtInit?: boolean;
+  /**
    * Typed-event sink (design §3.7): plug-in + charge start/stop transitions,
    * emitted where the events rows are written. Failures are isolated here.
    */
@@ -108,6 +120,10 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
   let lastProbeState: string | null = null;
   let lastDueLoggedAt: number | null = null;
   let lastAsleepHeartbeatMs: number | null = null;
+  // Program-init bookkeeping: the wake fires at most once, the reconciliation
+  // runs once — after the first successful rich read.
+  let initWakeAttempted = false;
+  let initCheckDone = false;
 
   function finalize(sessionId: number, plugTsMs: number, unplugTsMs: number): void {
     sessionStore.finalizeSession(
@@ -122,6 +138,83 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
     );
   }
 
+  /** One decision-consumer call, isolated so a failure never stops sampling. */
+  const runVehiclePlugIn = async (ctx: VehiclePlugInContext): Promise<void> => {
+    if (!deps.onVehiclePlugIn) return;
+    try {
+      await deps.onVehiclePlugIn(ctx);
+    } catch (error) {
+      log(
+        `[ev-poll] decision consumer failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  };
+
+  /**
+   * Init reconciliation (first rich read only): a plugged, not-charging car
+   * with no session is the plug-in missed while the daemon was not running —
+   * record and evaluate it; an open session without a decision gets that
+   * decision completed; a decided session is left alone, so restarts never
+   * re-fire. Charging/disconnected cars are the transition path's job.
+   */
+  const reconcileInitPlugIn = async (
+    tsMs: number,
+    battery: { chargingState: string; soc: number }
+  ): Promise<void> => {
+    if (battery.chargingState === 'Disconnected' || battery.chargingState === 'Charging') {
+      return;
+    }
+    const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
+    if (open === null) {
+      sessionStore.insertEvent(deps.db, {
+        vehicleId: deps.vehicleId,
+        tsMs,
+        kind: 'plug_in',
+        fromState: null, // no baseline to transition from
+        toState: battery.chargingState,
+      });
+      const sessionId = sessionStore.openSession(deps.db, {
+        vehicleId: deps.vehicleId,
+        homeBatteryId: deps.homeBatteryId,
+        plugTsMs: tsMs,
+      });
+      log(
+        `[ev-poll] init: vehicle plugged (${battery.chargingState}) with no session — ` +
+          'treating as vehicle plug-in'
+      );
+      await notify({
+        type: 'plug-in-detected',
+        tsMs,
+        sessionId,
+        vehicleId: deps.vehicleId,
+        evSocPercent: battery.soc,
+      });
+      await runVehiclePlugIn({
+        tsMs,
+        sessionId,
+        event: 'plug_in',
+        chargingState: battery.chargingState,
+        evSocPercent: battery.soc,
+      });
+      return;
+    }
+    if (!deps.onVehiclePlugIn) return;
+    if (decisionStore.decisionForSession(deps.db, open.id) === null) {
+      log(`[ev-poll] init: session ${open.id} has no decision yet — evaluating`);
+      await runVehiclePlugIn({
+        tsMs,
+        sessionId: open.id,
+        event: 'plug_in',
+        chargingState: battery.chargingState,
+        evSocPercent: battery.soc,
+      });
+    } else {
+      log(`[ev-poll] init: session ${open.id} already decided — skipping`);
+    }
+  };
+
   return {
     name: 'ev-poll',
     everyMs: deps.statusPollSec * 1000,
@@ -131,10 +224,33 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         log(`[ev-poll] vehicle ${lastProbeState} → ${vehicle.state}`);
       }
       lastProbeState = vehicle.state;
-      if (vehicle.state !== 'online') {
+      // The one wake the daemon triggers: the init plug-in check needs
+      // charge_state, which only an awake car answers. Once per process and
+      // only while the init check is pending — never a wake loop.
+      if (
+        vehicle.state === 'asleep' &&
+        !initWakeAttempted &&
+        !initCheckDone &&
+        deps.wakeAtInit &&
+        deps.wakeUp
+      ) {
+        initWakeAttempted = true;
+        log('[ev-poll] vehicle asleep at init — waking once to check plug-in state');
+        try {
+          await deps.wakeUp();
+          lastProbeState = 'online'; // wakeUp resolves only once online
+        } catch (error) {
+          log(
+            `[ev-poll] init wake failed: ${
+              error instanceof Error ? error.message : String(error)
+            } — waiting for the vehicle to wake on its own`
+          );
+        }
+      }
+      if (lastProbeState !== 'online') {
         // Liveness while silent: first observation, then hourly, so an empty
-        // log is explicable — poll-while-awake observes wakes; it never
-        // triggers one.
+        // log is explicable — poll-while-awake observes wakes; the init check
+        // above is the only one it triggers.
         const probeNow = nowMs();
         if (
           lastAsleepHeartbeatMs === null ||
@@ -204,6 +320,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         log(`[ev-poll] charging ${parts.join(' · ')}`);
       }
 
+      let sawPlugIn = false;
       for (const event of detectTransitions(lastChargingState, battery.chargingState)) {
         sessionStore.insertEvent(deps.db, {
           vehicleId: deps.vehicleId,
@@ -214,6 +331,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         });
 
         if (event.kind === 'plug_in') {
+          sawPlugIn = true;
           const alreadyOpen = sessionStore.openSessionFor(deps.db, deps.vehicleId);
           if (alreadyOpen) {
             // Stale session from a missed unplug: close it at this
@@ -233,24 +351,13 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
             vehicleId: deps.vehicleId,
             evSocPercent: battery.soc,
           });
-          if (deps.onVehiclePlugIn) {
-            try {
-              await deps.onVehiclePlugIn({
-                tsMs,
-                sessionId,
-                event: event.kind,
-                chargingState: battery.chargingState,
-                evSocPercent: battery.soc,
-              });
-            } catch (error) {
-              // A failed decision must never stop sampling.
-              log(
-                `[ev-poll] decision consumer failed: ${
-                  error instanceof Error ? error.message : String(error)
-                }`
-              );
-            }
-          }
+          await runVehiclePlugIn({
+            tsMs,
+            sessionId,
+            event: event.kind,
+            chargingState: battery.chargingState,
+            evSocPercent: battery.soc,
+          });
         } else if (event.kind === 'charging_start' || event.kind === 'charging_stop') {
           const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
           await notify({
@@ -265,6 +372,15 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
           const closedId = sessionStore.closeOpenSession(deps.db, deps.vehicleId, tsMs);
           if (closedId !== null && open) finalize(closedId, open.plugTsMs, tsMs);
         }
+      }
+
+      // Program-init reconciliation: the first rich read of this process is
+      // where daemon-off → plug-in → daemon-on lands when the transition
+      // above could not see it (no store baseline). Once per process, and
+      // never after a plug_in this tick — that path already decided.
+      if (!initCheckDone) {
+        initCheckDone = true;
+        if (!sawPlugIn) await reconcileInitPlugIn(tsMs, battery);
       }
 
       lastChargingState = battery.chargingState;

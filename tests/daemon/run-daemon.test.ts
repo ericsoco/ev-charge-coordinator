@@ -11,6 +11,7 @@ import { openStore } from '../../src/store/database.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import * as evStore from '../../src/store/EvStore.js';
 import * as sessionStore from '../../src/store/SessionStore.js';
+import * as decisionStore from '../../src/store/DecisionStore.js';
 import { acquireLock } from '../../src/daemon/lockfile.js';
 import { runDaemonOnce, startDaemon } from '../../src/daemon/runDaemon.js';
 import { DEFAULT_DAEMON_CONFIG, type DaemonConfig } from '../../src/utils/daemonConfig.js';
@@ -316,6 +317,78 @@ describe('runDaemonOnce', () => {
       })
     ).rejects.toThrow(/already running/i);
     holder.release();
+  });
+
+  it('runs the init plug-in check: a plugged car lands a session and a decision', async () => {
+    const outcome = await runDaemonOnce({
+      services: {
+        franklin: fakeFranklin() as unknown as FranklinWHService,
+        tesla: {
+          ...fakeTesla(),
+          async getStatus() {
+            return evStatus('Stopped');
+          },
+        } as unknown as TeslaService,
+      },
+      homeBatteryId: GW,
+      vehicleId: VIN,
+      config: CONFIG,
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      log: () => {},
+    });
+
+    expect(outcome.ok).toBe(true);
+    const state = inspect();
+    expect(state.kinds).toContain('plug_in');
+    expect(state.sessions).toHaveLength(1);
+    // autoStart is off in this config: the decision records and declines
+    // (accepted stays 0 whatever the local energy config resolves to).
+    const decision = decisionStore.decisionForSession(state.db, state.sessions[0].id);
+    expect(decision).not.toBeNull();
+    expect(decision!.accepted).toBe(0);
+    state.db.close();
+  });
+
+  it('wakes a sleeping vehicle at init when live auto-start is on', async () => {
+    let wakes = 0;
+    const tesla = {
+      ...fakeTesla(),
+      probe: 'asleep' as string,
+      async getVehicleState() {
+        return { state: this.probe };
+      },
+      async getStatus() {
+        return evStatus('Stopped');
+      },
+      async wakeUp() {
+        wakes += 1;
+        this.probe = 'online';
+      },
+    };
+    const outcome = await runDaemonOnce({
+      services: {
+        franklin: fakeFranklin() as unknown as FranklinWHService,
+        tesla: tesla as unknown as TeslaService,
+      },
+      homeBatteryId: GW,
+      vehicleId: VIN,
+      config: {
+        ...CONFIG,
+        autoStart: { enabled: true, filters: [{ type: 'always' }] },
+      },
+      dbPath,
+      lockFile,
+      getHomeLocation: async () => undefined,
+      log: () => {},
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(wakes).toBe(1); // once at init, never again
+    const state = inspect();
+    expect(state.kinds).toContain('plug_in');
+    state.db.close();
   });
 });
 
