@@ -215,6 +215,10 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         log,
         notify: (event) => notifier.notify(event),
         onVehiclePlugIn: decideOnVehiclePlugIn,
+        // Init plug-in check: live auto-start may wake a sleeping car once so
+        // charge_state is readable at boot; collect-only and --dry-run never wake.
+        wakeUp: () => tesla.wakeUp(),
+        wakeAtInit: options.config.autoStart.enabled && !(options.dryRun ?? false),
       })
     );
   } else {
