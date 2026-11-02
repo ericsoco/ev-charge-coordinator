@@ -342,15 +342,18 @@ npm start config --clear-credentials
 
 ## Collect Daemon
 
-`evcc daemon` is the long-running, collect-only process: it samples the home
+`evcc daemon` is the long-running background process: it samples the home
 battery (every 2 min), polls EV state (a non-waking status probe every minute;
 rich reads only while the car is awake), fetches a daily weather forecast,
 aggregates charging sessions, and prunes old rows — all into the local SQLite
-store. Observe it with `status`, `sessions`, and `npm run store` (see
+store. It also evaluates an auto-start decision on every vehicle plug-in (see
+below): always recorded, actuated only once you enable it. Observe it with
+`status`, `sessions`, and `npm run store` (see
 [Data Storage & Schema](#data-storage--schema)).
 
-`daemon` here is collect-only; `start --daemon` (see CLI Reference) is the
-separate "stay resident" mode that keeps the interactive services running.
+`daemon` here is the background collector and decision engine; `start --daemon`
+(see CLI Reference) is the separate "stay resident" mode that keeps the
+interactive services running.
 
 On start, the daemon checks the vehicle state once: a car that is **plugged
 in but not charging** — the `daemon not running → plug-in → daemon running`
@@ -441,6 +444,45 @@ Caveats:
   re-authenticates, so sampling self-heals. The daemon itself keeps running.
 - **Weather** collects only after `set-home-location` has stored the home
   location; **EV rows** accumulate only while the car is awake (by design).
+
+### Auto-start decisions
+
+On every vehicle plug-in the daemon runs the decision engine
+(docs/design.md §3.3): the safety interlocks first — auto-start enabled,
+vehicle plugged in and not already charging, home battery SoC above your
+`bufferPercent`, one decision per session — then the configured filter chain,
+then the shared kWh charge-limit math (`src/utils/energy.ts`). The outcome,
+with every filter's result, lands in the `decisions` audit table; only an
+accepted decision then sets the charge limit and starts charging.
+
+**Ships dark:** `autoStart.enabled` defaults to `false`, so decisions are
+evaluated and recorded from your real plug-ins while nothing actuates. Flip
+the flag when the recorded history looks right. `daemon --dry-run` forces
+non-actuation even when enabled (the decision is still recorded).
+
+Configure in `daemon-config.json` (defaults are reconciled into the file on
+daemon start; an invalid value is reported as a problem and blocks the daemon —
+never clamped or guessed at):
+
+```json
+"autoStart": {
+  "enabled": false,
+  "filters": [{ "type": "geofence", "radiusM": 500 }]
+}
+```
+
+- **Filters** are AND-composed; an empty list means all plug-in events.
+  Shipped types: `always` (every plug-in) and `geofence` (the vehicle within
+  `radiusM` of home). The geofence needs the optional `vehicle_location` OAuth
+  scope and a stored home location (`set-home-location`); a missing scope,
+  missing home secret, or failed location read **declines loudly** — the
+  geofence never silently passes.
+- **"Why didn't it charge?"** — `npm run store` prints the recent decisions
+  with their reason (`below_buffer`, `filter_declined`, `already_charging`,
+  `duplicate_session`, `insufficient_energy`, `service_error`, …), the full
+  detail line, and the per-filter audit JSON. `status` shows the current mode
+  and filter chain (`auto-start: disabled (dark) …`).
+- Every decision also fires a notifier event (below).
 
 ### Notifications (ntfy, Slack)
 
