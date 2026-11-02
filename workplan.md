@@ -51,9 +51,8 @@
 
 ## P1b — auto-start decision engine (active execution plan)
 
-> Status: **Step 6 — notifiers complete; PR #47 review round + Franklin proxy
-> timeout hardening applied (2026-10-29, `p1b/step6-notifiers`); next: Step 7 —
-> surfaces + docs.**
+> Status: **Step 7 — surfaces + docs complete (2026-11-01,
+> `p1b/step7-docs-surfaces`); next: Step 8 — live validation (user + car).**
 > Standing rules: one step at a time; **branch per step** (`p1b/stepN-<name>`), gate green
 > (`npm run check`) + its own commit; stop for review after each step; the user lands each
 > step to `main`. Design rationale: [design.md](./docs/design.md) §3.9 + the decisions below.
@@ -109,7 +108,7 @@ gated by `autoStart.enabled`, set the limit and start charging. Notifiers + docs
    start/stop, interlock decline, service failures); secrets in credential store;
    failure-isolation tests. *(branch `p1b/step6-notifiers` — complete)*
 7. **Surfaces + docs** — store-report decisions section, `status` shows auto-start mode,
-   README auto-start section, workplan. *(branch `p1b/step7-docs-surfaces`)*
+   README auto-start section, workplan. *(branch `p1b/step7-docs-surfaces` — complete)*
 8. **Live validation** (user + car) — disabled-run decision rows → flip `enabled` → real
    auto-start; buffer interlock; park-away geofence decline; optional ntfy.
 
@@ -1871,6 +1870,44 @@ wait, so the project tree reflects the final file layout). Docs only; gate green
   `node dist/index.js --help` verified. Environment: main checkout
   `node_modules` was empty; ran `npm ci` there and restored this worktree's
   shared symlink (the earlier `npm ci` here had replaced it with a real dir).
+### 2026-11-01 — P1b step 7 complete: surfaces + docs (3 commits)
+
+Branch `p1b/step7-docs-surfaces` (off `ae695c9`), gate green after every
+commit (final: **879 passed / 2 skipped**, baseline 876 + 3 new).
+
+- **Environment note:** this worktree's `node_modules` was a symlink into the
+  main checkout, whose directory had been emptied — `npm run check` died with
+  `tsc: command not found`. `npm ci` replaced the symlink with a real install;
+  baseline verified (876/2) before touching code.
+- `a40e48f` **feat(status): auto-start surface** — the Config section gains
+  `auto-start: enabled | disabled (dark) — decisions are recorded, nothing
+  actuates · filters: …` (empty chain renders `all plug-ins`, geofence as
+  `≤N m`). `StatusReport.config.daemon` retyped `DaemonConfig | null` — the
+  `Record<string, number>` cast had hidden `autoStart`/`notifiers` from
+  typecheck (`--json` already carried them at runtime; now pinned). New
+  `StatusOptions.daemonConfig` injection seam (the `getHomeLocation` pattern)
+  keeps tests off the shared vitest config dir; `formatAutoStart` exported for
+  unit tests. +3 tests: enabled-geofence render, invalid-config → problems and
+  no line, formatter cases (the JSON auto-start pin and the dark-default line
+  rode in existing tests).
+- `cf3a2ef` **docs(readme)** — new `### Auto-start decisions` under Collect
+  Daemon (flow: interlocks → filters → kWh math → `decisions` row →
+  limit-then-start; ships-dark default; `daemon --dry-run`; `daemon-config.json`
+  example; geofence deny-by-default; "why didn't it charge?" pointers to
+  `npm run store` + `status`). The two stale "collect-only" claims replaced —
+  the daemon now evaluates decisions. CLI table untouched (`daemon --dry-run`
+  was already documented there).
+- **store-report decisions section: verified already complete** — it landed
+  early in step 5.2 (`cc30b83`); its tests re-ran green, no change (a
+  `byReason` aggregate was considered and skipped as scope creep).
+- **Store-report verification + docs gate:** `npm run check` green at each
+  commit; README section placement and `docs/design.md §3.3` reference
+  checked; no "collect-only" wording left in the README.
+- Next: Step 8 — live validation (user + car): disabled-run decision rows →
+  flip `enabled` → real auto-start; buffer interlock; park-away geofence
+  decline; optional ntfy. Deploy note: `evcc daemon install` (rebuild) after
+  landing — plain `restart` does not rebuild.
+
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
