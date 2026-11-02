@@ -352,6 +352,13 @@ store. Observe it with `status`, `sessions`, and `npm run store` (see
 `daemon` here is collect-only; `start --daemon` (see CLI Reference) is the
 separate "stay resident" mode that keeps the interactive services running.
 
+On start, the daemon checks the vehicle state once: a car that is **plugged
+in but not charging** — the `daemon not running → plug-in → daemon running`
+sequence — is treated as a vehicle plug-in and the auto-start decision runs.
+When live auto-start is enabled, a sleeping car is woken once for this check
+(collect-only and `--dry-run` never wake it); a car that is charging or
+disconnected is left to the normal poll loop.
+
 ```bash
 node dist/index.js daemon        # foreground
 node dist/index.js daemon --once # one cycle, then exit (non-zero if any task failed)
@@ -391,6 +398,8 @@ suspends the agent, every poll freezes, and a car that wakes on plug-in
   unlike the launcher's scoped assertion.
 - The log tells you what happened either way: `[ev-poll] vehicle asleep —
   waiting…` heartbeats prove the daemon is alive while the car sleeps;
+  `[ev-poll] vehicle asleep at init — waking once…` marks the one-time wake
+  live auto-start performs to check plug-in state at boot;
   `[daemon] <task> ran Nm late` warns when timers were suspended anyway; and
   `[ev-poll] charging …` lines track progress every rich read during a
   charging session. All daemon log lines start with a local timestamp.
