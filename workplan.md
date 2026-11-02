@@ -1833,6 +1833,45 @@ wait, so the project tree reflects the final file layout). Docs only; gate green
   (which has no `node_modules`); replaced with a real build directory so the CLI
   runs from here. `dist/` is gitignored — no repo impact.
 
+### 2026-11-01 — daemon init plug-in check + one-time init wake (branch `feat/daemon-init-plug-in-check`)
+
+- **Gap:** `daemon not running → vehicle plug-in → daemon running` did not
+  auto-start when the car had re-slept at daemon start (poll-while-awake never
+  reads a sleeping car), when the store had no EV baseline
+  (`detectTransitions(null, …)` → `[]`), or when a session was left open
+  without a decision (interrupted run). Awake + `Disconnected` baseline
+  already worked via the first tick — the reconciliation must not double it.
+- `src/daemon/EvPoller.ts`:
+  - **First-rich-read reconciliation** (runs once; skipped when that tick saw
+    a `plug_in` — the transition path owns it): plugged & not charging →
+    no session ⇒ insert `plug_in` event (`from_state` null) + open session +
+    `plug-in-detected` + decision; open session without a `decisions` row ⇒
+    evaluate with the *existing* session id; decided ⇒ skip (log
+    `already decided`). `Charging`/`Disconnected` are left to the transition
+    path. Extracted `runVehiclePlugIn` — the isolated consumer call now shared
+    by the transition and reconciliation paths.
+  - **One-time init wake** (Option A, user-approved): first probe `asleep`
+    while the init check is pending and live auto-start is on ⇒ `wakeUp()`
+    once per process (new optional deps `wakeUp`/`wakeAtInit`); failure logs
+    `init wake failed …` and is never retried. Collect-only and `--dry-run`
+    never wake — otherwise poll-while-awake is unchanged.
+- `src/daemon/runDaemon.ts`: wires `wakeUp: () => tesla.wakeUp()` and
+  `wakeAtInit: config.autoStart.enabled && !dryRun`.
+- Tests: new `tests/daemon/init-check.test.ts` (10: baseline-less plug-in,
+  no double-fire with a store baseline, decided/undecided session restarts,
+  charging/disconnected silence, wake-once + no-retry + failure isolation +
+  no wake after init) + 2 `runDaemonOnce` integration tests in
+  `run-daemon.test.ts` (session + `plug_in` + decision row land; wake fires
+  once with live auto-start). Restart/idempotency coverage re-verified by the
+  existing samplers + decision-wiring suites.
+- Docs: README Collect Daemon (init-check paragraph) + Keeping-the-Mac-awake
+  log bullet (init-wake line). `docs/design.md` §3.2 still says "wakes are
+  observed, not triggered" — candidate one-line addendum on review.
+- Gate: `npm run check` green — **888 passed / 2 skipped**;
+  `node dist/index.js --help` verified. Environment: main checkout
+  `node_modules` was empty; ran `npm ci` there and restored this worktree's
+  shared symlink (the earlier `npm ci` here had replaced it with a real dir).
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"
