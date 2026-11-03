@@ -47,6 +47,75 @@
   sub-50% target handling with polling stop) — **picked up as P1c below** (2026-11-03); the
   plug-in trigger half of those entries shipped with P1b.
 
+## P1c — intelligence (active plan)
+
+> Status: **Planning complete (2026-11-03) — high-level; no code started.** Design basis:
+> [design.md](./docs/design.md) §3.4 (actuator + session monitor), §3.6 (intelligence
+> inputs), §5 (phasing). Product basis: [requirements.md](./docs/requirements.md) Oct 10
+> (sub-50% stop-at-target) + the battery-buffer evolution note above. Each step below is a
+> separate branch, gated on `npm run check`, with a dated Log entry when it lands — same
+> discipline as P1a/P1b.
+
+**Scope (design.md §5):** measured efficiency + Open-Meteo-adjusted limits; sub-50%
+stop-at-target session monitor; battery-hit-buffer stop.
+
+**Already in place from P1a/P1b (verified 2026-11-03):** session closing aggregates
+(`sessions.energy_kwh / energy_percent / house_energy_kwh / efficiency`, computed at unplug
+by `src/daemon/sessionAggregates.ts` — raw values, anomalies like efficiency > 1 left for
+P1c to interpret); daily Open-Meteo vintages in `weather_forecasts`
+(`WeatherForecastStore.latestVintage()`); `computeChargeLimit()` in `src/utils/energy.ts`
+with the static `chargeEfficiency` config; actuation path with signed
+limit → start and double-verification; notifier events for start/stop; `decisions` audit
+rows. What P1c adds is the *interpretation* layer: use this data to shape limits and to
+end sessions.
+
+### Steps (high-level; details written here when each is picked up)
+
+1. **Session monitor — stop at target + stop at battery buffer.** While a session is
+   charging, poll progress (EV already sampled at `evSamplePluggedSec`) and (a) stop when
+   EV reaches our computed target in the sub-50% case — Tesla clamps limits to ≥50%, so a
+   kWh math result below that can only be honored by polling and issuing an API stop
+   (requirements Oct 10, phase 2); (b) stop when home-battery SoC hits `bufferPercent`.
+   Records the session end reason. Needs: migration 004 (`sessions` gains target
+   percent + stop-reason columns — design §3.5 "planned vs actual target, `limited_by`,
+   stop reason"; schema-pin update), monitor loop wiring in `runDaemon`/`EvPoller`,
+   notifier events for monitor-initiated stops, and safety posture decided below.
+2. **Measured efficiency.** Rolling estimate over closed sessions' `efficiency`
+   (`sessionStats.avgEfficiency` exists; likely weighted by `energy_kwh` + outlier
+   handling) that progressively replaces the static `chargeEfficiency` input to
+   `computeChargeLimit` (design §3.6.1 — config value stays the fallback until enough
+   clean samples exist). Anomaly interpretation lives here: efficiency > 1, zero/near-zero
+   house energy, meter-reset edges (the aggregate math deliberately never guesses).
+3. **Weather-adjusted limits.** Consume the newest `weather_forecasts` vintage to adjust
+   buffer/target — e.g. low expected shortwave radiation tomorrow ⇒ keep more reserve
+   (design §3.6.2). Pure policy module + config knobs; inputs flow through
+   `DecisionInput`/`engine.ts` so `decisions.reason_detail` shows the adjustment
+   (auditability, consistent with P1b). Policy shape is an open decision below.
+4. **Live validation + docs** — exercise all three against the car/house; README
+   intelligence section; workplan Log entries.
+
+**Possible parallel spike (design §5 spike 1):** Franklin cloud history endpoints live
+test → day-of-week/seasonal baselines without waiting months for local history
+(§3.6.3). Independent of steps 1–3; decide in/out below.
+
+### Decisions pending (user, at step pickup)
+
+- **Monitor authority:** does the session monitor stop *manually* started charging sessions
+  too, or only sessions this daemon started? (Safety interlock vs. surprising the user.)
+- **Sub-50% semantics:** when the computed target lands below Tesla's 50% floor, we already
+  set the limit to 50% (Phase-1 behavior) — confirm the monitor should stop at the
+  *computed* target (rawPercent), not at 50%.
+- **Weather policy:** simple rule (e.g. reserve +N% buffer on low-solar days) vs. computed
+  forecast integral — start simple?
+- **Efficiency adoption:** min sample count / confidence gate before the rolling estimate
+  overrides config; which estimate (mean vs. energy-weighted mean vs. median).
+- **Backfill spike:** in scope for P1c or deferred to a later phase?
+
+### ⚠️ Reminder — end of planning phase
+
+**Set model reasoning back to Medium** now that P1c planning is complete (user request,
+2026-11-03 — TODO.md's "switch cline to smarter model for Plan mode" toggle).
+
 ## Log
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
