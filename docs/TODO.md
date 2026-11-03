@@ -11,6 +11,7 @@ FEATURES
     [ ] Solar battery historical usage (average / seasonal / day of week) -- build local record over time and/or try to find an API?
     [ ] weather forecast (solar irradiation)
     [ ] projected amount of battery storage accrued during EV charging session (based on both of the above)
+    [ ] TOU pricing (should be irrelevant if only pulling from battery, but give it some thought)
     [ ] Related -- Franklin poller needs to observe not just battery level but also
         how much energy the house consumes, in order to dynamically set battery buffer
 [ ] Create dashboard to display time series of the various stores
@@ -18,7 +19,12 @@ FEATURES
         Use eCharts: licensing, bundle size (tree-shaking), some advanced func.
     [ ] review stores and decide on included data sources + functionality
     [ ] design layout
-    [ ] implemment
+    [ ] automate execution:
+        [ ] switch cline (> settings) to smarter model for Plan mode (Act can stay medium)
+        [ ] create new branch to use as base ref for cline kanban worktrees
+        [ ] write prompt for agent team
+        [ ] feed to cline prompt to break into smaller tasks and add to kanban board -- set all tasks to auto-commit
+        [ ] hit play on kanban board
 [ ] 
 
 SCALING
