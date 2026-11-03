@@ -36,6 +36,8 @@ export interface LifecycleDeps {
   launchAgentsDir?: string;
   /** Defaults to the repo's scripts/ dir; tests pass temp dirs. */
   scriptDir?: string;
+  /** Defaults to a blocking /bin/sleep; tests pass a recorder. */
+  sleep?: (ms: number) => void;
 }
 
 const SCRIPTS_DIR = fileURLToPath(new URL('../../scripts/', import.meta.url));
@@ -50,6 +52,11 @@ const defaultExec: ExecFn = (command, options) => {
     stdout: result.stdout?.toString() ?? '',
     stderr: result.stderr?.toString() ?? '',
   };
+};
+
+/** The lifecycle API is synchronous; sleep through the same spawn style. */
+const defaultSleep = (ms: number): void => {
+  spawnSync('/bin/sleep', [String(ms / 1_000)], { stdio: 'ignore' });
 };
 
 /** The template's first `com.*` string — the Label the scripts also derive. */
@@ -91,9 +98,34 @@ export function stopDaemon(deps: LifecycleDeps = {}): LifecycleResult {
   return { ok: true, message: `daemon stopped (${target}).` };
 }
 
+const BOOTSTRAP_ATTEMPTS = 5;
+const BOOTSTRAP_RETRY_MS = 1_000;
+
+/**
+ * `launchctl bootstrap` immediately after `bootout` races launchd's async
+ * teardown of the old job (EALREADY — surfaced to the client as `Bootstrap
+ * failed: 5: Input/output error`) and can leave the service unloaded. Same
+ * policy as scripts/install-daemon.sh: first attempt immediate, then retry
+ * until the previous job is fully gone.
+ */
+function bootstrapWithRetry(
+  exec: ExecFn,
+  sleep: (ms: number) => void,
+  domain: string,
+  plist: string
+): ExecResult {
+  let result = exec(['/bin/launchctl', 'bootstrap', domain, plist]);
+  for (let attempt = 2; attempt <= BOOTSTRAP_ATTEMPTS && result.status !== 0; attempt += 1) {
+    sleep(BOOTSTRAP_RETRY_MS);
+    result = exec(['/bin/launchctl', 'bootstrap', domain, plist]);
+  }
+  return result;
+}
+
 /** Reload the already-installed plist: stop if loaded, then bootstrap. */
 export function restartDaemon(deps: LifecycleDeps = {}): LifecycleResult {
   const exec = deps.exec ?? defaultExec;
+  const sleep = deps.sleep ?? defaultSleep;
   const label = readLabel(deps.templatePath ?? path.join(SCRIPTS_DIR, 'evcc-daemon.plist'));
   const launchAgents = deps.launchAgentsDir ?? path.join(os.homedir(), 'Library', 'LaunchAgents');
   const plist = path.join(launchAgents, `${label}.plist`);
@@ -105,8 +137,10 @@ export function restartDaemon(deps: LifecycleDeps = {}): LifecycleResult {
     const bootout = exec(['/bin/launchctl', 'bootout', target]);
     if (bootout.status !== 0) return failure(`bootout of ${target} failed`, bootout);
   }
-  const bootstrap = exec(['/bin/launchctl', 'bootstrap', guiDomain(), plist]);
-  if (bootstrap.status !== 0) return failure(`bootstrap of ${plist} failed`, bootstrap);
+  const bootstrap = bootstrapWithRetry(exec, sleep, guiDomain(), plist);
+  if (bootstrap.status !== 0) {
+    return failure(`bootstrap of ${plist} failed after ${BOOTSTRAP_ATTEMPTS} attempts`, bootstrap);
+  }
   return { ok: true, message: `daemon restarted (${target}).` };
 }
 

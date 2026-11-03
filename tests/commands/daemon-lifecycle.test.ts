@@ -133,6 +133,58 @@ describe('restartDaemon', () => {
     expect(result.ok).toBe(true);
     expect(calls.map((call) => call.command[1])).toEqual(['print', 'bootstrap']);
   });
+
+  it('retries bootstrap while launchd finishes tearing down the old job', () => {
+    const plist = path.join(launchAgentsDir, PLIST_NAME);
+    fs.writeFileSync(plist, TEMPLATE);
+    let bootstraps = 0;
+    const { calls, exec } = recorder((command) => {
+      if (command[1] !== 'bootstrap') return 0;
+      bootstraps += 1;
+      return bootstraps === 1 ? 1 : 0; // first attempt loses the race, second wins
+    });
+    const sleeps: number[] = [];
+    const result = restartDaemon({
+      exec,
+      templatePath,
+      launchAgentsDir,
+      sleep: (ms) => sleeps.push(ms),
+    });
+    expect(result.ok).toBe(true);
+    expect(calls.map((call) => call.command[1])).toEqual([
+      'print',
+      'bootout',
+      'bootstrap',
+      'bootstrap',
+    ]);
+    expect(sleeps).toEqual([1_000]);
+  });
+
+  it('gives up after 5 bootstrap attempts with the last error', () => {
+    const plist = path.join(launchAgentsDir, PLIST_NAME);
+    fs.writeFileSync(plist, TEMPLATE);
+    const { calls, exec } = recorder((command) => (command[1] === 'bootstrap' ? 1 : 0));
+    const sleeps: number[] = [];
+    const result = restartDaemon({
+      exec,
+      templatePath,
+      launchAgentsDir,
+      sleep: (ms) => sleeps.push(ms),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('failed after 5 attempts');
+    expect(result.message).toContain('boom');
+    expect(calls.map((call) => call.command[1])).toEqual([
+      'print',
+      'bootout',
+      'bootstrap',
+      'bootstrap',
+      'bootstrap',
+      'bootstrap',
+      'bootstrap',
+    ]);
+    expect(sleeps).toHaveLength(4);
+  });
 });
 
 describe('runDaemonScript', () => {
