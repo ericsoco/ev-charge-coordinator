@@ -1909,6 +1909,31 @@ commit (final: **879 passed / 2 skipped**, baseline 876 + 3 new).
   landing — plain `restart` does not rebuild.
 
 
+### 2026-11-03 — fix: `daemon restart` first-run bootstrap race
+
+Branch `fix/daemon-restart-bootstrap-retry` (from the user's TODO.md report:
+every `npm start daemon restart` failed its first run with `Bootstrap failed:
+5: Input/output error`, succeeded on the second). Root cause = the race already
+evidence-locked on 2026-10-24 for `daemon install`: launchd tears the old job
+down asynchronously, and `restartDaemon`'s immediate post-bootout
+`launchctl bootstrap` hit it (EALREADY → client-visible error 5). The
+install-script fix (5 attempts, 1 s apart, first immediate) never reached the
+TS lifecycle path.
+
+- `src/commands/daemonLifecycle.ts`: `bootstrapWithRetry` — same policy as
+  `scripts/install-daemon.sh`; new `LifecycleDeps.sleep` seam (default a
+  blocking `/bin/sleep`, keeping the module's synchronous exec style);
+  all-fail message now `bootstrap of <plist> failed after 5 attempts:
+  <last error>`.
+- Tests (+2): retry-then-success (`print, bootout, bootstrap, bootstrap` with
+  one recorded 1000 ms sleep) and give-up-after-5 (5 bootstrap calls, 4
+  sleeps, last error in the message); the existing sequence pins are unchanged
+  — a first-attempt success never sleeps.
+- Gate: `npm run check` green — **893 passed / 2 skipped**.
+- Live: two consecutive `npm start daemon restart` runs — both exit 0 on the
+  FIRST run, job `state = running` after each (old behavior failed every first
+  run). The TODO.md item stays for the user to tick (human-maintained file).
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"
