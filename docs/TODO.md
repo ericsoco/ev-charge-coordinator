@@ -50,6 +50,8 @@ TASKS / BUGS
 [X] Daemon logging
     [X] should show charging progress on every poll during a session
     [X] should start every log with a timestamp first, formatted the same for all logs[ ] Rename ambiguous battery-related commands like `get-battery-soc`, `charge-from-battery`, and `set-battery-buffer`
+[X] Every `npm start daemon restart` throws an error the first run, succeeds the second.
+    Error: bootstrap of /Users/ericsoco/Library/LaunchAgents/com.transmote.ev-charge-coordinator.daemon.plist failed: Bootstrap failed: 5: Input/output error Try re-running the command as root for richer errors.
 
 [ ] Expose common commands in package.json to run via `npm run x`
 [ ] Consider removing `get-ev-bsoc` in favor of `get-charging-state`
