@@ -21,6 +21,7 @@ import { createScheduler, type ScheduledTask } from './scheduler.js';
 import { createBatterySampler } from './BatterySampler.js';
 import { createEvPoller } from './EvPoller.js';
 import { createDecisionConsumer } from './decisionConsumer.js';
+import { createSessionMonitor } from './sessionMonitor.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import { buildNotifiers, notifierRequiresSecret, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
@@ -202,6 +203,20 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
       notify: (event) => notifier.notify(event),
       log,
     });
+    // Session-monitor stage of the same chain (P1c step 1): stops charging at
+    // the session's computed target or the battery buffer; live actuation only
+    // when autoStart.enabled holds and --dry-run is off (shadow logs would-stop).
+    const monitorChargingProgress = createSessionMonitor({
+      db,
+      vehicleId,
+      autoStart: options.config.autoStart,
+      dryRun: options.dryRun ?? false,
+      stopCharging: async () => {
+        await tesla.stopCharging();
+      },
+      notify: (event) => notifier.notify(event),
+      log,
+    });
     tasks.push(
       createEvPoller({
         db,
@@ -215,6 +230,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         log,
         notify: (event) => notifier.notify(event),
         onVehiclePlugIn: decideOnVehiclePlugIn,
+        onChargingProgress: monitorChargingProgress,
         // Init plug-in check: live auto-start may wake a sleeping car once so
         // charge_state is readable at boot; collect-only and --dry-run never wake.
         wakeUp: () => tesla.wakeUp(),
