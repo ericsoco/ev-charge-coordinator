@@ -173,6 +173,16 @@ Single SQLite file (WAL) behind repository interfaces (`SampleStore`,
 3. **Historical baselines** — our forward samples plus the Franklin history
    **backfill spike** (§6) for day-of-week/seasonal averages instead of
    waiting months to accumulate.
+4. **Solar-surplus re-targeting** (added 2026-11-03; workplan P1c step 4) —
+   while a session charges, recompute the limit from the latest home-battery
+   SoC + current EV SoC on a cadence (both already sampled) and adjust the
+   target mid-session: *raise* = new Tesla limit + updated session target
+   (the car's own limit would otherwise stop charging first, acutely so in the
+   sub-50 case); *lower* = session-target update only (the session monitor
+   enforces it at its next tick). Symmetric up/down, hysteresis ≤ ~1 change per
+   20 min (SoC margin to be derived from historical samples when planned),
+   resume charging after a monitor stop once home-battery SoC is sufficient,
+   and a notification on every mid-session target change.
 
 ### 3.7 Notifications
 
