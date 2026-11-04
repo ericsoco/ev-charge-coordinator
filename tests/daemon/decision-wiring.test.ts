@@ -1,7 +1,8 @@
 /**
- * EvPoller's decision seam: onVehiclePlugIn fires once per vehicle plug-in
- * with the fresh session id, never breaks sampling, and is optional
- * (absent = the P1a collect-only behavior).
+ * EvPoller's chain seams: onVehiclePlugIn fires once per vehicle plug-in
+ * with the fresh session id; onChargingProgress (P1c step 1, the session
+ * monitor) fires on every rich read. Neither ever breaks sampling, and both
+ * are optional (absent = the P1a collect-only behavior).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
@@ -11,6 +12,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../../src/store/database.js';
 import {
   createEvPoller,
+  type ChargingProgressContext,
   type VehiclePlugInContext,
 } from '../../src/daemon/EvPoller.js';
 import * as sessionStore from '../../src/store/SessionStore.js';
@@ -58,7 +60,8 @@ function evFake(chargingStates: string[]) {
 
 function poller(
   fake: ReturnType<typeof evFake>,
-  onVehiclePlugIn?: (ctx: VehiclePlugInContext) => Promise<void>
+  onVehiclePlugIn?: (ctx: VehiclePlugInContext) => Promise<void>,
+  onChargingProgress?: (ctx: ChargingProgressContext) => Promise<void>
 ) {
   const logs: string[] = [];
   const task = createEvPoller({
@@ -71,6 +74,7 @@ function poller(
     sampleIdleSec: 0,
     log: (message) => logs.push(message),
     onVehiclePlugIn,
+    onChargingProgress,
   });
   return { task, logs };
 }
@@ -122,5 +126,58 @@ describe('EvPoller decision seam', () => {
 
     expect(sessionStore.openSessionFor(db, 'VIN')).not.toBeNull();
     expect(evStore.latestSample(db, 'VIN')).not.toBeNull();
+  });
+});
+
+describe('EvPoller charging-progress seam (session monitor)', () => {
+  it('fires on every rich read with the fresh state', async () => {
+    const fake = evFake(['Disconnected', 'Charging', 'Charging']);
+    const seen: ChargingProgressContext[] = [];
+    const { task } = poller(fake, undefined, async (ctx) => {
+      seen.push(ctx);
+    });
+
+    await task.run(); // seed read: Disconnected
+    await task.run(); // Charging
+    await task.run(); // Charging
+
+    expect(seen).toHaveLength(3);
+    expect(seen[0]).toMatchObject({ chargingState: 'Disconnected', evSocPercent: 40 });
+    expect(seen[1].chargingState).toBe('Charging');
+    expect(seen[2].chargingState).toBe('Charging');
+    expect(seen[1].tsMs).toBeGreaterThan(0);
+  });
+
+  it('runs after the plug-in decision on the same tick (target armed first)', async () => {
+    const fake = evFake(['Disconnected', 'Charging']);
+    let monitorSawTarget: number | null = null;
+    const { task } = poller(
+      fake,
+      async (ctx) => {
+        sessionStore.setSessionTarget(db, ctx.sessionId, 47);
+      },
+      async () => {
+        monitorSawTarget = sessionStore.openSessionFor(db, 'VIN')?.targetPercent ?? null;
+      }
+    );
+
+    await task.run(); // seed
+    await task.run(); // plug_in: decision arms 47, then the monitor reads it
+
+    expect(monitorSawTarget).toBe(47);
+  });
+
+  it('a rejecting monitor never breaks sampling', async () => {
+    const fake = evFake(['Disconnected', 'Stopped']);
+    const { task, logs } = poller(fake, undefined, async () => {
+      throw new Error('monitor down');
+    });
+
+    await task.run();
+    await expect(task.run()).resolves.toBeUndefined();
+
+    expect(logs.join('\n')).toContain('session monitor failed');
+    expect(evStore.latestSample(db, 'VIN')).not.toBeNull();
+    expect(sessionStore.openSessionFor(db, 'VIN')).not.toBeNull();
   });
 });

@@ -62,6 +62,13 @@ export interface VehiclePlugInContext {
   evSocPercent: number | null;
 }
 
+/** What the session-monitor stage receives on every rich read. */
+export interface ChargingProgressContext {
+  tsMs: number;
+  evSocPercent: number | null;
+  chargingState: string;
+}
+
 /** First asleep observation, then hourly — silence stays explicable. */
 const ASLEEP_HEARTBEAT_MS = 3_600_000;
 
@@ -84,6 +91,12 @@ export interface EvPollerDeps {
    * the new session opens. Absent = collect-only.
    */
   onVehiclePlugIn?: (ctx: VehiclePlugInContext) => Promise<void>;
+  /**
+   * Session-monitor stage (P1c step 1): called on every rich read so the
+   * monitor re-reads the (mutable) session target and its own episode state
+   * each tick; the charging gate lives inside the stage. Absent = no monitor.
+   */
+  onChargingProgress?: (ctx: ChargingProgressContext) => Promise<void>;
   /**
    * One-time init wake, gated by wakeAtInit: the init plug-in check needs
    * charge_state, which only an awake car answers. Attempted at most once
@@ -146,6 +159,20 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
     } catch (error) {
       log(
         `[ev-poll] decision consumer failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  };
+
+  /** One session-monitor call, isolated so a failure never stops sampling. */
+  const runChargingProgress = async (ctx: ChargingProgressContext): Promise<void> => {
+    if (!deps.onChargingProgress) return;
+    try {
+      await deps.onChargingProgress(ctx);
+    } catch (error) {
+      log(
+        `[ev-poll] session monitor failed: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
@@ -373,6 +400,16 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
           if (closedId !== null && open) finalize(closedId, open.plugTsMs, tsMs);
         }
       }
+
+      // Session monitor (P1c step 1): every rich read, after the transition
+      // loop so a same-tick plug-in's decision has already armed the session
+      // target. The stage itself gates on charging and re-reads the mutable
+      // target each tick.
+      await runChargingProgress({
+        tsMs,
+        evSocPercent: battery.soc,
+        chargingState: battery.chargingState,
+      });
 
       // Program-init reconciliation: the first rich read of this process is
       // where daemon-off → plug-in → daemon-on lands when the transition
