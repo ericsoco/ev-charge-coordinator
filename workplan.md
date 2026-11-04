@@ -49,7 +49,7 @@
 
 ## P1c — intelligence (active plan)
 
-> Status: **Planning complete (2026-11-03) — high-level; no code started.** Design basis:
+> Status: **Step 1 complete (2026-11-03); steps 2–5 not started.** Design basis:
 > [design.md](./docs/design.md) §3.4 (actuator + session monitor), §3.6 (intelligence
 > inputs), §5 (phasing). Product basis: [requirements.md](./docs/requirements.md) Oct 10
 > (sub-50% stop-at-target) + the battery-buffer evolution note above. Each step below is a
@@ -86,6 +86,15 @@ end sessions.
    updated target is enforced with no monitor changes. The charging-progress hook
    added here is the seam step 4 reuses (its re-target evaluation runs before the
    stop check in the same tick).
+   *(Branch `p1c/step1-session-monitor` — **complete**: migration 004
+   (`target_percent` + `stop_reason` CHECK), engine `stopTargetPercent`
+   (`floor(rawPercent)` for tesla-minimum), decision-consumer arming before
+   actuation, `sessionMonitor.ts` (pure verdict + I/O edge), EvPoller
+   `onChargingProgress` stage wired in `runDaemon`, `charging-stopped` reason
+   enrichment + clear-on-start, `sessions` display + README section. Deviation:
+   the hook fires on **every** rich read (the once-per-episode flags need the
+   non-charging tick to reset); the charging gate lives in the pure fn —
+   behavior identical to the plan. Live validation remains with step 5.)*
 2. **Measured efficiency.** Rolling estimate over closed sessions' `efficiency`
    (`sessionStats.avgEfficiency` exists; likely weighted by `energy_kwh` + outlier
    handling) that progressively replaces the static `chargeEfficiency` input to
@@ -169,6 +178,31 @@ Step 1 impact assessed — no structural change: `sessions.target_percent` docum
 mutable (last write wins), the monitor already re-reads it per tick (test to pin this),
 and the step-1 charging-progress hook is the seam step 4 reuses. design.md §3.6.4 added.
 Gate: `npm run check` green (docs only).
+
+### 2026-11-03 — P1c step 1 complete: session monitor (5 commits)
+
+Branch `p1c/step1-session-monitor`. Migration 004 (`sessions.target_percent` — mutable,
+last write wins — + `stop_reason` CHECK enum; plain ADD COLUMN, probed that SQLite
+supports CHECK on added columns). Engine `DecisionOutcome.stopTargetPercent`
+(`floor(rawPercent)` for tesla-minimum, else the Tesla limit; null on declines); the
+decision consumer arms the session target **before** actuation so a failed start still
+protects a manual charge. New `src/daemon/sessionMonitor.ts`: pure `evaluateSessionStop`
+(buffer check first — safety outranks the target; equality counts; null data skips its
+check so missing data never stops charging) + the `createSessionMonitor` edge (fresh
+store reads per tick, live gate `enabled && !dry-run`, shadow logs `would stop` once per
+episode, `stop_reason` written only after a successful stop, one `failure` event per
+episode, never throws). EvPoller gains the `onChargingProgress` stage after the
+transition loop (ordering test pins same-tick decision → monitor); `runDaemon` wires it.
+`charging-stopped` carries the reason read from the session row (single restart-safe
+notification) and `charging_start` clears it; format suffix + `sessions` display
+(`target 45% · stopped: target_reached`); README section.
+**Deviation from plan (noted):** the hook fires on every rich read — the
+once-per-episode flags need the non-charging tick to reset; the charging gate lives in
+the pure fn, behavior identical. **Incident note:** an editor call initially overwrote
+the header of `migrations/003`; restored byte-identical (verified with `git diff`)
+before continuing.
+Gate: `npm run check` green — **927 passed / 3 skipped** (35 new). Live validation stays
+with step 5.
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 

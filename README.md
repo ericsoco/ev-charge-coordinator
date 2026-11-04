@@ -484,6 +484,31 @@ never clamped or guessed at):
   and filter chain (`auto-start: disabled (dark) …`).
 - Every decision also fires a notifier event (below).
 
+### Session monitor (P1c step 1)
+
+While a session charges, the daemon re-evaluates two stops on every EV rich read
+(60 s plugged cadence — no extra vehicle API calls):
+
+- **Target stop** — EV SoC reaches the session's computed stop target
+  (`sessions.target_percent`, armed by the auto-start decision before it
+  actuates). This is the sub-50% case the car's own limit cannot express: the
+  kWh math may say 42%, Tesla clamps limits to ≥50%, so only an API stop can
+  honor the real target.
+- **Battery-buffer stop** — home-battery SoC hits `bufferPercent`, regardless of
+  who started charging (the buffer protects the house).
+
+Both stops are **live-only** (`autoStart.enabled` and not `--dry-run`); in
+shadow mode the monitor logs `would stop (…)` once per episode and actuates
+nothing. The stop reason (`target_reached` / `battery_buffer`) is stored on the
+session (`sessions` shows `target 45% · stopped: target_reached`) and rides the
+`charging-stopped` notification (`🛑 charging stopped (SoC 43%) — target
+reached`); a resumed charging start clears it. A failed stop is logged and
+retried next tick, with one `failure` push per episode. Missing data (no battery
+sample, no energy config) skips the buffer check with a warning — it never
+stops charging. Stop latency is cadence-bound: up to ~2–3 min after the battery
+crosses the buffer (battery samples every `batterySampleSec`, EV reads every
+`evSamplePluggedSec`).
+
 ### Notifications (ntfy, Slack)
 
 The daemon reports its typed events through pluggable notifiers (docs/design.md

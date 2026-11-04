@@ -503,10 +503,14 @@ export async function showSessions(
       const energy = row.energyKwh === null ? '—' : `${row.energyKwh.toFixed(3)} kWh`;
       const house = row.houseEnergyKwh === null ? '—' : `${row.houseEnergyKwh.toFixed(3)} kWh`;
       const eff = row.efficiency === null ? '—' : row.efficiency.toFixed(3);
+      const monitor: string[] = [];
+      if (row.targetPercent !== null) monitor.push(`target ${row.targetPercent}%`);
+      if (row.stopReason !== null) monitor.push(`stopped: ${row.stopReason}`);
       log(
         ctx,
         `#${row.id}  plugged ${plugged}  ${duration}  ` +
-          `energy ${energy} · house ${house} · eff ${eff}`
+          `energy ${energy} · house ${house} · eff ${eff}` +
+          (monitor.length > 0 ? ` · ${monitor.join(' · ')}` : '')
       );
     }
 
