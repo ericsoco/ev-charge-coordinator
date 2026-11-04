@@ -13,6 +13,7 @@ import {
   type NewEvent,
   type NewOpenSession,
   type SessionRow,
+  type SessionStopReason,
   type SiteId,
 } from './types.js';
 
@@ -33,6 +34,8 @@ const SESSION_COLUMNS = [
   'elapsed_ms AS elapsedMs',
   'house_energy_kwh AS houseEnergyKwh',
   'efficiency',
+  'target_percent AS targetPercent',
+  'stop_reason AS stopReason',
 ].join(', ');
 
 /** Append one transition; returns the row id. Bad kinds fail the CHECK. */
@@ -177,6 +180,51 @@ export function finalizeSession(
       sessionId,
       siteId
     ) as { id: number } | null | undefined;
+  return row ? Number(row.id) : null;
+}
+
+/**
+ * Write the monitor's stop target for a session; returns the session id, or
+ * null when no such session exists (site-scoped). Deliberately unguarded
+ * against rewrites: the target is mutable mid-session (decision consumer
+ * writes it at plug-in, a later re-targeting step raises/lowers it) — last
+ * write wins.
+ */
+export function setSessionTarget(
+  db: DatabaseSync,
+  sessionId: number,
+  targetPercent: number,
+  siteId: SiteId = HOME_SITE
+): number | null {
+  const row = db
+    .prepare(
+      `UPDATE sessions SET target_percent = ?
+        WHERE id = ? AND site_id = ?
+        RETURNING id`
+    )
+    .get(targetPercent, sessionId, siteId) as { id: number } | null | undefined;
+  return row ? Number(row.id) : null;
+}
+
+/**
+ * Record (or clear, with null) why the monitor stopped charging; returns the
+ * session id, or null when no such session exists. Written only after a stop
+ * actually succeeded, cleared on the next charging_start so a resumed session
+ * never shows a stale reason.
+ */
+export function setSessionStopReason(
+  db: DatabaseSync,
+  sessionId: number,
+  reason: SessionStopReason | null,
+  siteId: SiteId = HOME_SITE
+): number | null {
+  const row = db
+    .prepare(
+      `UPDATE sessions SET stop_reason = ?
+        WHERE id = ? AND site_id = ?
+        RETURNING id`
+    )
+    .get(reason, sessionId, siteId) as { id: number } | null | undefined;
   return row ? Number(row.id) : null;
 }
 

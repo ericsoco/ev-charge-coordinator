@@ -86,7 +86,7 @@ const TABLES: {
     columns: [
       'id', 'site_id', 'vehicle_id', 'home_battery_id', 'plug_ts_ms',
       'unplug_ts_ms', 'energy_kwh', 'energy_percent', 'elapsed_ms',
-      'house_energy_kwh', 'efficiency',
+      'house_energy_kwh', 'efficiency', 'target_percent', 'stop_reason',
     ],
     notNull: ['site_id', 'vehicle_id', 'home_battery_id', 'plug_ts_ms'],
   },
@@ -144,7 +144,7 @@ const eventFixture: EventRow = {
 const sessionFixture: SessionRow = {
   id: 0, siteId: 'home', vehicleId: '', homeBatteryId: '', plugTsMs: 0,
   unplugTsMs: null, energyKwh: null, energyPercent: null, elapsedMs: null,
-  houseEnergyKwh: null, efficiency: null,
+  houseEnergyKwh: null, efficiency: null, targetPercent: null, stopReason: null,
 };
 const forecastFixture: WeatherForecastRow = {
   id: 0, siteId: 'home', fetchedTsMs: 0, hourTsMs: 0, irradianceWm2: null,
@@ -194,6 +194,16 @@ describe('DDL pin (introspected vs the literal list)', () => {
       ).toEqual([...notNull]);
       expect(info.find((c) => c.name === 'id')?.pk, table).toBe(1);
     }
+  });
+
+  it('sessions.stop_reason rejects a value outside the CHECK enum', () => {
+    sessions.openSession(db, { vehicleId: 'VIN-PIN', homeBatteryId: 'GW', plugTsMs: 1 });
+    const id = sessions.recentSessions(db, 1)[0].id;
+    expect(() =>
+      db
+        .prepare('UPDATE sessions SET stop_reason = ? WHERE id = ?')
+        .run('manual_stop', id)
+    ).toThrow(/CHECK constraint failed/);
   });
 });
 
