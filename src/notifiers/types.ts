@@ -4,7 +4,7 @@
  * Config-file shapes live in utils/daemonConfig — this package stays
  * config-free.
  */
-import type { DecisionReasonCode } from '../store/types.js';
+import type { DecisionReasonCode, SessionStopReason } from '../store/types.js';
 
 export interface PlugInDetectedEvent {
   type: 'plug-in-detected';
@@ -41,6 +41,8 @@ export interface ChargingStoppedEvent {
   sessionId: number | null;
   vehicleId: string;
   evSocPercent: number | null;
+  /** Why the session monitor stopped it; null = not monitor-stopped (manual/car). */
+  reason: SessionStopReason | null;
 }
 
 export interface FailureEvent {

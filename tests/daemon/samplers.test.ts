@@ -474,6 +474,37 @@ describe('EvPoller', () => {
     expect(events).toHaveLength(3);
   });
 
+  it('charging-stopped carries the session stop reason; charging_start clears it', async () => {
+    const events: NotificationEvent[] = [];
+    let now = 5_000_000;
+    const ev = fakeEv(); // Disconnected baseline
+    const task = poller(ev, () => now, 0, undefined, async (event) => {
+      events.push(event);
+    });
+
+    await task.run(); // seed
+    ev.status.battery.chargingState = 'Charging';
+    now += 60_000;
+    await task.run(); // plug_in + charging_start — the session opens
+    const session = sessionStore.openSessionFor(db, VIN)!;
+    expect(session).not.toBeNull();
+    // The monitor's write from its stop tick rides the NEXT tick's transition:
+    sessionStore.setSessionStopReason(db, session.id, 'battery_buffer');
+
+    ev.status.battery.chargingState = 'Stopped';
+    now += 60_000;
+    await task.run(); // charging_stop → reason on the event
+    const stopped = events.find((event) => event.type === 'charging-stopped');
+    expect(stopped).toMatchObject({ reason: 'battery_buffer', sessionId: session.id });
+
+    ev.status.battery.chargingState = 'Charging';
+    now += 60_000;
+    await task.run(); // resume clears the stale reason
+    expect(sessionStore.openSessionFor(db, VIN)!.stopReason).toBeNull();
+    const started = events.filter((event) => event.type === 'charging-started');
+    expect(started).toHaveLength(2);
+  });
+
   it('isolates a rejecting notifier — sampling continues', async () => {
     const lines: string[] = [];
     let now = 2_000_000;
