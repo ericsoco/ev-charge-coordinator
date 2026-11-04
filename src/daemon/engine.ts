@@ -53,6 +53,13 @@ export interface DecisionOutcome {
   limitedBy: EnergyLimitedBy | null;
   /** Tesla limit the math produced; null when it did not run. */
   targetPercent: number | null;
+  /**
+   * SoC at which the session monitor must stop charging: the unclamped
+   * `rawPercent` floored (never overshoot the energy budget) when Tesla's
+   * 50% floor masked a lower computed target, else the Tesla limit itself
+   * (the car enforces it; our stop is the backstop). Null with declines.
+   */
+  stopTargetPercent: number | null;
 }
 
 export function evaluateDecision(input: DecisionInput): DecisionOutcome {
@@ -70,6 +77,7 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
     filterResults,
     limitedBy: null,
     targetPercent: null,
+    stopTargetPercent: null,
   });
 
   // Interlocks, in order (design §3.3): never re-fire, never act on a state
@@ -170,5 +178,9 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
     filterResults: chain.results,
     limitedBy: limit.limitedBy,
     targetPercent: limit.targetPercent,
+    stopTargetPercent:
+      limit.limitedBy === 'tesla-minimum'
+        ? Math.floor(limit.rawPercent)
+        : limit.targetPercent,
   };
 }

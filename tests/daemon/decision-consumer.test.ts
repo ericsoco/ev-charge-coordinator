@@ -9,6 +9,7 @@ import * as path from 'path';
 import type { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../../src/store/database.js';
 import * as decisionStore from '../../src/store/DecisionStore.js';
+import * as sessionStore from '../../src/store/SessionStore.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import { createDecisionConsumer, type DecisionConsumerDeps } from '../../src/daemon/decisionConsumer.js';
 import type { VehiclePlugInContext } from '../../src/daemon/EvPoller.js';
@@ -365,6 +366,59 @@ describe('actuation (live mode only)', () => {
     const row = decisionStore.decisionForSession(db, 7)!;
     expect(row.reasonCode).toBe('service_error');
     expect(row.reasonDetail).toContain('complete');
+  });
+});
+
+describe('session stop target (arming the monitor)', () => {
+  const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
+
+  function openSessionCtx(): VehiclePlugInContext {
+    const id = sessionStore.openSession(db, {
+      vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 500,
+    });
+    return { ...CTX, sessionId: id };
+  }
+
+  it('writes the computed stop target onto the real session row', async () => {
+    const ctx = openSessionCtx();
+    await consumer(LIVE)(ctx);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(51);
+  });
+
+  it('sub-50 math arms the floored raw target, not the clamped 50', async () => {
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 100 });
+    // EV 30% (ctx is the decision's SoC source) → raw 42.96 → limit 50, stop target 42.
+    const ctx = { ...openSessionCtx(), evSocPercent: 30 };
+    await consumer(LIVE)(ctx);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(42);
+  });
+
+  it('the target is armed even when actuation fails (monitor protects a manual start)', async () => {
+    const ctx = openSessionCtx();
+    await consumer({
+      ...LIVE,
+      chargeCommands: {
+        setChargeLimit: async () => {},
+        startCharging: async () => {
+          throw new Error('boom');
+        },
+      },
+    })(ctx);
+    expect(decisionStore.decisionForSession(db, ctx.sessionId)!.reasonCode).toBe('service_error');
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(51);
+  });
+
+  it('a declined decision leaves the session without a target', async () => {
+    const ctx = openSessionCtx();
+    await consumer({
+      ...LIVE,
+      autoStart: { enabled: true, filters: [{ type: 'geofence', radiusM: 100 }] },
+      getHomeLocation: async () => undefined,
+    })(ctx);
+    expect(decisionStore.decisionForSession(db, ctx.sessionId)!.reasonCode).toBe(
+      'filter_declined'
+    );
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBeNull();
   });
 });
 
