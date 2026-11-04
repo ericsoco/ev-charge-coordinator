@@ -77,15 +77,22 @@ also displays information about the app itself and its performance (...eventuall
         filters: []
 
 # Charts
-Reminder: focus only on charts relevant to the core function of this app:
+P0: charts that are specifically relevant to the core function of this app:
 charging from battery/solar, not from the grid. Don't overload with data trivia.
+P1: data relevant to charging decisions, that help end user understand system state,
+but do not directly represent system state changes. I.e., inputs to decisions.
+P2: monitoring system functionality; more for the developer than the end-user.
 
-- [P0] Vehicle + battery SoC
+- [P0] Vehicle + home battery SoC
 - [P0] Session history
 - [P1] I/O: Grid import/export, solar supply, home + EV usage
 - [P1] Weather (irradiance, anything else?)
 - [P2] Decision history (collapsed list; load last N then paginate)
 - [P2] Events history (same)
 
-How to handle time scales? continuous zoomable line chart? amcharts does this so well...how to emulate with echarts...?
-
+Questions + ideas to add to prompt:
+- How to handle time scales? continuous zoomable line chart? amcharts does this so well...how to emulate with echarts...?
+- Layout must rotate along with phone -- horizontal aspect ratio is best way to view time series charts
+- Weather icons (sun, cloud, moon, etc) are more legible + familiar than something displaying solar irradiance.
+  OpenMeteo should pull this data too, to display as icons evenly across the top of P1 I/O chart;
+  also, underlay these with a gradient band representing solar irradiance.
