@@ -220,3 +220,42 @@ describe('modes (enabled / dry-run) evaluate identically', () => {
   });
 });
 
+describe('stopTargetPercent (the monitor\u2019s stop threshold)', () => {
+  it('normal case: the stop target is the Tesla limit the math produced', () => {
+    // battery 90%, EV 40% → limitedBy none, limit 51 — car enforces it, our stop is the backstop.
+    const outcome = evaluateDecision(input());
+    expect(outcome).toMatchObject({ targetPercent: 51, stopTargetPercent: 51 });
+  });
+
+  it('sub-50 case: floor of the unclamped raw target, never Tesla\u2019s 50% floor', () => {
+    // battery 100%, EV 30% → raw 42.96% → limit clamped to 50, stop target floor(42.96) = 42.
+    const outcome = evaluateDecision(
+      input({ evSocPercent: 30, homeBatterySocPercent: 100 })
+    );
+    expect(outcome).toMatchObject({
+      accepted: true,
+      limitedBy: 'tesla-minimum',
+      targetPercent: 50,
+      stopTargetPercent: 42,
+    });
+  });
+
+  it('declines carry no stop target', () => {
+    const below = evaluateDecision(input({ homeBatterySocPercent: 20 }));
+    expect(below.stopTargetPercent).toBeNull();
+    const noGain = evaluateDecision(input({ evSocPercent: 67, homeBatterySocPercent: 21 }));
+    expect(noGain.stopTargetPercent).toBeNull();
+  });
+
+  it('merge dark: a dry-run verdict carries the same stop target', () => {
+    const outcome = evaluateDecision(
+      input({ evSocPercent: 30, homeBatterySocPercent: 100, autoStart: { enabled: false, filters: [] } })
+    );
+    expect(outcome).toMatchObject({
+      reasonCode: 'dry_run',
+      targetPercent: 50,
+      stopTargetPercent: 42,
+    });
+  });
+});
+

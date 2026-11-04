@@ -15,6 +15,7 @@ import type { AutoStartConfig } from '../utils/daemonConfig.js';
 import type { EnergyConfig } from '../utils/energy.js';
 import { resolveEnergyConfig } from '../utils/config.js';
 import * as decisionStore from '../store/DecisionStore.js';
+import * as sessionStore from '../store/SessionStore.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
 import { evaluateDecision } from './engine.js';
 import type { VehiclePlugInContext } from './EvPoller.js';
@@ -129,6 +130,13 @@ export function createDecisionConsumer(
         home,
         vehicleLocation,
       });
+
+      // Arm the session monitor before actuating: even a failed start leaves
+      // the computed stop target on the session. Mutable — a later
+      // re-targeting step rewrites it mid-session (last write wins).
+      if (outcome.stopTargetPercent !== null) {
+        sessionStore.setSessionTarget(deps.db, ctx.sessionId, outcome.stopTargetPercent);
+      }
 
       // Live and every gate passed: set the limit first, then start (the
       // service verifies the car is actually charging). A command failure
