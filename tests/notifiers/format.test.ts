@@ -106,8 +106,35 @@ describe('formatNotificationEvent', () => {
       formatNotificationEvent({ ...base, type: 'charging-started', sessionId: 7, evSocPercent: 46 })
     ).toBe('⚡️ charging started (SoC 46%)');
     expect(
-      formatNotificationEvent({ ...base, type: 'charging-stopped', sessionId: 7, evSocPercent: null })
+      formatNotificationEvent({
+        ...base,
+        type: 'charging-stopped',
+        sessionId: 7,
+        evSocPercent: null,
+        reason: null,
+      })
     ).toBe('🛑 charging stopped (SoC unknown)');
+  });
+
+  it('names the monitor\u2019s stop reason; manual stops stay bare', () => {
+    expect(
+      formatNotificationEvent({
+        ...base,
+        type: 'charging-stopped',
+        sessionId: 7,
+        evSocPercent: 43,
+        reason: 'target_reached',
+      })
+    ).toBe('🛑 charging stopped (SoC 43%) — target reached');
+    expect(
+      formatNotificationEvent({
+        ...base,
+        type: 'charging-stopped',
+        sessionId: 7,
+        evSocPercent: 20,
+        reason: 'battery_buffer',
+      })
+    ).toBe('🛑 charging stopped (SoC 20%) — battery hit buffer');
   });
 
   it('formats a service failure with its component', () => {
@@ -142,7 +169,7 @@ describe('formatNotificationEvent', () => {
         evSocPercent: null,
       },
       { ...base, type: 'charging-started', sessionId: 1, evSocPercent: null },
-      { ...base, type: 'charging-stopped', sessionId: 1, evSocPercent: null },
+      { ...base, type: 'charging-stopped', sessionId: 1, evSocPercent: null, reason: null },
       { type: 'failure', tsMs: 1, component: 'ev-poll', message: 'boom' },
     ];
     for (const event of events) expect(formatNotificationEvent(event)).not.toBe('');

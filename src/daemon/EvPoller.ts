@@ -387,13 +387,29 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
           });
         } else if (event.kind === 'charging_start' || event.kind === 'charging_stop') {
           const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
-          await notify({
-            type: event.kind === 'charging_start' ? 'charging-started' : 'charging-stopped',
-            tsMs,
-            sessionId: open?.id ?? null,
-            vehicleId: deps.vehicleId,
-            evSocPercent: battery.soc,
-          });
+          if (event.kind === 'charging_start') {
+            // A resumed session must not carry the previous stop's reason.
+            if (open !== null && open.stopReason !== null) {
+              sessionStore.setSessionStopReason(deps.db, open.id, null);
+            }
+            await notify({
+              type: 'charging-started',
+              tsMs,
+              sessionId: open?.id ?? null,
+              vehicleId: deps.vehicleId,
+              evSocPercent: battery.soc,
+            });
+          } else {
+            await notify({
+              type: 'charging-stopped',
+              tsMs,
+              sessionId: open?.id ?? null,
+              vehicleId: deps.vehicleId,
+              evSocPercent: battery.soc,
+              // The monitor wrote it one tick earlier; null = manual/car stop.
+              reason: open?.stopReason ?? null,
+            });
+          }
         } else if (event.kind === 'unplug') {
           const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
           const closedId = sessionStore.closeOpenSession(deps.db, deps.vehicleId, tsMs);

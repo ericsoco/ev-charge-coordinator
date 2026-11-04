@@ -16,7 +16,7 @@ export function formatNotificationEvent(event: NotificationEvent): string {
     case 'charging-started':
       return `⚡️ charging started (${soc(event.evSocPercent)})`;
     case 'charging-stopped':
-      return `🛑 charging stopped (${soc(event.evSocPercent)})`;
+      return `🛑 charging stopped (${soc(event.evSocPercent)})${stopReason(event.reason)}`;
     case 'failure':
       return `⚠️ ${event.component} failed: ${event.message}`;
     case 'test':
@@ -26,6 +26,13 @@ export function formatNotificationEvent(event: NotificationEvent): string {
 
 function soc(value: number | null): string {
   return value === null ? 'SoC unknown' : `SoC ${value}%`;
+}
+
+/** Suffix for a monitor-initiated stop; empty for manual/car stops. */
+function stopReason(reason: 'target_reached' | 'battery_buffer' | null): string {
+  if (reason === 'target_reached') return ' — target reached';
+  if (reason === 'battery_buffer') return ' — battery hit buffer';
+  return '';
 }
 
 /** Reason-shaped wording — the interlock and dry-run get their own voices. */
