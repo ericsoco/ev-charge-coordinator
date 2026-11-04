@@ -223,6 +223,54 @@ describe('finalizeSession', () => {
   });
 });
 
+describe('monitor columns (target / stop reason)', () => {
+  it('setSessionTarget round-trips and last write wins', () => {
+    const id = sessions.openSession(db, {
+      vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 1_000,
+    });
+    expect(sessions.setSessionTarget(db, id, 42)).toBe(id);
+    expect(sessions.recentSessions(db, 1)[0].targetPercent).toBe(42);
+
+    // Mutable mid-session: a later re-target overwrites without guard.
+    sessions.setSessionTarget(db, id, 55);
+    expect(sessions.recentSessions(db, 1)[0].targetPercent).toBe(55);
+  });
+
+  it('setSessionStopReason records and clears', () => {
+    const id = sessions.openSession(db, {
+      vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 1_000,
+    });
+    expect(sessions.setSessionStopReason(db, id, 'target_reached')).toBe(id);
+    expect(sessions.recentSessions(db, 1)[0].stopReason).toBe('target_reached');
+
+    // Cleared on the next charging_start so a resumed session shows no stale reason.
+    sessions.setSessionStopReason(db, id, null);
+    expect(sessions.recentSessions(db, 1)[0].stopReason).toBeNull();
+  });
+
+  it('monitor columns survive finalizeSession (aggregates touch other columns)', () => {
+    const id = sessions.openSession(db, {
+      vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 1_000,
+    });
+    sessions.setSessionTarget(db, id, 48);
+    sessions.setSessionStopReason(db, id, 'battery_buffer');
+    sessions.closeOpenSession(db, VEHICLE, 61_000);
+    sessions.finalizeSession(db, id, {
+      energyKwh: 5, energyPercent: 7, elapsedMs: 60_000,
+      houseEnergyKwh: 6, efficiency: 5 / 6,
+    });
+    const row = sessions.recentSessions(db, 1)[0];
+    expect(row.targetPercent).toBe(48);
+    expect(row.stopReason).toBe('battery_buffer');
+    expect(row.efficiency).toBeCloseTo(5 / 6, 10);
+  });
+
+  it('returns null for an unknown session id', () => {
+    expect(sessions.setSessionTarget(db, 9_999, 50)).toBeNull();
+    expect(sessions.setSessionStopReason(db, 9_999, 'target_reached')).toBeNull();
+  });
+});
+
 describe('sessionStats / openSessions', () => {
   it('aggregates totals and averages across closed sessions', () => {
     for (const [i, plug] of [1_000, 2_000].entries()) {

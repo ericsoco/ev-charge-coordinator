@@ -11,6 +11,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import * as initialSchema from './001-initial-schema.js';
 import * as decisionReasonCodes from './002-decision-reason-codes.js';
 import * as decisionInsufficientEnergy from './003-decision-insufficient-energy.js';
+import * as sessionTargetStop from './004-session-target-stop.js';
 
 export interface Migration {
   /** Monotonic schema version; equals PRAGMA user_version after up() runs. */
@@ -24,6 +25,7 @@ export const MIGRATIONS: readonly Migration[] = [
   initialSchema,
   decisionReasonCodes,
   decisionInsufficientEnergy,
+  sessionTargetStop,
 ];
 
 /** The schema version this build writes and understands. */

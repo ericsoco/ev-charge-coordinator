@@ -122,6 +122,12 @@ export interface NewEvent {
   toState?: string | null;
 }
 
+/**
+ * Why the session monitor stopped charging mid-session — mirrored by the
+ * sessions.stop_reason CHECK (004). NULL on a session = never monitor-stopped.
+ */
+export type SessionStopReason = 'target_reached' | 'battery_buffer';
+
 export interface SessionRow {
   id: number;
   siteId: SiteId;
@@ -135,6 +141,14 @@ export interface SessionRow {
   elapsedMs: number | null;
   houseEnergyKwh: number | null;
   efficiency: number | null;
+  /**
+   * SoC at which the monitor stops charging. Written by the decision consumer
+   * at plug-in; **mutable mid-session** (last write wins — a later re-targeting
+   * step raises/lowers it while charging). NULL = no computed target.
+   */
+  targetPercent: number | null;
+  /** The monitor's last stop reason; cleared on the next charging_start. */
+  stopReason: SessionStopReason | null;
 }
 
 export interface NewOpenSession {

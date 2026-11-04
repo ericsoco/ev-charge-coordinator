@@ -18,6 +18,7 @@ import {
 } from '../../src/commands/system.js';
 import { DEFAULT_DAEMON_CONFIG } from '../../src/utils/daemonConfig.js';
 import { openStore } from '../../src/store/database.js';
+import { CURRENT_SCHEMA_VERSION } from '../../src/store/migrations/index.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import * as sessions from '../../src/store/SessionStore.js';
 import { acquireLock } from '../../src/daemon/lockfile.js';
@@ -116,7 +117,7 @@ describe('showStatus', () => {
     expect(result.ok).toBe(true);
     const report = JSON.parse(lines.join('\n'));
     expect(report.daemon).toMatchObject({ state: 'running', pid: process.pid });
-    expect(report.store).toMatchObject({ path: dbPath, exists: true, schemaVersion: 3 });
+    expect(report.store).toMatchObject({ path: dbPath, exists: true, schemaVersion: CURRENT_SCHEMA_VERSION });
     expect(report.store.counts).toMatchObject({ batterySamples: 1, sessions: 2, openSessions: 1 });
     expect(report.store.lastSample.battery).toBe('1970-01-01T00:00:01.000Z');
     expect(report.proxies).toEqual({
