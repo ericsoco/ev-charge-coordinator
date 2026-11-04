@@ -56,8 +56,9 @@
 > separate branch, gated on `npm run check`, with a dated Log entry when it lands — same
 > discipline as P1a/P1b.
 
-**Scope (design.md §5):** measured efficiency + Open-Meteo-adjusted limits; sub-50%
-stop-at-target session monitor; battery-hit-buffer stop.
+**Scope (design.md §5 + §3.6.4):** measured efficiency + Open-Meteo-adjusted limits;
+sub-50% stop-at-target session monitor; battery-hit-buffer stop; **solar-surplus
+re-targeting** (added by user 2026-11-03).
 
 **Already in place from P1a/P1b (verified 2026-11-03):** session closing aggregates
 (`sessions.energy_kwh / energy_percent / house_energy_kwh / efficiency`, computed at unplug
@@ -80,6 +81,11 @@ end sessions.
    percent + stop-reason columns — design §3.5 "planned vs actual target, `limited_by`,
    stop reason"; schema-pin update), monitor loop wiring in `runDaemon`/`EvPoller`,
    notifier events for monitor-initiated stops, and safety posture decided below.
+   The stored target is **mutable by design** (last write wins): step 4 re-targets
+   it mid-session, and the monitor re-reads it from the store every tick, so an
+   updated target is enforced with no monitor changes. The charging-progress hook
+   added here is the seam step 4 reuses (its re-target evaluation runs before the
+   stop check in the same tick).
 2. **Measured efficiency.** Rolling estimate over closed sessions' `efficiency`
    (`sessionStats.avgEfficiency` exists; likely weighted by `energy_kwh` + outlier
    handling) that progressively replaces the static `chargeEfficiency` input to
@@ -91,20 +97,48 @@ end sessions.
    (design §3.6.2). Pure policy module + config knobs; inputs flow through
    `DecisionInput`/`engine.ts` so `decisions.reason_detail` shows the adjustment
    (auditability, consistent with P1b). Policy shape is an open decision below.
-4. **Live validation + docs** — exercise all three against the car/house; README
+4. **Solar-surplus re-targeting** *(user 2026-11-03; future goal — not enabled until
+   picked up; design.md §3.6.4)*. When sun charges the house battery mid-session, energy
+   above the original plan appears: recompute the charge limit from the **latest**
+   home-battery SoC + current EV SoC on a cadence (both inputs already sampled — battery
+   `batterySampleSec`, EV rich read `evSamplePluggedSec`) and adjust the target while
+   charging continues.
+   - **Symmetric raise/lower** (decided). *Raise* = two writes: new Tesla limit
+     (`setChargeLimit`, signed) **and** `sessions.target_percent` — otherwise the car's
+     own limit stops charging first (acutely so in the sub-50 case: limit 50, raw target
+     now ≥50). *Lower* (cloud/other loads drain the battery) = update
+     `sessions.target_percent` only — the step-1 monitor enforces it at its next tick;
+     no vehicle command needed.
+   - **Hysteresis** (decided): no more than ~1 change per 20 min — when step 4 is
+     planned, analyze our historical samples so far to translate the 20-min cadence into
+     a % SoC margin.
+   - **Resume** (decided): after a step-1 monitor stop, restart charging later once
+     home-battery SoC is sufficient again.
+   - **Notify** (decided) on mid-session target changes.
+   - Cadence: piggyback the step-1 charging-progress hook (a separate task would lack
+     EV SoC); the re-target evaluation runs before the stop check in the same tick.
+5. **Live validation + docs** — exercise all of the above against the car/house; README
    intelligence section; workplan Log entries.
 
 **Possible parallel spike (design §5 spike 1):** Franklin cloud history endpoints live
 test → day-of-week/seasonal baselines without waiting months for local history
-(§3.6.3). Independent of steps 1–3; decide in/out below.
+(§3.6.3). Independent of steps 1–4; decide in/out below.
 
-### Decisions pending (user, at step pickup)
+### Decisions
 
-- **Monitor authority:** does the session monitor stop *manually* started charging sessions
-  too, or only sessions this daemon started? (Safety interlock vs. surprising the user.)
-- **Sub-50% semantics:** when the computed target lands below Tesla's 50% floor, we already
-  set the limit to 50% (Phase-1 behavior) — confirm the monitor should stop at the
-  *computed* target (rawPercent), not at 50%.
+**Decided (2026-11-03, user):**
+- **Monitor authority:** while live (`autoStart.enabled && !dryRun`), the monitor may stop
+  *any* charging session — the buffer stop protects the house battery regardless of who
+  started charging; the target stop fires wherever the decision engine recorded a
+  computed target on the session.
+- **Sub-50% semantics:** the monitor stops at the *unclamped* computed target
+  (`Math.floor(rawPercent)`), never at Tesla's 50% floor.
+- **Re-target policy (step 4):** symmetric raise/lower; hysteresis ≤ ~1 change per 20 min
+  (translate to a % SoC margin by analyzing our historical samples when step 4 is
+  planned); resume charging after a monitor stop once home-battery SoC is sufficient;
+  notify on mid-session target changes.
+
+**Pending (user, at step pickup):**
 - **Weather policy:** simple rule (e.g. reserve +N% buffer on low-solar days) vs. computed
   forecast integral — start simple?
 - **Efficiency adoption:** min sample count / confidence gate before the rolling estimate
@@ -119,6 +153,22 @@ test → day-of-week/seasonal baselines without waiting months for local history
 ## Log
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
+
+### 2026-11-03 — P1c scope: solar-surplus re-targeting planned as step 4 (docs only)
+
+Branch `docs/p1c-solar-retarget-plan`. User added a future goal between steps 3 and 4:
+when sun charges the house battery mid-session, recompute the charge limit from the
+latest home-battery SoC and raise/lower the vehicle target while charging continues.
+Recorded as **step 4** (live validation renumbered to step 5) with all four policy
+decisions locked: **symmetric** raise/lower, **hysteresis ≤ ~1 change per 20 min**
+(% SoC margin to be derived from our historical samples when step 4 is planned),
+**resume** charging after a monitor stop once home-battery SoC is sufficient, **notify**
+on mid-session target changes. Also recorded: monitor authority (any charging, live
+only) and sub-50% semantics (`Math.floor(rawPercent)` stop target) as decided.
+Step 1 impact assessed — no structural change: `sessions.target_percent` documented as
+mutable (last write wins), the monitor already re-reads it per tick (test to pin this),
+and the step-1 charging-progress hook is the seam step 4 reuses. design.md §3.6.4 added.
+Gate: `npm run check` green (docs only).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
