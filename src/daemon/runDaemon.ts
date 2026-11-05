@@ -211,6 +211,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
       vehicleId,
       autoStart: options.config.autoStart,
       dryRun: options.dryRun ?? false,
+      batterySampleMaxAgeMs: options.config.batterySampleSec * 1000 * 5,
       stopCharging: async () => {
         await tesla.stopCharging();
       },
