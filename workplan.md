@@ -126,6 +126,13 @@ end sessions.
    - **Notify** (decided) on mid-session target changes.
    - Cadence: piggyback the step-1 charging-progress hook (a separate task would lack
      EV SoC); the re-target evaluation runs before the stop check in the same tick.
+   - **Spotty uptime** *(analysis 2026-11-03)*: never re-target from a stale battery
+     sample — reuse step 1's age guard (a wrong target is worse than no update, because
+     the monitor *enforces* it); the first evaluation after wake must not be blocked by
+     hysteresis (measured from the last actual change — sleep satisfies it); missed
+     intermediate targets are irrelevant by construction (recompute from current state —
+     state-based, not delta-based); the resume path covers a car that stopped at the old
+     target while the daemon slept.
 5. **Live validation + docs** — exercise all of the above against the car/house; README
    intelligence section; workplan Log entries.
 
@@ -203,6 +210,27 @@ the header of `migrations/003`; restored byte-identical (verified with `git diff
 before continuing.
 Gate: `npm run check` green — **927 passed / 3 skipped** (35 new). Live validation stays
 with step 5.
+
+### 2026-11-03 — P1c step 1 addendum: sleep-resilience analysis + stale-sample guard
+
+User prompt: how does the adaptive sub-50%/re-target design hold up to spotty laptop
+uptime (sleep, battery)? Analysis recorded here + README "Keeping the Mac awake".
+**Already self-healing, verified against code:** the monitor is state-based and runs on
+the first rich read after wake (`lastRichSampleMs` pre-sleep ⇒ cadence already elapsed);
+sessions/decisions/targets reconstruct from the store (`Disconnected → Charging` fires
+`plug_in`; `reconcileInitPlugIn` covers plugged-not-charging; launchd KeepAlive restarts
+the process); step 4 recomputes from current SoCs + resumes (recorded under step 4);
+transitions observed late still notify. **One real gap fixed (commit `fe93b0e`):**
+stale battery sample on wake — the ev-poll tick can beat the sampler's first tick, so
+the buffer check could act on a pre-sleep row (stale-low ⇒ spurious stop that never
+self-restarts; stale-high ⇒ hidden breach until fresh data anyway). Samples older than
+`batterySampleMaxAgeMs` (default 5 × `batterySampleSec`; runDaemon passes 5 × config)
+now read as missing — the already-decided "missing data never stops charging" policy;
+target stop unaffected (EV SoC is fresh from the rich read). **Accepted limitations
+(documented in README):** no software enforcement while asleep (sub-50 overshoot capped
+by Tesla's 50% limit; house buffer backstopped only by Franklin hardware) and sessions
+beginning *and* ending entirely during sleep stay unobserved.
+Gate: `npm run check` green — **930 passed / 3 skipped** (3 new).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
