@@ -49,7 +49,7 @@
 
 ## P1c — intelligence (active plan)
 
-> Status: **Step 1 complete (2026-11-03); steps 2–5 not started.** Design basis:
+> Status: **Steps 1–2 complete (2026-11-04); steps 3–5 not started.** Design basis:
 > [design.md](./docs/design.md) §3.4 (actuator + session monitor), §3.6 (intelligence
 > inputs), §5 (phasing). Product basis: [requirements.md](./docs/requirements.md) Oct 10
 > (sub-50% stop-at-target) + the battery-buffer evolution note above. Each step below is a
@@ -103,6 +103,20 @@ end sessions.
    `computeChargeLimit` (design §3.6.1 — config value stays the fallback until enough
    clean samples exist). Anomaly interpretation lives here: efficiency > 1, zero/near-zero
    house energy, meter-reset edges (the aggregate math deliberately never guesses).
+   *(Branch `p1c/step2-measured-efficiency` — **complete** (2026-11-04):
+   `SessionStore.recentEfficiencySamples` (dumb query: closed + non-NULL ratio,
+   newest first) feeding pure `src/utils/efficiency.ts` — the clean-session
+   filters *are* the anomaly interpretation (efficiency in (0,1] excludes >1
+   skew and zero/near-zero rows; house ≥ 0.5 kWh floors the denominator),
+   window 20, gate ≥ 5, energy-weighted estimate (ratio-of-sums),
+   `applyEfficiency` overlay, one shared `efficiencyClause` renderer (PR #62
+   DRY). Decision consumer overlays before `evaluateDecision` and appends the
+   clause to `reasonDetail` (flows into `decisions` audit + `decision-made`
+   notification); `charge-from-battery` prints `Charge efficiency: …` via a
+   read-only store (missing → fresh-install clause, corrupt → warning + config
+   fallback). Meter-reset-edge detection deferred to step 5; known limitation
+   recorded: the ratio conflates charger loss with solar assist in past
+   sessions.)*
 3. **Weather-adjusted limits.** Consume the newest `weather_forecasts` vintage to adjust
    buffer/target — e.g. low expected shortwave radiation tomorrow ⇒ keep more reserve
    (design §3.6.2). Pure policy module + config knobs; inputs flow through
@@ -143,6 +157,9 @@ end sessions.
      intermediate targets are irrelevant by construction (recompute from current state —
      state-based, not delta-based); the resume path covers a car that stopped at the old
      target while the daemon slept.
+    - **Effective efficiency (step 2):** the recompute runs on the measured
+      overlay — fetch → estimate → apply from `src/utils/efficiency.ts`, never
+      the raw config value (the same path the decision consumer uses).
 5. **Live validation + docs** — exercise all of the above against the car/house; README
    intelligence section; workplan Log entries.
 
@@ -164,11 +181,16 @@ test → day-of-week/seasonal baselines without waiting months for local history
   planned); resume charging after a monitor stop once home-battery SoC is sufficient;
   notify on mid-session target changes.
 
+**Decided (2026-11-04, user):**
+- **Efficiency adoption (step 2):** energy-weighted mean (ratio-of-sums,
+  Σhouse·eff ÷ Σhouse ≡ ΣEV ÷ Σhouse) over the latest **20** clean sessions —
+  clean = closed, efficiency ≤ 1 (and > 0), house ≥ 0.5 kWh — overriding config
+  at **≥ 5 clean samples**; below the gate `chargeEfficiency` stays the fallback.
+  Policy constants live in the pure module; no daemon-config knobs.
+
 **Pending (user, at step pickup):**
 - **Weather policy:** simple rule (e.g. reserve +N% buffer on low-solar days) vs. computed
   forecast integral — start simple?
-- **Efficiency adoption:** min sample count / confidence gate before the rolling estimate
-  overrides config; which estimate (mean vs. energy-weighted mean vs. median).
 - **Backfill spike:** in scope for P1c or deferred to a later phase?
 
 ### ⚠️ Reminder — end of planning phase
@@ -259,6 +281,27 @@ session-monitor section updated. The schema-pin caught the 004/005 column order
 (`stop_reason` precedes the new columns — ADD COLUMN appends). The 005 backfill
 is SQL-only, reviewed not auto-tested (needs a deliberately-v4 store).
 Gate: `npm run check` green — **931 passed / 3 skipped**.
+
+### 2026-11-04 — P1c step 2 complete: measured efficiency (3 commits)
+
+Branch `p1c/step2-measured-efficiency`. Estimator decided by user:
+**energy-weighted mean (ratio-of-sums)** over the latest **20** clean sessions,
+overriding config at **≥ 5**; clean = closed, efficiency in (0, 1], house
+≥ 0.5 kWh — the filters *are* the anomaly interpretation (skew and meter-noise
+tails excluded rather than repaired); meter-reset-edge detection deferred to
+step 5, and the known conflation of charger loss with solar assist recorded.
+Three gated commits: (1) `SessionStore.recentEfficiencySamples` (dumb query) +
+pure `src/utils/efficiency.ts` (`estimateEfficiency` → `applyEfficiency`
+overlay → single `efficiencyClause` renderer — DRY per PR #62) + tests;
+(2) decision consumer overlays before `evaluateDecision` and appends the clause
+to `reasonDetail` on computed verdicts (flows into `decisions` audit +
+`decision-made` notification) — test pins measured 0.95 → target 52 vs config's
+51; (3) `charge-from-battery` prints `Charge efficiency: …` (read-only store
+beside the daemon, never migrates; missing → fresh-install clause, corrupt →
+warning + config fallback), `options.dbPath` for tests with every existing call
+pinned to a `NO_STORE` path so the real store is never read; README config note
++ stale "subject to refinement" line updated; this entry.
+Gate: `npm run check` green — **951 passed / 3 skipped** (20 new).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
