@@ -7,6 +7,7 @@
  */
 
 import { Command } from 'commander';
+import * as fs from 'fs';
 import {
   describeError,
   log,
@@ -23,6 +24,15 @@ import {
   energyConfigFieldProblem,
   type EnergyConfig,
 } from '../utils/energy.js';
+import { storePath, openStoreReadOnly } from '../store/database.js';
+import { recentEfficiencySamples } from '../store/SessionStore.js';
+import {
+  EFFICIENCY_FETCH_LIMIT,
+  applyEfficiency,
+  efficiencyClause,
+  estimateEfficiency,
+  type EffectiveEfficiency,
+} from '../utils/efficiency.js';
 
 export async function getEvBatterySoc(ctx: CommandContext): Promise<CommandResult> {
   if (!ctx.tesla?.isAuthenticated()) {
@@ -241,9 +251,44 @@ async function confirmStartNow(ctx: CommandContext, targetPercent: number): Prom
  * nothing, and a run without a TTY (scripted) is a no-op that names `--start`
  * and `--dry-run`.
  */
+/**
+ * Measured-efficiency overlay (P1c step 2): read-only store beside a running
+ * daemon (never migrates). Missing or unreadable history falls back to the
+ * config — the printed clause always says which value shaped the math.
+ */
+function effectiveEfficiencyFor(
+  cfg: EnergyConfig,
+  dbPath?: string
+): { effective: EffectiveEfficiency; problem: string | null } {
+  const fallback = (problem: string | null) => ({
+    effective: applyEfficiency(cfg, { efficiency: null, samples: 0 }),
+    problem,
+  });
+  try {
+    const store = dbPath ?? storePath();
+    if (!fs.existsSync(store)) return fallback(null); // fresh install: the clause says it
+    const db = openStoreReadOnly(store);
+    try {
+      return {
+        effective: applyEfficiency(
+          cfg,
+          estimateEfficiency(recentEfficiencySamples(db, EFFICIENCY_FETCH_LIMIT))
+        ),
+        problem: null,
+      };
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    return fallback(
+      `session store unreadable — using config efficiency (${describeError(error)})`
+    );
+  }
+}
+
 export async function chargeFromBattery(
   ctx: CommandContext,
-  options: { start?: boolean; dryRun?: boolean } = {}
+  options: { start?: boolean; dryRun?: boolean; dbPath?: string } = {}
 ): Promise<CommandResult> {
   if (options.start && options.dryRun) {
     const message = '--start and --dry-run are mutually exclusive';
@@ -275,6 +320,9 @@ export async function chargeFromBattery(
     const outcome = await requireEnergyConfig(ctx);
     if ('error' in outcome) return { ok: false, error: outcome.error };
     const cfg = outcome.config;
+    // Measured efficiency (P1c step 2): overlay first — the math below runs on
+    // the effective value, and the clause line reports which one that was.
+    const { effective, problem } = effectiveEfficiencyFor(cfg, options.dbPath);
 
     log(ctx, paint.info('Getting solar battery state...'));
     const batterySoc = await ctx.franklin.getStateOfCharge();
@@ -293,7 +341,7 @@ export async function chargeFromBattery(
       return { ok: false, error: message };
     }
 
-    const limit = computeChargeLimit(evSoc, batterySoc, cfg);
+    const limit = computeChargeLimit(evSoc, batterySoc, effective.config);
 
     log(ctx, paint.positive(`Solar Battery: ${batterySoc}% (buffer ${cfg.bufferPercent}%)`));
     log(
@@ -303,6 +351,10 @@ export async function chargeFromBattery(
           `EV now: ${limit.evCurrentKwh.toFixed(1)} kWh -> target ${limit.targetPercent}%`
       )
     );
+    log(ctx, paint.info(`Charge efficiency: ${efficiencyClause(effective)}`));
+    if (problem !== null) {
+      log(ctx, paint.warning(problem));
+    }
 
     if (limit.limitedBy === 'battery') {
       // Insufficient energy: name the reason and the numbers behind it. The

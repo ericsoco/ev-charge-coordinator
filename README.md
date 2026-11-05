@@ -79,6 +79,11 @@ JSON file, `~/.ev-charge-coordinator/config.json` (its path is shown by
 - **Setters write here too:** `config --set-battery-kwh` / `--set-ev-kwh` /
   `--set-buffer` / `--set-efficiency` all update the same file, so it
   stays the single source of truth.
+- **`chargeEfficiency` is a fallback:** once there are at least 5 clean
+  sessions (closed, efficiency ≤ 1, ≥ 0.5 kWh), the math uses the measured
+  ratio — EV kWh added ÷ house kWh discharged, energy-weighted over the last
+  20 clean sessions — instead of this file's value; `charge-from-battery`
+  prints which one it used.
 
 ### Tesla Fleet API Setup
 
@@ -692,8 +697,10 @@ pack cannot lift the limit further), `ev-capacity` (the car would overfill), or
 
 This ensures your EV only charges using excess energy from your solar battery system.
 
-Note: The above is subject to refinement in upcoming iterations, to account for
-historical usage, weather forecasts, observed energy transfer efficiency, etc.
+Note: Observed energy transfer efficiency is already folded in automatically —
+once enough clean sessions exist, the measured estimate (described under
+Energy Config above) replaces the static `chargeEfficiency`. Historical usage
+and weather forecasts remain subject to refinement in upcoming iterations.
 
 ### Data Storage & Schema
 

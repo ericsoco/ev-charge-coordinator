@@ -9,9 +9,14 @@
  * Nothing here reaches a network, a Python proxy, or a real keychain.
  */
 import { describe, expect, it, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { CommandContext } from '../../src/commands/context.js';
 import type { ResolvedEnergyConfig } from '../../src/utils/config.js';
 import type { EnergyConfig } from '../../src/utils/energy.js';
+import { openStore } from '../../src/store/database.js';
+import * as sessionStore from '../../src/store/SessionStore.js';
 import {
   chargeFromBattery,
   getBatterySoc,
@@ -31,6 +36,12 @@ function makeConfig(buffer = 20): EnergyConfig {
     chargeEfficiency: 0.9,
   };
 }
+
+/**
+ * Deterministic "no history": chargeFromBattery defaults to the real
+ * storePath(), which tests must never read — every call passes this instead.
+ */
+const NO_STORE = '/nonexistent-evcc-test-store.sqlite';
 
 const ALL_FIELDS_MISSING: (keyof EnergyConfig)[] = [
   'batteryCapacityKwh',
@@ -244,7 +255,7 @@ describe('chargeFromBattery', () => {
       franklin: { getStateOfCharge: async () => 20 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe(
@@ -263,7 +274,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 55 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('cannot raise the EV charge limit above its current 55%');
@@ -278,7 +289,7 @@ describe('chargeFromBattery', () => {
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([66]);
@@ -295,7 +306,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 50.4 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([51]);
@@ -308,7 +319,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 80 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([91]);
@@ -321,7 +332,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 20 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([50]);
@@ -332,7 +343,7 @@ describe('chargeFromBattery', () => {
     const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => undefined as unknown as number },
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('Solar battery SoC unavailable');
@@ -344,7 +355,7 @@ describe('chargeFromBattery', () => {
     const { ctx, calls, out } = makeContext({
       tesla: { getStateOfCharge: async () => undefined as unknown as number },
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('EV SoC unavailable');
@@ -358,7 +369,7 @@ describe('chargeFromBattery', () => {
       tesla: { getStateOfCharge: async () => 100 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('Cannot charge: the EV is already fully charged');
@@ -377,7 +388,7 @@ describe('chargeFromBattery', () => {
       ask,
       interactive: false,
     });
-    const result = await chargeFromBattery(ctx);
+    const result = await chargeFromBattery(ctx, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     // Scripted runs never block on stdin and never send anything.
@@ -397,7 +408,7 @@ describe('chargeFromBattery', () => {
       ask,
       interactive: true,
     });
-    const result = await chargeFromBattery(ctx);
+    const result = await chargeFromBattery(ctx, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     // The plan is shown, then approved as a whole: limit set, then started.
@@ -417,7 +428,7 @@ describe('chargeFromBattery', () => {
       ask: async () => 'n',
       interactive: true,
     });
-    const result = await chargeFromBattery(ctx);
+    const result = await chargeFromBattery(ctx, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     // Reads and display happened; only the actions are withheld.
@@ -437,7 +448,7 @@ describe('chargeFromBattery', () => {
       ask,
       interactive: true,
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(ask).not.toHaveBeenCalled();
@@ -452,7 +463,7 @@ describe('chargeFromBattery', () => {
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { dryRun: true });
+    const result = await chargeFromBattery(ctx, { dryRun: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit).toBeUndefined();
@@ -465,7 +476,7 @@ describe('chargeFromBattery', () => {
       franklin: { getStateOfCharge: async () => 90 },
       buffer: 20,
     });
-    const result = await chargeFromBattery(ctx, { start: true, dryRun: true });
+    const result = await chargeFromBattery(ctx, { start: true, dryRun: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('--start and --dry-run are mutually exclusive');
@@ -476,7 +487,7 @@ describe('chargeFromBattery', () => {
 
   it('requires both systems', async () => {
     const { ctx } = makeContext({ franklin: null });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/must be connected/);
@@ -491,7 +502,7 @@ describe('chargeFromBattery', () => {
         partial: {},
       },
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('invalid energy config');
@@ -504,7 +515,7 @@ describe('chargeFromBattery', () => {
     const { ctx, calls, out } = makeContext({
       energyConfig: { config: null, missing: ALL_FIELDS_MISSING, invalid: [], partial: {} },
     });
-    const result = await chargeFromBattery(ctx, { start: true });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('energy config incomplete');
@@ -526,7 +537,7 @@ describe('chargeFromBattery', () => {
         return answers[asked.length - 1] ?? null;
       },
     });
-    const result = await chargeFromBattery(ctx);
+    const result = await chargeFromBattery(ctx, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(asked).toHaveLength(4);
@@ -555,7 +566,7 @@ describe('chargeFromBattery', () => {
         return '0.9';
       },
     });
-    const result = await chargeFromBattery(ctx);
+    const result = await chargeFromBattery(ctx, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(asked).toHaveLength(1);
@@ -568,7 +579,7 @@ describe('chargeFromBattery', () => {
       interactive: true,
       askNumeric: async () => null,
     });
-    const result = await chargeFromBattery(ctx);
+    const result = await chargeFromBattery(ctx, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('energy config setup cancelled');
@@ -585,12 +596,82 @@ describe('chargeFromBattery', () => {
       interactive: true,
       askNumeric: async () => answers[prompts++] ?? null,
     });
-    const result = await chargeFromBattery(ctx);
+    const result = await chargeFromBattery(ctx, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(prompts).toBe(5); // the out-of-range answer cost one extra prompt
     expect(calls.save[0][0]).toEqual(makeConfig());
     expect(out.join('\n')).toContain('batteryCapacityKwh = -5 (must be > 0)');
+  });
+
+  it('overlays the measured efficiency once clean history qualifies', async () => {
+    // 5 clean sessions at 0.95 (config says 0.90): 9.45 kWh above the buffer
+    // lands 8.9775 of it -> 67%, where config's 0.90 lands 66%.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-cfb-'));
+    try {
+      const dbPath = path.join(dir, 'data.sqlite');
+      const db = openStore(dbPath);
+      for (let i = 0; i < 5; i++) {
+        const id = sessionStore.openSession(db, {
+          vehicleId: 'VIN',
+          homeBatteryId: 'GW',
+          plugTsMs: 1_000 + i,
+        });
+        sessionStore.closeOpenSession(db, 'VIN', 1_001 + i);
+        sessionStore.finalizeSession(db, id, {
+          energyKwh: 9.5,
+          energyPercent: 10,
+          elapsedMs: 60_000,
+          houseEnergyKwh: 10,
+          efficiency: 0.95,
+        });
+      }
+      db.close();
+
+      const { ctx, calls, out } = makeContext({
+        franklin: { getStateOfCharge: async () => 90 },
+        buffer: 20,
+      });
+      const result = await chargeFromBattery(ctx, { start: true, dbPath });
+
+      expect(result.ok).toBe(true);
+      expect(calls.setChargeLimit[0]).toEqual([67]);
+      expect(out.join('\n')).toContain('efficiency 0.950 (measured, 5 sessions)');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('no store: config stands with the fresh-install clause', async () => {
+    const { ctx, calls, out } = makeContext({
+      franklin: { getStateOfCharge: async () => 90 },
+      buffer: 20,
+    });
+    const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
+
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit[0]).toEqual([66]);
+    expect(out.join('\n')).toContain('efficiency 0.900 (config, no clean sessions yet)');
+  });
+
+  it('unreadable store: warns and falls back to the config', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-cfb-corrupt-'));
+    try {
+      const dbPath = path.join(dir, 'data.sqlite');
+      fs.writeFileSync(dbPath, 'this is not a sqlite database');
+      const { ctx, calls, out } = makeContext({
+        franklin: { getStateOfCharge: async () => 90 },
+        buffer: 20,
+      });
+      const result = await chargeFromBattery(ctx, { start: true, dbPath });
+
+      expect(result.ok).toBe(true);
+      expect(calls.setChargeLimit[0]).toEqual([66]);
+      expect(out.join('\n')).toContain('session store unreadable');
+      expect(out.join('\n')).toContain('efficiency 0.900 (config');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
