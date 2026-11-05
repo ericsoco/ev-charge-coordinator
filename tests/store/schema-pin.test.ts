@@ -87,6 +87,7 @@ const TABLES: {
       'id', 'site_id', 'vehicle_id', 'home_battery_id', 'plug_ts_ms',
       'unplug_ts_ms', 'energy_kwh', 'energy_percent', 'elapsed_ms',
       'house_energy_kwh', 'efficiency', 'target_percent', 'stop_reason',
+      'initial_target_percent', 'target_change_reason',
     ],
     notNull: ['site_id', 'vehicle_id', 'home_battery_id', 'plug_ts_ms'],
   },
@@ -144,7 +145,8 @@ const eventFixture: EventRow = {
 const sessionFixture: SessionRow = {
   id: 0, siteId: 'home', vehicleId: '', homeBatteryId: '', plugTsMs: 0,
   unplugTsMs: null, energyKwh: null, energyPercent: null, elapsedMs: null,
-  houseEnergyKwh: null, efficiency: null, targetPercent: null, stopReason: null,
+  houseEnergyKwh: null, efficiency: null, targetPercent: null,
+  initialTargetPercent: null, targetChangeReason: null, stopReason: null,
 };
 const forecastFixture: WeatherForecastRow = {
   id: 0, siteId: 'home', fetchedTsMs: 0, hourTsMs: 0, irradianceWm2: null,

@@ -514,7 +514,13 @@ shadow mode the monitor logs `would stop (…)` once per episode and actuates
 nothing. The stop reason (`target_reached` / `battery_buffer`) is stored on the
 session (`sessions` shows `target 45% · stopped: target_reached`) and rides the
 `charging-stopped` notification (`🛑 charging stopped (SoC 43%) — target
-reached`); a resumed charging start clears it. A failed stop is logged and
+reached`); a resumed charging start clears it. The session also keeps its
+**initial armed target** (write-once) beside the current one: after a
+mid-session re-target, `sessions` shows e.g. `target 55% (from 45%) — home
+battery gained 3.2 kWh … increasing the session target from an initial value of
+45% to 55%`, the reason phrased initial → new value (supplied by the
+re-targeting step; no per-change log — initial + current + last reason only).
+A failed stop is logged and
 retried next tick, with one `failure` push per episode. Missing or stale data
 (no battery sample, a sample older than ~5× `batterySampleSec`, no energy
 config) skips the buffer check with a warning — it never stops charging.

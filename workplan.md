@@ -94,7 +94,9 @@ end sessions.
    enrichment + clear-on-start, `sessions` display + README section. Deviation:
    the hook fires on **every** rich read (the once-per-episode flags need the
    non-charging tick to reset); the charging gate lives in the pure fn —
-   behavior identical to the plan. Live validation remains with step 5.)*
+   behavior identical to the plan. Live validation remains with step 5.
+   Changeset 8 (2026-11-04) adds the initial-target + change-reason record —
+   migration 005, details in the Log.)*
 2. **Measured efficiency.** Rolling estimate over closed sessions' `efficiency`
    (`sessionStats.avgEfficiency` exists; likely weighted by `energy_kwh` + outlier
    handling) that progressively replaces the static `chargeEfficiency` input to
@@ -126,6 +128,14 @@ end sessions.
    - **Notify** (decided) on mid-session target changes.
    - Cadence: piggyback the step-1 charging-progress hook (a separate task would lack
      EV SoC); the re-target evaluation runs before the stop check in the same tick.
+   - **Record** (changeset 8, landed): re-targets go through the 4-arg
+     `setSessionTarget(db, id, target, changeReason?)` — `sessions` keeps the
+     write-once `initial_target_percent` beside the current value, and the
+     reason must be phrased **initial → new current** (user's example: "home
+     battery gained x kWh during the charging session, increasing the session
+     target from an initial value of y1% to y2%"); the **same string** feeds
+     the decided mid-session notification. No per-change log by decision —
+     initial + current + last reason only.
    - **Spotty uptime** *(analysis 2026-11-03)*: never re-target from a stale battery
      sample — reuse step 1's age guard (a wrong target is worse than no update, because
      the monitor *enforces* it); the first evaluation after wake must not be blocked by
@@ -231,6 +241,24 @@ target stop unaffected (EV SoC is fresh from the rich read). **Accepted limitati
 by Tesla's 50% limit; house buffer backstopped only by Franklin hardware) and sessions
 beginning *and* ending entirely during sleep stay unobserved.
 Gate: `npm run check` green — **930 passed / 3 skipped** (3 new).
+
+### 2026-11-04 — P1c step 1 changeset 8: initial target + change reason
+
+User decision: **no per-change target log** — record initial + final + a reason.
+Migration 005: `sessions.initial_target_percent` (write-once; backfilled from
+`target_percent` so sessions armed before the migration keep a truthful initial)
++ `target_change_reason` (free text). `setSessionTarget` gains the contract —
+first write (arming) seeds the initial and leaves the reason alone; later writes
+(re-targets) update the current value (last write wins; monitor reads it fresh,
+unaffected) and overwrite the reason **only when one is provided** (an omitted
+reason never erases an earlier explanation). Phrasing convention pinned under
+step 4: reason phrased **initial → new current** (user's example), and the same
+string feeds the decided mid-session notification. `sessions` renders
+`target 55% (from 45%) — <reason>`; unchanged sessions stay bare; README
+session-monitor section updated. The schema-pin caught the 004/005 column order
+(`stop_reason` precedes the new columns — ADD COLUMN appends). The 005 backfill
+is SQL-only, reviewed not auto-tested (needs a deliberately-v4 store).
+Gate: `npm run check` green — **931 passed / 3 skipped**.
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 

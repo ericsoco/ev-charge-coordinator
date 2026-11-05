@@ -35,6 +35,8 @@ const SESSION_COLUMNS = [
   'house_energy_kwh AS houseEnergyKwh',
   'efficiency',
   'target_percent AS targetPercent',
+  'initial_target_percent AS initialTargetPercent',
+  'target_change_reason AS targetChangeReason',
   'stop_reason AS stopReason',
 ].join(', ');
 
@@ -185,25 +187,46 @@ export function finalizeSession(
 
 /**
  * Write the monitor's stop target for a session; returns the session id, or
- * null when no such session exists (site-scoped). Deliberately unguarded
- * against rewrites: the target is mutable mid-session (decision consumer
- * writes it at plug-in, a later re-targeting step raises/lowers it) — last
- * write wins.
+ * null when no such session exists (site-scoped).
+ *
+ * Contract (changeset 8):
+ * - **First write (arming)** seeds `initial_target_percent` write-once; the
+ *   reason is untouched — arming is not a change.
+ * - **Later writes (re-targets)** update `target_percent` (last write wins;
+ *   the monitor re-reads it every tick) and, only when `changeReason` is
+ *   provided, overwrite `target_change_reason` — omitted leaves any earlier
+ *   reason intact. Convention: phrase the reason from the initial to the new
+ *   current value so initial→final stays derivable from one string.
  */
 export function setSessionTarget(
   db: DatabaseSync,
   sessionId: number,
   targetPercent: number,
+  changeReason?: string,
   siteId: SiteId = HOME_SITE
 ): number | null {
   const row = db
     .prepare(
-      `UPDATE sessions SET target_percent = ?
-        WHERE id = ? AND site_id = ?
-        RETURNING id`
+      `SELECT initial_target_percent FROM sessions
+        WHERE id = ? AND site_id = ?`
     )
-    .get(targetPercent, sessionId, siteId) as { id: number } | null | undefined;
-  return row ? Number(row.id) : null;
+    .get(sessionId, siteId) as { initial_target_percent: number | null } | null | undefined;
+  if (!row) return null;
+
+  if (row.initial_target_percent === null) {
+    db.prepare(
+      `UPDATE sessions SET target_percent = ?, initial_target_percent = ?
+        WHERE id = ? AND site_id = ?`
+    ).run(targetPercent, targetPercent, sessionId, siteId);
+  } else {
+    db.prepare(
+      `UPDATE sessions
+          SET target_percent = ?,
+              target_change_reason = COALESCE(?, target_change_reason)
+        WHERE id = ? AND site_id = ?`
+    ).run(targetPercent, changeReason ?? null, sessionId, siteId);
+  }
+  return sessionId;
 }
 
 /**

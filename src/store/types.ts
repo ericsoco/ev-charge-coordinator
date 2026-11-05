@@ -147,6 +147,17 @@ export interface SessionRow {
    * step raises/lowers it while charging). NULL = no computed target.
    */
   targetPercent: number | null;
+  /**
+   * The target as first armed (write-once; backfilled by 005 for rows armed
+   * before it existed). Equals `targetPercent` until a re-target happens.
+   */
+  initialTargetPercent: number | null;
+  /**
+   * Why current ≠ initial — set by whoever re-targets, phrased from the
+   * initial to the new current value. NULL = never re-targeted; reflects the
+   * most recent adjustment (deliberately no per-change log, 2026-11-04).
+   */
+  targetChangeReason: string | null;
   /** The monitor's last stop reason; cleared on the next charging_start. */
   stopReason: SessionStopReason | null;
 }

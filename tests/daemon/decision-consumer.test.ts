@@ -382,7 +382,10 @@ describe('session stop target (arming the monitor)', () => {
   it('writes the computed stop target onto the real session row', async () => {
     const ctx = openSessionCtx();
     await consumer(LIVE)(ctx);
-    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(51);
+    const row = sessionStore.openSessionFor(db, 'VIN')!;
+    expect(row.targetPercent).toBe(51);
+    expect(row.initialTargetPercent).toBe(51); // arming seeds the write-once initial
+    expect(row.targetChangeReason).toBeNull();
   });
 
   it('sub-50 math arms the floored raw target, not the clamped 50', async () => {
