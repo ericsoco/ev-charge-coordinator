@@ -4,6 +4,7 @@
  * daemon.log already prefixes its own local timestamps.
  */
 import type { NotificationEvent } from './types.js';
+import type { SessionStopReason } from '../store/types.js';
 
 type DecisionEvent = Extract<NotificationEvent, { type: 'decision-made' }>;
 
@@ -29,7 +30,7 @@ function soc(value: number | null): string {
 }
 
 /** Suffix for a monitor-initiated stop; empty for manual/car stops. */
-function stopReason(reason: 'target_reached' | 'battery_buffer' | null): string {
+function stopReason(reason: SessionStopReason | null): string {
   if (reason === 'target_reached') return ' — target reached';
   if (reason === 'battery_buffer') return ' — battery hit buffer';
   return '';

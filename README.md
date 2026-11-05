@@ -496,7 +496,7 @@ never clamped or guessed at):
   and filter chain (`auto-start: disabled (dark) …`).
 - Every decision also fires a notifier event (below).
 
-### Session monitor (P1c step 1)
+### Session monitor
 
 While a session charges, the daemon re-evaluates two stops on every EV rich read
 (60 s plugged cadence — no extra vehicle API calls):
