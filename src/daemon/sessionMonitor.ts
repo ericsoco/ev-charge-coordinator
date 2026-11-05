@@ -84,6 +84,12 @@ export interface SessionMonitorDeps {
   stopCharging: () => Promise<void>;
   /** Injectable so tests avoid config files; default reads energy config.json. */
   getEnergyConfig?: () => EnergyConfig | null;
+  /**
+   * A battery sample older than this reads as missing — stale data must never
+   * stop charging (after sleep the ev-poll tick can beat the battery sampler's
+   * first tick). runDaemon passes 5 × `batterySampleSec`.
+   */
+  batterySampleMaxAgeMs?: number;
   log?: (message: string) => void;
   /** Typed-event sink for stop failures; failures are isolated here. */
   notify?: (event: NotificationEvent) => Promise<void>;
@@ -100,6 +106,9 @@ async function emitNotify(deps: SessionMonitorDeps, event: NotificationEvent): P
     );
   }
 }
+
+/** Default freshness window: 5 × the shipped batterySampleSec (10 min). */
+const DEFAULT_BATTERY_SAMPLE_MAX_AGE_MS = 600_000;
 
 /**
  * The charging-progress stage of the EvPoller chain. Called on every rich
@@ -132,7 +141,15 @@ export function createSessionMonitor(
       // (a later re-targeting step rewrites it) — never cache it here.
       const session = sessionStore.openSessionFor(deps.db, deps.vehicleId);
       const energyConfig = getEnergyConfig();
-      const batterySoc = homeBattery.latestSample(deps.db)?.socPercent ?? null;
+      // Freshness qualification (sleep self-heal): a sample from before a
+      // sleep is as unreadable as none — stale-low would spuriously stop a
+      // healthy charge, stale-high hides a real breach that the sampler's
+      // first fresh tick (≤ one battery cadence) will catch anyway.
+      const sample = homeBattery.latestSample(deps.db);
+      const maxAgeMs = deps.batterySampleMaxAgeMs ?? DEFAULT_BATTERY_SAMPLE_MAX_AGE_MS;
+      const ageMs = sample === null ? null : ctx.tsMs - sample.tsMs;
+      const stale = ageMs !== null && ageMs > maxAgeMs;
+      const batterySoc = sample !== null && !stale ? sample.socPercent : null;
 
       if (energyConfig === null && !configWarned) {
         configWarned = true;
@@ -140,7 +157,12 @@ export function createSessionMonitor(
       }
       if (batterySoc === null && !batteryWarned) {
         batteryWarned = true;
-        log('[session-monitor] no home-battery sample — buffer stop skipped until one lands');
+        log(
+          stale
+            ? `[session-monitor] home-battery sample is ${Math.round((ageMs ?? 0) / 60_000)} min old — ` +
+              'buffer stop skipped until a fresh one lands'
+            : '[session-monitor] no home-battery sample — buffer stop skipped until one lands'
+        );
       }
 
       const verdict = evaluateSessionStop({

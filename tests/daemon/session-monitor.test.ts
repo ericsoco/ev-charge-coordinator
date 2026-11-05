@@ -282,4 +282,39 @@ describe('createSessionMonitor (edge)', () => {
     expect(stopCalls).toBe(0);
     expect(logs.join('\n')).toContain('[session-monitor] failed: config read blew up');
   });
+
+  it('stale sample (post-sleep) reads as missing: no spurious stop, warn once', async () => {
+    // Below the buffer — but the row predates the sleep, so acting on it would
+    // spuriously stop a healthy charge.
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1, socPercent: 15 });
+    const run = monitor({ batterySampleMaxAgeMs: 500 });
+    await run({ tsMs: 100_000, evSocPercent: 40, chargingState: 'Charging' });
+    expect(stopCalls).toBe(0);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.stopReason).toBeNull();
+    expect(logs.filter((l) => l.includes('min old'))).toHaveLength(1);
+
+    await run({ tsMs: 101_000, evSocPercent: 40, chargingState: 'Charging' });
+    expect(logs.filter((l) => l.includes('min old'))).toHaveLength(1); // once per episode
+  });
+
+  it('the sampler\u2019s first fresh sample lands and the buffer enforces next tick', async () => {
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1, socPercent: 15 });
+    const run = monitor({ batterySampleMaxAgeMs: 5_000 }); // 99 s → stale, 1 s → fresh
+    await run({ tsMs: 100_000, evSocPercent: 40, chargingState: 'Charging' });
+    expect(stopCalls).toBe(0);
+
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 100_000, socPercent: 15 });
+    await run({ tsMs: 101_000, evSocPercent: 40, chargingState: 'Charging' });
+    expect(stopCalls).toBe(1);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.stopReason).toBe('battery_buffer');
+  });
+
+  it('staleness never blocks the target stop (EV SoC is fresh from the rich read)', async () => {
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1, socPercent: 15 });
+    sessionStore.setSessionTarget(db, sessionId, 45);
+    const run = monitor({ batterySampleMaxAgeMs: 500 });
+    await run({ tsMs: 100_000, evSocPercent: 50, chargingState: 'Charging' });
+    expect(stopCalls).toBe(1);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.stopReason).toBe('target_reached');
+  });
 });
