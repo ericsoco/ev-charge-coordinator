@@ -14,6 +14,12 @@ import type { HomeLocation } from '../utils/credentials.js';
 import type { AutoStartConfig } from '../utils/daemonConfig.js';
 import type { EnergyConfig } from '../utils/energy.js';
 import { resolveEnergyConfig } from '../utils/config.js';
+import {
+  EFFICIENCY_FETCH_LIMIT,
+  applyEfficiency,
+  efficiencyClause,
+  estimateEfficiency,
+} from '../utils/efficiency.js';
 import * as decisionStore from '../store/DecisionStore.js';
 import * as sessionStore from '../store/SessionStore.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
@@ -117,19 +123,38 @@ export function createDecisionConsumer(
       }
 
       const getEnergyConfig = deps.getEnergyConfig ?? (() => resolveEnergyConfig().config);
-      const outcome = evaluateDecision({
+      // Measured efficiency (P1c step 2): overlay the rolling estimate onto the
+      // config before the math runs; below the gate the config stands. The
+      // clause appended to reasonDetail audits which value shaped the target.
+      const cfg = getEnergyConfig();
+      const effective =
+        cfg === null
+          ? null
+          : applyEfficiency(
+              cfg,
+              estimateEfficiency(
+                sessionStore.recentEfficiencySamples(deps.db, EFFICIENCY_FETCH_LIMIT)
+              )
+            );
+      let outcome = evaluateDecision({
         sessionAlreadyDecided,
         event: ctx.event,
         plugged: true, // this hook fires on a vehicle plug-in event by definition
         chargingState: ctx.chargingState,
         evSocPercent: ctx.evSocPercent,
         homeBatterySocPercent: homeBattery.latestSample(deps.db)?.socPercent ?? null,
-        energyConfig: getEnergyConfig(),
+        energyConfig: effective?.config ?? null,
         autoStart: deps.autoStart,
         dryRun: deps.dryRun,
         home,
         vehicleLocation,
       });
+      if (effective !== null && outcome.limitedBy !== null && outcome.reasonDetail !== null) {
+        outcome = {
+          ...outcome,
+          reasonDetail: `${outcome.reasonDetail} — ${efficiencyClause(effective)}`,
+        };
+      }
 
       // Arm the session monitor before actuating: even a failed start leaves
       // the computed stop target on the session. Mutable — a later

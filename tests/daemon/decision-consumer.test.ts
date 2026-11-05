@@ -425,3 +425,42 @@ describe('session stop target (arming the monitor)', () => {
   });
 });
 
+describe('measured efficiency (decision audit + math)', () => {
+  const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
+
+  function seedCleanSessions(count: number, efficiency: number): void {
+    for (let i = 0; i < count; i++) {
+      const id = sessionStore.openSession(db, {
+        vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 1_000 + i,
+      });
+      sessionStore.closeOpenSession(db, 'VIN', 1_001 + i);
+      sessionStore.finalizeSession(db, id, {
+        energyKwh: 9.5, energyPercent: 10, elapsedMs: 60_000,
+        houseEnergyKwh: 10, efficiency,
+      });
+    }
+  }
+
+  it('at the gate the measured value drives the math and is audited', async () => {
+    seedCleanSessions(5, 0.95); // config says 0.90 → target 51; measured 0.95 → 52
+    await consumer(LIVE)(CTX);
+    expect(commandCalls).toEqual(['setChargeLimit:52', 'startCharging']);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonDetail).toContain('efficiency 0.950 (measured, 5 sessions)');
+  });
+
+  it('below the gate the config stands, audited as such', async () => {
+    seedCleanSessions(4, 0.95);
+    await consumer(LIVE)(CTX);
+    expect(commandCalls).toEqual(['setChargeLimit:51', 'startCharging']);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonDetail).toContain('efficiency 0.900 (config, 4 clean < 5)');
+  });
+
+  it('no history at all audits the fresh-install wording', async () => {
+    await consumer(LIVE)(CTX);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonDetail).toContain('efficiency 0.900 (config, no clean sessions yet)');
+  });
+});
+
