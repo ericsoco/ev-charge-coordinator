@@ -251,6 +251,32 @@ export function setSessionStopReason(
   return row ? Number(row.id) : null;
 }
 
+/**
+ * Recent sessions with a computable efficiency, newest first — the raw feed
+ * for the measured-efficiency estimator (P1c step 2). Deliberately dumb:
+ * closed rows with a non-NULL ratio only; the clean-session policy (plausibility
+ * cap, denominator floor, window, gate) lives in utils/efficiency.ts so it
+ * stays fully unit-testable.
+ */
+export function recentEfficiencySamples(
+  db: DatabaseSync,
+  limit: number,
+  siteId: SiteId = HOME_SITE
+): { houseEnergyKwh: number; efficiency: number }[] {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`limit must be a positive integer (got ${limit})`);
+  }
+  return db
+    .prepare(
+      `SELECT house_energy_kwh AS houseEnergyKwh, efficiency
+         FROM sessions
+        WHERE site_id = ? AND unplug_ts_ms IS NOT NULL AND efficiency IS NOT NULL
+        ORDER BY plug_ts_ms DESC, id DESC
+        LIMIT ?`
+    )
+    .all(siteId, limit) as unknown as { houseEnergyKwh: number; efficiency: number }[];
+}
+
 /** Aggregate view for the `sessions` CLI footer; NULL averages = no data. */
 export interface SessionStats {
   total: number;

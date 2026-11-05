@@ -303,6 +303,43 @@ describe('monitor columns (target / stop reason)', () => {
   });
 });
 
+describe('recentEfficiencySamples', () => {
+  function seedEfficiencySession(plugTsMs: number, efficiency: number | null): void {
+    const id = sessions.openSession(db, {
+      vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs,
+    });
+    sessions.closeOpenSession(db, VEHICLE, plugTsMs + 60_000);
+    sessions.finalizeSession(db, id, {
+      energyKwh: efficiency === null ? null : 5,
+      energyPercent: 10,
+      elapsedMs: 60_000,
+      houseEnergyKwh: efficiency === null ? null : 6,
+      efficiency,
+    });
+  }
+
+  it('returns closed non-null ratios newest-first, honoring the limit', () => {
+    seedEfficiencySession(1_000, 0.8);
+    seedEfficiencySession(2_000, 0.9);
+    seedEfficiencySession(3_000, null); // closed but uncomputable — excluded
+    const openId = sessions.openSession(db, {
+      vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 4_000,
+    }); // still open — excluded
+
+    const rows = sessions.recentEfficiencySamples(db, 10);
+    expect(rows).toEqual([
+      { houseEnergyKwh: 6, efficiency: 0.9 },
+      { houseEnergyKwh: 6, efficiency: 0.8 },
+    ]);
+    expect(sessions.recentEfficiencySamples(db, 1)).toHaveLength(1);
+    expect(sessions.openSessionFor(db, VEHICLE)!.id).toBe(openId);
+  });
+
+  it('rejects a non-positive limit', () => {
+    expect(() => sessions.recentEfficiencySamples(db, 0)).toThrow(/positive integer/);
+  });
+});
+
 describe('sessionStats / openSessions', () => {
   it('aggregates totals and averages across closed sessions', () => {
     for (const [i, plug] of [1_000, 2_000].entries()) {
