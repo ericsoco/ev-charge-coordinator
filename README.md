@@ -397,6 +397,18 @@ suspends the agent, every poll freezes, and a car that wakes on plug-in
   assertion is honored **only on AC power** — on battery macOS ignores it and
   the machine sleeps normally. Unlike `sleep 0`, it also covers the
   lid-closed (clamshell) case.
+- **Waking is self-healing (state-based, not delta-based).** The first rich
+  read after sleep re-evaluates the session monitor against *current* state —
+  EV SoC from that read, home SoC once the sampler's first fresh sample lands
+  (samples older than ~5× `batterySampleSec` are treated as missing, so stale
+  pre-sleep data never stops or fails to stop a charge); missed plug-ins,
+  sessions, and charge targets are reconstructed from the store; and the
+  planned solar re-targeting recomputes from current SoCs on wake (with resume)
+  instead of replaying missed updates. What sleep still costs, accepted:
+  **nothing software-side can stop charging while the Mac sleeps** — the
+  sub-50% case stays capped by Tesla's own 50% limit, the house buffer's only
+  backstop is Franklin's hardware, and a session that both starts and ends
+  entirely during sleep is never observed.
 - Alternative / belt-and-suspenders: `sudo pmset -a sleep 0` — system-wide,
   unlike the launcher's scoped assertion.
 - The log tells you what happened either way: `[ev-poll] vehicle asleep —
@@ -503,9 +515,10 @@ nothing. The stop reason (`target_reached` / `battery_buffer`) is stored on the
 session (`sessions` shows `target 45% · stopped: target_reached`) and rides the
 `charging-stopped` notification (`🛑 charging stopped (SoC 43%) — target
 reached`); a resumed charging start clears it. A failed stop is logged and
-retried next tick, with one `failure` push per episode. Missing data (no battery
-sample, no energy config) skips the buffer check with a warning — it never
-stops charging. Stop latency is cadence-bound: up to ~2–3 min after the battery
+retried next tick, with one `failure` push per episode. Missing or stale data
+(no battery sample, a sample older than ~5× `batterySampleSec`, no energy
+config) skips the buffer check with a warning — it never stops charging.
+Stop latency is cadence-bound: up to ~2–3 min after the battery
 crosses the buffer (battery samples every `batterySampleSec`, EV reads every
 `evSamplePluggedSec`).
 
