@@ -504,7 +504,16 @@ export async function showSessions(
       const house = row.houseEnergyKwh === null ? '—' : `${row.houseEnergyKwh.toFixed(3)} kWh`;
       const eff = row.efficiency === null ? '—' : row.efficiency.toFixed(3);
       const monitor: string[] = [];
-      if (row.targetPercent !== null) monitor.push(`target ${row.targetPercent}%`);
+      if (row.targetPercent !== null) {
+        let entry = `target ${row.targetPercent}%`;
+        if (row.initialTargetPercent !== null && row.initialTargetPercent !== row.targetPercent) {
+          entry += ` (from ${row.initialTargetPercent}%)`;
+        }
+        if (row.targetChangeReason !== null) {
+          entry += ` — ${row.targetChangeReason}`;
+        }
+        monitor.push(entry);
+      }
       if (row.stopReason !== null) monitor.push(`stopped: ${row.stopReason}`);
       log(
         ctx,

@@ -224,16 +224,47 @@ describe('finalizeSession', () => {
 });
 
 describe('monitor columns (target / stop reason)', () => {
-  it('setSessionTarget round-trips and last write wins', () => {
+  it('setSessionTarget round-trips; arming seeds the write-once initial', () => {
     const id = sessions.openSession(db, {
       vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 1_000,
     });
     expect(sessions.setSessionTarget(db, id, 42)).toBe(id);
-    expect(sessions.recentSessions(db, 1)[0].targetPercent).toBe(42);
+    let row = sessions.recentSessions(db, 1)[0];
+    expect(row.targetPercent).toBe(42);
+    expect(row.initialTargetPercent).toBe(42); // arming seeds the initial
+    expect(row.targetChangeReason).toBeNull(); // arming is not a change
 
-    // Mutable mid-session: a later re-target overwrites without guard.
+    // Mutable mid-session: a later re-target overwrites without guard…
     sessions.setSessionTarget(db, id, 55);
-    expect(sessions.recentSessions(db, 1)[0].targetPercent).toBe(55);
+    row = sessions.recentSessions(db, 1)[0];
+    expect(row.targetPercent).toBe(55);
+    // …but the initial stays put.
+    expect(row.initialTargetPercent).toBe(42);
+    expect(row.targetChangeReason).toBeNull();
+  });
+
+  it('re-target reason: provided overwrites, omitted leaves the earlier one', () => {
+    const id = sessions.openSession(db, {
+      vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 1_000,
+    });
+    sessions.setSessionTarget(db, id, 42);
+    sessions.setSessionTarget(
+      db, id, 55,
+      'home battery gained 3.2 kWh during the charging session, increasing the ' +
+        'session target from an initial value of 42% to 55%'
+    );
+    let row = sessions.recentSessions(db, 1)[0];
+    expect(row).toMatchObject({
+      targetPercent: 55,
+      initialTargetPercent: 42,
+      targetChangeReason: expect.stringContaining('initial value of 42% to 55%'),
+    });
+
+    // A later change without text never erases the earlier explanation.
+    sessions.setSessionTarget(db, id, 48);
+    row = sessions.recentSessions(db, 1)[0];
+    expect(row.targetPercent).toBe(48);
+    expect(row.targetChangeReason).toContain('initial value of 42% to 55%');
   });
 
   it('setSessionStopReason records and clears', () => {
@@ -261,6 +292,7 @@ describe('monitor columns (target / stop reason)', () => {
     });
     const row = sessions.recentSessions(db, 1)[0];
     expect(row.targetPercent).toBe(48);
+    expect(row.initialTargetPercent).toBe(48);
     expect(row.stopReason).toBe('battery_buffer');
     expect(row.efficiency).toBeCloseTo(5 / 6, 10);
   });

@@ -86,6 +86,13 @@ function seedStore(): void {
     efficiency: 5 / 6,
   });
   sessions.setSessionTarget(db, id, 45);
+  sessions.setSessionTarget(
+    db,
+    id,
+    55,
+    'home battery gained 3.2 kWh during the charging session, increasing the ' +
+      'session target from an initial value of 45% to 55%'
+  );
   sessions.setSessionStopReason(db, id, 'target_reached');
   sessions.openSession(db, { vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 90_000 });
   db.close();
@@ -276,7 +283,8 @@ describe('showSessions', () => {
     expect(out).toContain('energy 5.000 kWh');
     expect(out).toContain('house 6.000 kWh');
     expect(out).toContain('eff 0.833');
-    expect(out).toContain('target 45%');
+    expect(out).toContain('target 55% (from 45%)');
+    expect(out).toContain('increasing the session target from an initial value of 45% to 55%');
     expect(out).toContain('stopped: target_reached');
     expect(out).toContain('2 sessions (1 open, 1 closed)');
     const openLine = lines.findIndex((l) => l.includes('[open]'));
