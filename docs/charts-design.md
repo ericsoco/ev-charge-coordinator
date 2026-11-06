@@ -148,9 +148,12 @@ into data in our stores, to help the user understand the functioning of the syst
 #### Charts
 
 TODO NEXT:
-* need to see what's stored for weather, why does `npm run store` show nothing?
-* `npm run store` currently fails, looks like we need to run a backfill to add
-  new target_percent column from the last changeset (Step 2)?
+[ ] need to see what's stored for weather, why does `npm run store` show nothing?
+[ ] `npm run store` currently fails, looks like we need to run a backfill to add
+    new target_percent column from the last changeset (Step 2)?
+[ ] flesh out the charts prompt here, based on my prioritized list
+    in # Charts above and in my sketches
+[ ] Address questions + ideas below to complete the prompt
 
 
 Questions + ideas to add to prompt:
