@@ -21,8 +21,24 @@
  * - notify on every applied change; the reason string (initial → new) feeds
  *   target_change_reason, the log, and the notification alike.
  */
+import type { DatabaseSync } from 'node:sqlite';
 import type { SessionStopReason } from '../store/types.js';
+import type { AutoStartConfig } from '../utils/daemonConfig.js';
+import type { WeatherPolicy } from '../utils/weather.js';
+import type { ChargingProgressContext } from './EvPoller.js';
+import type { NotificationEvent } from '../notifiers/types.js';
+import { resolveEnergyConfig } from '../utils/config.js';
+import {
+  EFFICIENCY_FETCH_LIMIT,
+  applyEfficiency,
+  estimateEfficiency,
+} from '../utils/efficiency.js';
+import { DEFAULT_WEATHER_POLICY, weatherAdjustment } from '../utils/weather.js';
 import { computeChargeLimit, stopTargetFor, type EnergyConfig } from '../utils/energy.js';
+import * as sessionStore from '../store/SessionStore.js';
+import * as homeBattery from '../store/HomeBatteryStore.js';
+import * as weatherStore from '../store/WeatherForecastStore.js';
+import { DEFAULT_BATTERY_SAMPLE_MAX_AGE_MS } from './sessionMonitor.js';
 
 /**
  * Minimum |new raw target − stored target| (EV charge-limit points) before a
@@ -136,4 +152,172 @@ export function evaluateReTarget(input: ReTargetInput): ReTargetVerdict {
     batterySoc > cfg.bufferPercent + RESUME_MIN_RECOVERY_PERCENT;
 
   return { change, newStopTarget, newTeslaLimit, resume, detail };
+}
+
+export interface ReTargeterDeps {
+  db: DatabaseSync;
+  vehicleId: string;
+  autoStart: AutoStartConfig;
+  /** `daemon --dry-run`; live = enabled && !dryRun (the engine's mode mirror). */
+  dryRun: boolean;
+  /** Signed limit raise (live only); the sub-50 case clamps to the Tesla floor. */
+  setChargeLimit: (percent: number) => Promise<void>;
+  /** Signed start for a resumed session (live only). */
+  startCharging: () => Promise<void>;
+  /** Injectable so tests avoid config files; default reads energy config.json. */
+  getEnergyConfig?: () => EnergyConfig | null;
+  /** Low-solar reserve knobs; omitted = adjustment off (step 3 parity). */
+  weatherPolicy?: WeatherPolicy;
+  /** A battery sample older than this reads as missing (monitor parity). */
+  batterySampleMaxAgeMs?: number;
+  log?: (message: string) => void;
+  notify?: (event: NotificationEvent) => Promise<void>;
+}
+
+/** Never lets a notification failure reach the caller (design §3.4). */
+async function emitNotify(deps: ReTargeterDeps, event: NotificationEvent): Promise<void> {
+  if (!deps.notify) return;
+  try {
+    await deps.notify(event);
+  } catch (error) {
+    deps.log?.(
+      `[re-target] notify failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/**
+ * The I/O edge: one call per charging-progress tick, composed BEFORE the
+ * session monitor so a lowered target is enforced in the same tick (the
+ * workplan's seam). Store/config surprise → log-only, never throws (the
+ * poll loop must survive); actuation failure logs every attempt and notifies
+ * once per episode, retrying next tick while the condition persists.
+ */
+export function createReTargeter(
+  deps: ReTargeterDeps
+): (ctx: ChargingProgressContext) => Promise<void> {
+  const getEnergyConfig = deps.getEnergyConfig ?? (() => resolveEnergyConfig().config);
+  const log = deps.log ?? (() => {});
+  let wouldActLogged = false;
+  let failureNotified = false;
+
+  return async (ctx) => {
+    try {
+      const session = sessionStore.openSessionFor(deps.db, deps.vehicleId);
+
+      // Fresh reads every tick, freshness-gated like the monitor: a sample
+      // from before a sleep is as unreadable as none.
+      const sample = homeBattery.latestSample(deps.db);
+      const maxAgeMs = deps.batterySampleMaxAgeMs ?? DEFAULT_BATTERY_SAMPLE_MAX_AGE_MS;
+      const ageMs = sample === null ? null : ctx.tsMs - sample.tsMs;
+      const stale = ageMs !== null && ageMs > maxAgeMs;
+      const batterySoc = sample !== null && !stale ? sample.socPercent : null;
+
+      // Effective config = step-2 observed efficiency + step-3 weather
+      // reserve folded in — the recompute must see the same numbers the
+      // decision engine saw (workplan pointers).
+      const cfg = getEnergyConfig();
+      let energyConfig: EnergyConfig | null = null;
+      if (cfg !== null) {
+        const observed = applyEfficiency(
+          cfg,
+          estimateEfficiency(sessionStore.recentEfficiencySamples(deps.db, EFFICIENCY_FETCH_LIMIT))
+        ).config;
+        const weather = weatherAdjustment(
+          weatherStore.latestVintage(deps.db),
+          ctx.tsMs,
+          deps.weatherPolicy ?? DEFAULT_WEATHER_POLICY
+        );
+        energyConfig =
+          weather !== null
+            ? {
+                ...observed,
+                bufferPercent: Math.min(100, observed.bufferPercent + weather.adjustmentPercent),
+              }
+            : observed;
+      }
+
+      const verdict = evaluateReTarget({
+        chargingState: ctx.chargingState,
+        evSocPercent: ctx.evSocPercent,
+        sessionTargetPercent: session?.targetPercent ?? null,
+        sessionInitialTargetPercent: session?.initialTargetPercent ?? null,
+        sessionStopReason: session?.stopReason ?? null,
+        homeBatterySocPercent: batterySoc,
+        energyConfig,
+      });
+
+      if (verdict.change === 'none' && !verdict.resume) {
+        wouldActLogged = false;
+        failureNotified = false;
+        return;
+      }
+      if (session === null) return; // verdict implies a session; narrows for the writes
+
+      const live = deps.autoStart.enabled && !deps.dryRun;
+      if (!live) {
+        // Shadow mode: identical verdicts, no actuation (merge-dark).
+        if (!wouldActLogged) {
+          wouldActLogged = true;
+          const what = [
+            verdict.change !== 'none' ? `${verdict.change} to ${verdict.newStopTarget}%` : null,
+            verdict.resume ? 'resume' : null,
+          ]
+            .filter(Boolean)
+            .join(' + ');
+          log(
+            `[re-target] would ${what}${verdict.detail ? ` (${verdict.detail})` : ''} — ` +
+              'shadow mode (autoStart disabled or --dry-run), not actuating'
+          );
+        }
+        return;
+      }
+
+      try {
+        // Order mirrors the decision consumer: raise sends the limit first,
+        // then records the target (a partial failure retries cleanly next
+        // tick — the deadband still sees the old stored target), then start.
+        if (verdict.change === 'raise' && verdict.newTeslaLimit !== null) {
+          await deps.setChargeLimit(verdict.newTeslaLimit);
+        }
+        if (verdict.change !== 'none' && verdict.newStopTarget !== null) {
+          sessionStore.setSessionTarget(deps.db, session.id, verdict.newStopTarget, verdict.detail);
+        }
+        if (verdict.resume) {
+          await deps.startCharging();
+        }
+        if (verdict.change !== 'none') {
+          log(`[re-target] ${verdict.detail}`);
+          await emitNotify(deps, {
+            type: 'session-retargeted',
+            tsMs: ctx.tsMs,
+            sessionId: session.id,
+            vehicleId: deps.vehicleId,
+            direction: verdict.change,
+            detail: verdict.detail,
+          });
+        }
+        if (verdict.resume) {
+          log(`[re-target] resumed charging (battery ${batterySoc}%)`);
+        }
+        failureNotified = false;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log(`[re-target] actuation failed: ${message}`);
+        // The condition persists → the next tick retries; notify once per episode.
+        if (!failureNotified) {
+          failureNotified = true;
+          await emitNotify(deps, {
+            type: 'failure',
+            tsMs: ctx.tsMs,
+            component: 're-target',
+            message: `actuation failed: ${message}`,
+          });
+        }
+      }
+    } catch (error) {
+      // Store/config surprise: sampling survives, next tick tries again.
+      log(`[re-target] failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 }

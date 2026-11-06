@@ -154,6 +154,27 @@ describe('formatNotificationEvent', () => {
     );
   });
 
+  it('formats a session retarget with direction arrows', () => {
+    expect(
+      formatNotificationEvent({
+        ...base,
+        type: 'session-retargeted',
+        sessionId: 1,
+        direction: 'raise',
+        detail: 're-target 45% → 63% (solar surplus, battery 70%)',
+      })
+    ).toBe('📈 re-target 45% → 63% (solar surplus, battery 70%)');
+    expect(
+      formatNotificationEvent({
+        ...base,
+        type: 'session-retargeted',
+        sessionId: 1,
+        direction: 'lower',
+        detail: 're-target 59% → 55% (battery 45%)',
+      })
+    ).toBe('📉 re-target 59% → 55% (battery 45%)');
+  });
+
   it('covers every event type exhaustively (compile-time) with one sample each', () => {
     const events: NotificationEvent[] = [
       { ...base, type: 'plug-in-detected', sessionId: 1, evSocPercent: null },
@@ -170,6 +191,7 @@ describe('formatNotificationEvent', () => {
       },
       { ...base, type: 'charging-started', sessionId: 1, evSocPercent: null },
       { ...base, type: 'charging-stopped', sessionId: 1, evSocPercent: null, reason: null },
+      { ...base, type: 'session-retargeted', sessionId: 1, direction: 'raise', detail: 're-target 45% → 63%' },
       { type: 'failure', tsMs: 1, component: 'ev-poll', message: 'boom' },
     ];
     for (const event of events) expect(formatNotificationEvent(event)).not.toBe('');
