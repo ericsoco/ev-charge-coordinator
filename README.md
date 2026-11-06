@@ -494,6 +494,14 @@ never clamped or guessed at):
   scope and a stored home location (`set-home-location`); a missing scope,
   missing home secret, or failed location read **declines loudly** — the
   geofence never silently passes.
+- **Weather reserve (low solar):** when the newest forecast's next-24h daylight
+  integral (shortwave radiation, Wh/m²) falls below `weatherSolarThresholdWhM2`,
+  decisions keep more reserve — the effective buffer becomes `bufferPercent +
+  weatherBufferAdjPercent`, spelled out in the decision's reason line. Both
+  knobs live in `daemon-config.json`; `weatherBufferAdjPercent` defaults to `0`
+  (off — opt in by hand-editing). One-sided: a bright outlook never lowers the
+  base plan; stale (>36h), missing, or thin forecasts are ignored.
+  `charge-from-battery` prints a `Reserve: …` line when it applies.
 - **"Why didn't it charge?"** — `npm run store` prints the recent decisions
   with their reason (`below_buffer`, `filter_declined`, `already_charging`,
   `duplicate_session`, `insufficient_energy`, `service_error`, …), the full
@@ -589,7 +597,7 @@ One-shot and interactive CLI commands. Commands marked with ➡️ are one-shot 
 | `get-ev-bsoc` | Get the current battery state of charge from the EV |
 | `get-battery-soc` | Get the current battery state of charge from the solar battery |
 | `get-charging-state` | Get the EV's charging state, battery level, and charge limit (`charge_state`; does not wake the vehicle — a sleeping car returns HTTP 408 with asleep/offline advice) |
-| `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is shown the computed plan and prompted `Set the EV charge limit to N% and start charging? (y/n)`; declining sends nothing, and a non-TTY run is a no-op that points at the flags; `--start` sets the limit and starts charging without prompting; `--dry-run` calculates and prints BSoC and the computed charge target, without issuing any commands |
+| `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is shown the computed plan and prompted `Set the EV charge limit to N% and start charging? (y/n)`; declining sends nothing, and a non-TTY run is a no-op that points at the flags; `--start` sets the limit and starts charging without prompting; `--dry-run` calculates and prints BSoC and the computed charge target, without issuing any commands; the output names the charge efficiency in effect and, on a low-solar outlook, the weather reserve |
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%); in the REPL the percent may be given inline (`set-ev-charge-limit 80`) or omitted to be prompted for, and `--help` prints the command help |
 | `start-ev-charging` | Start charging the EV |
 | `stop-ev-charging` | Stop charging the EV |

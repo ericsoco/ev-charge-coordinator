@@ -33,6 +33,14 @@ import {
   estimateEfficiency,
   type ObservedEfficiency,
 } from '../utils/efficiency.js';
+import * as weatherStore from '../store/WeatherForecastStore.js';
+import { resolveDaemonConfig } from '../utils/daemonConfig.js';
+import {
+  DEFAULT_WEATHER_POLICY,
+  weatherAdjustment,
+  type WeatherAdjustment,
+  type WeatherPolicy,
+} from '../utils/weather.js';
 
 export async function getEvBatterySoc(ctx: CommandContext): Promise<CommandResult> {
   if (!ctx.tesla?.isAuthenticated()) {
@@ -286,9 +294,51 @@ function observedEfficiencyFor(
   }
 }
 
+/**
+ * Low-solar reserve for the CLI (P1c step 3): the newest vintage from the
+ * same read-only store, the policy from daemon-config.json (injected by
+ * tests). No store, no vintage, or an unreadable anything → null: the base
+ * plan runs and nothing extra is printed.
+ */
+function cliWeatherAdjustment(
+  dbPath?: string,
+  policy?: WeatherPolicy
+): WeatherAdjustment | null {
+  try {
+    const store = dbPath ?? storePath();
+    if (!fs.existsSync(store)) return null;
+    const db = openStoreReadOnly(store);
+    try {
+      const vintage = weatherStore.latestVintage(db);
+      if (vintage.length === 0) return null;
+      const resolved = resolveDaemonConfig().config;
+      const effective: WeatherPolicy =
+        policy ??
+        (resolved !== null
+          ? {
+              ...DEFAULT_WEATHER_POLICY,
+              bufferAdjPercent: resolved.weatherBufferAdjPercent,
+              solarThresholdWhM2: resolved.weatherSolarThresholdWhM2,
+            }
+          : DEFAULT_WEATHER_POLICY);
+      return weatherAdjustment(vintage, Date.now(), effective);
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 export async function chargeFromBattery(
   ctx: CommandContext,
-  options: { start?: boolean; dryRun?: boolean; dbPath?: string } = {}
+  options: {
+    start?: boolean;
+    dryRun?: boolean;
+    dbPath?: string;
+    /** Tests inject the policy; omitted reads daemon-config.json. */
+    weatherPolicy?: WeatherPolicy;
+  } = {}
 ): Promise<CommandResult> {
   if (options.start && options.dryRun) {
     const message = '--start and --dry-run are mutually exclusive';
@@ -323,6 +373,17 @@ export async function chargeFromBattery(
     // Measured efficiency (P1c step 2): overlay first — the math below runs on
     // the observed value, and the clause line reports which one that was.
     const { observed, problem } = observedEfficiencyFor(cfg, options.dbPath);
+    // Weather-adjusted reserve (P1c step 3): same read-only store; no vintage
+    // or an off policy means no adjustment and no extra line.
+    const weather = cliWeatherAdjustment(options.dbPath, options.weatherPolicy);
+    const effBufferPercent =
+      weather !== null
+        ? Math.min(100, cfg.bufferPercent + weather.adjustmentPercent)
+        : cfg.bufferPercent;
+    const weatherNote =
+      weather !== null
+        ? ` — weather +${weather.adjustmentPercent}%: ${weather.detail}`
+        : '';
 
     log(ctx, paint.info('Getting solar battery state...'));
     const batterySoc = await ctx.franklin.getStateOfCharge();
@@ -341,7 +402,11 @@ export async function chargeFromBattery(
       return { ok: false, error: message };
     }
 
-    const limit = computeChargeLimit(evSoc, batterySoc, observed.config);
+    const limit = computeChargeLimit(
+      evSoc,
+      batterySoc,
+      weather !== null ? { ...observed.config, bufferPercent: effBufferPercent } : observed.config
+    );
 
     log(ctx, paint.positive(`Solar Battery: ${batterySoc}% (buffer ${cfg.bufferPercent}%)`));
     log(
@@ -352,6 +417,9 @@ export async function chargeFromBattery(
       )
     );
     log(ctx, paint.info(`Charge efficiency: ${efficiencyClause(observed)}`));
+    if (weather !== null) {
+      log(ctx, paint.info(`Reserve: buffer ${effBufferPercent}%${weatherNote}`));
+    }
     if (problem !== null) {
       log(ctx, paint.warning(problem));
     }
@@ -363,10 +431,10 @@ export async function chargeFromBattery(
         evSoc >= MAX_EV_CHARGE_LIMIT
           ? 'Cannot charge: the EV is already fully charged'
           : limit.batteryAvailableKwh <= 0
-            ? `Not enough energy to charge: the solar battery has no energy above its ${cfg.bufferPercent}% buffer`
+            ? `Not enough energy to charge: the solar battery has no energy above its ${effBufferPercent}% buffer${weatherNote}`
             : `Not enough energy to charge: the solar battery's ` +
-              `${limit.batteryAvailableKwh.toFixed(1)} kWh above its ${cfg.bufferPercent}% buffer ` +
-              `cannot raise the EV charge limit above its current ${evSoc}%`;
+              `${limit.batteryAvailableKwh.toFixed(1)} kWh above its ${effBufferPercent}% buffer ` +
+              `cannot raise the EV charge limit above its current ${evSoc}%${weatherNote}`;
       log(ctx, paint.warning(message));
       return { ok: false, error: message };
     }
