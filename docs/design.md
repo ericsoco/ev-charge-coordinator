@@ -180,8 +180,9 @@ Single SQLite file (WAL) behind repository interfaces (`SampleStore`,
    (the car's own limit would otherwise stop charging first, acutely so in the
    sub-50 case); *lower* = session-target update only (the session monitor
    enforces it at its next tick). Symmetric up/down, hysteresis ≤ ~1 change per
-   20 min (SoC margin to be derived from historical samples when planned),
-   resume charging after a monitor stop once home-battery SoC is sufficient,
+   20 min (SoC margin derived at step-4 planning, 2026-11-05: a 1 EV-point
+   target deadband; resume at buffer + 2% battery), resume charging after a
+   monitor stop once home-battery SoC is sufficient,
    and a notification on every mid-session target change.
 
 ### 3.7 Notifications
