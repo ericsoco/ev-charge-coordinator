@@ -33,6 +33,8 @@ const CONFIG: DaemonConfig = {
   evSamplePluggedSec: 0,
   evSampleIdleSec: 0,
   weatherFetchSec: 3600,
+  weatherBufferAdjPercent: 0,
+  weatherSolarThresholdWhM2: 2000,
   retentionDays: 90,
   notifiers: [{ type: 'log' }],
   autoStart: DEFAULT_DAEMON_CONFIG.autoStart,

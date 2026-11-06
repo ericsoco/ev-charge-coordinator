@@ -51,6 +51,15 @@ export interface DaemonConfig {
   evSampleIdleSec: number;
   /** Weather forecast fetch cadence, seconds. */
   weatherFetchSec: number;
+  /**
+   * Extra house-battery reserve (percent) added to the charge-limit buffer
+   * when the next-24h daylight integral falls below the threshold (design
+   * §3.6.2, P1c step 3). 0 = off — the shipped default, so upgrades never
+   * change behavior; opt in by hand-editing (no CLI setter).
+   */
+  weatherBufferAdjPercent: number;
+  /** Next-24h daylight integral (Wh/m²) below which the outlook counts as low. */
+  weatherSolarThresholdWhM2: number;
   /** Raw-sample retention window in days (the daemon prunes daily). */
   retentionDays: number;
   /** Auto-start decision settings (nested block, validated field-by-field). */
@@ -68,6 +77,8 @@ export const DEFAULT_DAEMON_CONFIG: Readonly<DaemonConfig> = Object.freeze<Daemo
   evSamplePluggedSec: 60,
   evSampleIdleSec: 300,
   weatherFetchSec: 86_400,
+  weatherBufferAdjPercent: 0,
+  weatherSolarThresholdWhM2: 2_000,
   retentionDays: 90,
   autoStart: {
     enabled: false,
@@ -183,6 +194,8 @@ const FIELD_CHECKS: { [K in NumericDaemonField]: (value: number) => string | nul
   evSamplePluggedSec: checkRange(10, 86_400),
   evSampleIdleSec: checkRange(10, 86_400),
   weatherFetchSec: checkRange(60, 604_800),
+  weatherBufferAdjPercent: checkRange(0, 30),
+  weatherSolarThresholdWhM2: checkRange(1, 100_000),
   retentionDays: checkRange(1, 3_650),
 };
 

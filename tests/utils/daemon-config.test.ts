@@ -65,6 +65,9 @@ describe('invalid values refuse loudly (config null, one problem each)', () => {
     ['fractional', '{"evStatusPollSec": 12.5}', /evStatusPollSec = 12\.5 \(must be an integer\)/],
     ['below interval floor', '{"evSamplePluggedSec": 5}', /must be between 10 and 86400/],
     ['below weather floor', '{"weatherFetchSec": 30}', /must be between 60 and 604800/],
+    ['weather adj negative', '{"weatherBufferAdjPercent": -1}', /must be between 0 and 30/],
+    ['weather adj too high', '{"weatherBufferAdjPercent": 31}', /must be between 0 and 30/],
+    ['solar threshold zero', '{"weatherSolarThresholdWhM2": 0}', /must be between 1 and 100000/],
     ['retention out of range', '{"retentionDays": 0}', /retentionDays = 0 \(must be between 1 and 3650\)/],
   ];
   for (const [label, content, pattern] of invalids) {
