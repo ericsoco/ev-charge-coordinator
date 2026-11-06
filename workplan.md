@@ -314,6 +314,32 @@ uses kept (daemonConfig "effective config", system.ts "effective filter").
 observation aggregates (clause wording + `MeasuredEfficiency`).
 Gate: `npm run check` green — **951 passed / 3 skipped** (no count change).
 
+### 2026-11-05 — fix: `npm run store` on a stale store (read-only schema preflight)
+
+`npm run store` crashed with `no such column: target_percent`: the store sat
+at schema **v3** — the daemon (started 2026-11-03 on a pre-step-1 build, the
+only process that calls `openStore`/`migrate`) had never applied 004/005 —
+while the current dist's `SESSION_COLUMNS` expects v5, and the report opens
+read-only (never migrates, by design). **No backfill needed**: 004/005 are
+`ADD COLUMN` and 005's `initial_target_percent` backfill runs inside the
+migration; the user restarted the daemon and the store migrated to v5.
+Fix (user-approved approach B): `openStoreReadOnly` preflights
+`PRAGMA user_version` — behind → the stale-store error with restart guidance,
+ahead → the same newer-build wording `migrate()` used (both extracted as
+shared `staleStoreError`/`newerStoreError`/`readSchemaVersion` helpers so the
+messages cannot drift) — so every reader fails helpfully instead of on a raw
+missing column; read-only stays read-only, the daemon remains the single
+writer. `store-report.mjs` catches the refusal → clean message, exit 1.
+Tests: new `tests/store/legacy-store.ts` fixture (apply `MIGRATIONS` up to N —
+the real shape an older daemon leaves on disk) pins v3 → throws + file
+untouched, bare v0 → refuses without creating tables (re-pin), v999 →
+newer-build refusal, `openStore` migrates v3 → v5 (the restart recovery), the
+**migration-005 backfill** gets its deliberately-v4 store test (armed target
+55 → initial 55, reason NULL — the previously untestable case), and a
+script-spawn regression test against a v3 store (exit 1, restart message, never
+`no such column`). README troubleshooting entry.
+Gate: `npm run check` green — **957 passed / 2 skipped** (5 new tests).
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"

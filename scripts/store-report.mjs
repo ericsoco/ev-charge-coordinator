@@ -44,7 +44,15 @@ if (!fs.existsSync(store.path)) {
   process.exit(1);
 }
 
-const db = store.openReadOnly(store.path);
+let db;
+try {
+  db = store.openReadOnly(store.path);
+} catch (error) {
+  // Stale/newer schema refused by the read-only preflight: say what to do,
+  // never dump a raw SQL error from a diagnostic.
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 const one = (sql) => db.prepare(sql).get();
 const all = (sql) => db.prepare(sql).all();
 const iso = (ts) => (ts === null || ts === undefined ? null : new Date(Number(ts)).toISOString());

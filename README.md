@@ -960,6 +960,15 @@ developer.tesla.com is not enough): revoke the app at
 - If using system keychain fails, credentials will be stored in `~/.ev-charge-coordinator/`
 - Ensure the directory has proper permissions (should be 700)
 
+### `npm run store` fails: "schema version N, but this build expects M"
+
+The store migrates only when the **daemon starts** — CLI readers
+(`npm run store`, `sessions`, `status`) are read-only by design and refuse a
+stale schema with this message instead of crashing on the missing columns.
+Restart the daemon with the current build so `openStore` applies the pending
+migrations, then re-run. No manual SQL or backfill is needed: migrations are
+additive and run automatically.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
