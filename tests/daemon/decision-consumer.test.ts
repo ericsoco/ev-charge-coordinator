@@ -11,6 +11,8 @@ import { openStore } from '../../src/store/database.js';
 import * as decisionStore from '../../src/store/DecisionStore.js';
 import * as sessionStore from '../../src/store/SessionStore.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
+import * as weatherStore from '../../src/store/WeatherForecastStore.js';
+import { DEFAULT_WEATHER_POLICY, type WeatherPolicy } from '../../src/utils/weather.js';
 import { createDecisionConsumer, type DecisionConsumerDeps } from '../../src/daemon/decisionConsumer.js';
 import type { VehiclePlugInContext } from '../../src/daemon/EvPoller.js';
 import type { NotificationEvent } from '../../src/notifiers/types.js';
@@ -461,6 +463,45 @@ describe('measured efficiency (decision audit + math)', () => {
     await consumer(LIVE)(CTX);
     const row = decisionStore.decisionForSession(db, 7)!;
     expect(row.reasonDetail).toContain('efficiency 0.900 (config, no clean sessions yet)');
+  });
+});
+
+describe('weather-adjusted reserve (decision wiring)', () => {
+  const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
+  const POLICY: WeatherPolicy = { ...DEFAULT_WEATHER_POLICY, bufferAdjPercent: 5 };
+
+  function seedLowSolarVintage(): void {
+    const now = Date.now();
+    const rows = Array.from({ length: 48 }, (_, i) => ({
+      hourTsMs: now + i * 3_600_000,
+      irradianceWm2: 25, // 24 window hours × 25 = 600 < 2000 Wh/m²
+      temperatureC: 10,
+    }));
+    weatherStore.insertForecast(db, rows, now);
+  }
+
+  it('applies the adjustment and audits it in reasonDetail', async () => {
+    seedLowSolarVintage();
+    await consumer({ ...LIVE, weatherPolicy: POLICY })(CTX);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonDetail).toContain('8.8 kWh above 25% buffer');
+    expect(row.reasonDetail).toContain('weather +5%: low solar next 24h');
+    expect(commandCalls).toEqual(['setChargeLimit:51', 'startCharging']);
+  });
+
+  it('the default policy (off) ignores the same vintage', async () => {
+    seedLowSolarVintage();
+    await consumer(LIVE)(CTX);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonDetail).toContain('9.4 kWh above 20% buffer');
+    expect(row.reasonDetail).not.toContain('weather +');
+  });
+
+  it('no forecast at all: no adjustment, no mention', async () => {
+    await consumer({ ...LIVE, weatherPolicy: POLICY })(CTX);
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonDetail).toContain('9.4 kWh above 20% buffer');
+    expect(row.reasonDetail).not.toContain('weather +');
   });
 });
 

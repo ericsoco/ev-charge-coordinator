@@ -18,6 +18,7 @@ import {
   type EnergyConfig,
   type EnergyLimitedBy,
 } from '../utils/energy.js';
+import type { WeatherAdjustment } from '../utils/weather.js';
 import { runFilters, type FilterResult } from './filters.js';
 
 /** Everything the engine reads — assembled by the poller chain per plug-in. */
@@ -31,6 +32,8 @@ export interface DecisionInput {
   homeBatterySocPercent: number | null;
   /** Resolved energy config; null = missing/invalid (denies loudly). */
   energyConfig: EnergyConfig | null;
+  /** Low-solar reserve in effect (P1c step 3); null = none. */
+  weather: WeatherAdjustment | null;
   autoStart: AutoStartConfig;
   /** Forced true until actuation lands (step 5); `daemon --dry-run` sets it. */
   dryRun: boolean;
@@ -99,6 +102,18 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
       'energy config.json missing or invalid — cannot verify the battery buffer'
     );
   }
+  // Weather-adjusted reserve (P1c step 3): one-sided — only an adjustment
+  // greater than zero acts, so no edge can ever lower the base plan.
+  const weatherAdj =
+    input.weather && input.weather.adjustmentPercent > 0 ? input.weather : null;
+  const effBufferPercent =
+    weatherAdj !== null
+      ? Math.min(100, cfg.bufferPercent + weatherAdj.adjustmentPercent)
+      : cfg.bufferPercent;
+  const weatherNote =
+    weatherAdj !== null
+      ? ` — weather +${weatherAdj.adjustmentPercent}%: ${weatherAdj.detail}`
+      : '';
   if (input.homeBatterySocPercent === null) {
     return declined(
       'config_error',
@@ -107,10 +122,13 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
   }
   const batterySoc = input.homeBatterySocPercent;
   // Equality = below: at exactly the buffer, energy.ts computes 0 available kWh.
-  if (batterySoc <= cfg.bufferPercent) {
+  if (batterySoc <= effBufferPercent) {
     return declined(
       'below_buffer',
-      `home battery ${batterySoc}% is at or below the ${cfg.bufferPercent}% buffer`
+      `home battery ${batterySoc}% is at or below the ${effBufferPercent}% buffer` +
+        (weatherAdj !== null
+          ? ` (${cfg.bufferPercent}% base + ${weatherAdj.adjustmentPercent}% weather)`
+          : '')
     );
   }
 
@@ -143,7 +161,7 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
 
   let limit: EnergyChargeLimit;
   try {
-    limit = computeChargeLimit(evSoc, batterySoc, cfg);
+    limit = computeChargeLimit(evSoc, batterySoc, { ...cfg, bufferPercent: effBufferPercent });
   } catch (error) {
     return declined(
       'compute_error',
@@ -160,7 +178,7 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
       'insufficient_energy',
       `energy math cannot raise the limit above the EV's current ${evSoc}% ` +
         `(target ${limit.targetPercent}%, ` +
-        `${limit.batteryAvailableKwh.toFixed(1)} kWh above ${cfg.bufferPercent}% buffer)`,
+        `${limit.batteryAvailableKwh.toFixed(1)} kWh above ${effBufferPercent}% buffer${weatherNote})`,
       chain.results
     );
   }
@@ -169,7 +187,7 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
   const why = input.autoStart.enabled ? 'dry-run mode' : 'autoStart disabled';
   const math =
     `charge limit ${limit.targetPercent}% (${limit.limitedBy}) — ` +
-    `${limit.batteryAvailableKwh.toFixed(1)} kWh above ${cfg.bufferPercent}% buffer`;
+    `${limit.batteryAvailableKwh.toFixed(1)} kWh above ${effBufferPercent}% buffer${weatherNote}`;
   return {
     accepted,
     dryRun,

@@ -90,9 +90,73 @@ P2: monitoring system functionality; more for the developer than the end-user.
 - [P2] Decision history (collapsed list; load last N then paginate)
 - [P2] Events history (same)
 
+
+
+# Prompt
+The changes described here represent the first step toward a user-facing graphical UX.
+Therefore, there are two steps: set up the overall UX application, and then build
+the initial content within it (charts providing observability of collected data).
+
+## 1. User-facing graphical application
+### 1a. Application shell
+Render a responsive layout that will work on mobile devices of various resolutions
+and aspect ratios, and also on a desktop browser. Prioritize mobile views, in portrait mode,
+but also ensure the mobile layout works when the device is rotated to landscape mode.
+
+### 1b. Technology choice
+Create the application using modern Web technologies.
+Prioritize, in order (highest to lowest):
+* Page load performance, especially on mobile devices
+* Interaction performance, especially on mobile devices
+* Small bundle size
+* Compatibility with charting libraries evaluated in charts-research.md
+* Familiarity to modern Web developers
+* Code legibility and extensibility
+
+Offer multiple technical approaches for me to choose from, with pros and cons of each.
+I'm leaning toward Svelte.
+
+### 1c. Layout / navigation
+Use a standard mobile navigation paradigm, with top-level navigation via labeled
+icon buttons within thumb reach. For responsive layouts on larger viewports,
+follow Material Design guidelines for Scaling and Adaptation:
+https://m2.material.io/components/bottom-navigation#behavior
+
+### 1d. Styling
+For navigation elements, leverage modern device-native styling, but simplified.
+E.g. avoid complex Liquid Glass-style refraction; favor subtle transparency and flat design instead.
+For interactive elements generally, leverage Material 3 Expressive concepts;
+if we choose Svelte, [Noph UI](noph.dev) seems like the right choice.
+
+## 2. Application tabs
+The application will have two tabs: Current state monitor and History. There may be more in the future.
+These tabs will be accessible to the user via the navigation specified above in 1c.
+There may be more tabs in the future, but for now we'll have two:
+
+### 2a. Current state monitor
+The first application tab. Label it "Now".
+Displays the current state of the vehicle and home battery, and information
+about any active charging session. I'll play a more direct role in designing
+this tab, so for now just propose a simple big number display for EV + home
+battery SoC and a brief text message describing current charging session.
+
+### 2b. History
+The second application tab. Label it "Then".
+Displays a dashboard of time-series charts and dropdowns that provide a view
+into data in our stores, to help the user understand the functioning of the system.
+
+#### Charts
+
+TODO NEXT:
+* need to see what's stored for weather, why does `npm run store` show nothing?
+* `npm run store` currently fails, looks like we need to run a backfill to add
+  new target_percent column from the last changeset (Step 2)?
+
+
 Questions + ideas to add to prompt:
 - How to handle time scales? continuous zoomable line chart? amcharts does this so well...how to emulate with echarts...?
 - Layout must rotate along with phone -- horizontal aspect ratio is best way to view time series charts
 - Weather icons (sun, cloud, moon, etc) are more legible + familiar than something displaying solar irradiance.
   OpenMeteo should pull this data too, to display as icons evenly across the top of P1 I/O chart;
   also, underlay these with a gradient band representing solar irradiance.
+

@@ -17,6 +17,8 @@ import type { ResolvedEnergyConfig } from '../../src/utils/config.js';
 import type { EnergyConfig } from '../../src/utils/energy.js';
 import { openStore } from '../../src/store/database.js';
 import * as sessionStore from '../../src/store/SessionStore.js';
+import * as weatherStore from '../../src/store/WeatherForecastStore.js';
+import { DEFAULT_WEATHER_POLICY } from '../../src/utils/weather.js';
 import {
   chargeFromBattery,
   getBatterySoc,
@@ -669,6 +671,81 @@ describe('chargeFromBattery', () => {
       expect(calls.setChargeLimit[0]).toEqual([66]);
       expect(out.join('\n')).toContain('session store unreadable');
       expect(out.join('\n')).toContain('efficiency 0.900 (config');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('weather-adjusted reserve raises the buffer and prints the clause', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-cfb-weather-'));
+    try {
+      const dbPath = path.join(dir, 'data.sqlite');
+      const db = openStore(dbPath);
+      const now = Date.now();
+      // 24 window hours × 25 W/m² = 600 < 2000 Wh/m² → low-solar outlook
+      weatherStore.insertForecast(
+        db,
+        Array.from({ length: 48 }, (_, i) => ({
+          hourTsMs: now + i * 3_600_000,
+          irradianceWm2: 25,
+          temperatureC: 10,
+        })),
+        now
+      );
+      db.close();
+
+      const { ctx, out, calls } = makeContext({
+        franklin: { getStateOfCharge: async () => 90 },
+        buffer: 20,
+      });
+      const result = await chargeFromBattery(ctx, {
+        start: true,
+        dbPath,
+        weatherPolicy: { ...DEFAULT_WEATHER_POLICY, bufferAdjPercent: 5 },
+      });
+
+      expect(result.ok).toBe(true);
+      // eff buffer 25: 8.775 kWh available (base-20 math would show 9.4)
+      expect(out.join('\n')).toContain('Battery available: 8.8 kWh');
+      expect(out.join('\n')).toContain(
+        'Reserve: buffer 25% — weather +5%: low solar next 24h (600 < 2000 Wh/m²)'
+      );
+      expect(calls.setChargeLimit[0]).toEqual([66]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('off policy: the same vintage prints no Reserve line', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-cfb-weather-off-'));
+    try {
+      const dbPath = path.join(dir, 'data.sqlite');
+      const db = openStore(dbPath);
+      const now = Date.now();
+      weatherStore.insertForecast(
+        db,
+        Array.from({ length: 48 }, (_, i) => ({
+          hourTsMs: now + i * 3_600_000,
+          irradianceWm2: 25,
+          temperatureC: 10,
+        })),
+        now
+      );
+      db.close();
+
+      const { ctx, out } = makeContext({
+        franklin: { getStateOfCharge: async () => 90 },
+        buffer: 20,
+      });
+      const result = await chargeFromBattery(ctx, {
+        start: true,
+        dbPath,
+        weatherPolicy: DEFAULT_WEATHER_POLICY, // explicit off: never read the real daemon-config
+      });
+
+      expect(result.ok).toBe(true);
+      expect(out.join('\n')).toContain('Battery available: 9.4 kWh');
+      expect(out.join('\n')).not.toContain('Reserve:');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -28,6 +28,7 @@ import { createNotifierFanout } from '../notifiers/fanout.js';
 import { createFailureThrottle } from '../notifiers/throttle.js';
 import type { Notifier } from '../notifiers/types.js';
 import { createWeatherSampler, type FetchForecast } from './WeatherSampler.js';
+import { DEFAULT_WEATHER_POLICY } from '../utils/weather.js';
 import { clearRuntimeState, readRuntimeState, writeRuntimeState } from '../services/ProcessManager.js';
 
 export interface RunDaemonOptions {
@@ -194,6 +195,11 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
       vehicleId,
       homeBatteryId,
       autoStart: options.config.autoStart,
+      weatherPolicy: {
+        ...DEFAULT_WEATHER_POLICY,
+        bufferAdjPercent: options.config.weatherBufferAdjPercent,
+        solarThresholdWhM2: options.config.weatherSolarThresholdWhM2,
+      },
       dryRun: options.dryRun ?? false,
       getStatus: () => tesla.getStatus(),
       chargeCommands: {
