@@ -49,7 +49,7 @@
 
 ## P1c — intelligence (active plan)
 
-> Status: **Steps 1–2 complete (2026-11-04); steps 3–5 not started.** Design basis:
+> Status: **Steps 1–3 complete (2026-11-05); steps 4–5 not started.** Design basis:
 > [design.md](./docs/design.md) §3.4 (actuator + session monitor), §3.6 (intelligence
 > inputs), §5 (phasing). Product basis: [requirements.md](./docs/requirements.md) Oct 10
 > (sub-50% stop-at-target) + the battery-buffer evolution note above. Each step below is a
@@ -122,6 +122,23 @@ end sessions.
    (design §3.6.2). Pure policy module + config knobs; inputs flow through
    `DecisionInput`/`engine.ts` so `decisions.reason_detail` shows the adjustment
    (auditability, consistent with P1b). Policy shape is an open decision below.
+   *(Branch `p1c/step3-weather-limits` — **complete** (2026-11-05); decision
+   below. (1) pure `src/utils/weather.ts`: next-24h daylight integral
+   (daylight = irradiance > 0, timezone-free) + `weatherAdjustment`, null on
+   every no-op path (default-0 off-switch, >36h stale vintage, <18 of 24
+   hourly rows, outlook not low); (2) daemon-config knobs
+   `weatherBufferAdjPercent` (0–30, default **0 = off**) +
+   `weatherSolarThresholdWhM2` (1–100000, default 2000), `DecisionInput.weather`,
+   engine folds it in once — one-sided (non-positive ignored), effBuffer drives
+   the `below_buffer` interlock with `(base + weather)` wording and feeds
+   `computeChargeLimit` so target/`limitedBy`/`stopTargetPercent` follow, and
+   `reason_detail` gains ` — weather +N%: detail`; decisionConsumer fetches
+   `latestVintage()` → policy at the edge, runDaemon plumbs the knobs;
+   (3) `charge-from-battery` prints `Reserve: buffer 25% — weather +5%: …` and
+   computes on the adjusted buffer (`options.weatherPolicy` injected in tests;
+   the daemon-config policy is read only when a vintage exists, so NO_STORE
+   tests never touch the real file). Known limitation: Wh/m² is a site-level
+   proxy — no PV tilt/efficiency model, threshold tuned against the proxy.)*
 4. **Solar-surplus re-targeting** *(user 2026-11-03; future goal — not enabled until
    picked up; design.md §3.6.4)*. When sun charges the house battery mid-session, energy
    above the original plan appears: recompute the charge limit from the **latest**
@@ -160,6 +177,10 @@ end sessions.
     - **Observed efficiency (step 2):** the recompute runs on the measured
       overlay — fetch → estimate → apply from `src/utils/efficiency.ts`, never
       the raw config value (the same path the decision consumer uses).
+    - **Weather reserve (step 3):** likewise the recompute uses the effective
+      buffer (base + low-solar adjustment) — reuse the `latestVintage()` →
+      `weatherAdjustment` path from `src/utils/weather.ts`, never the raw
+      `bufferPercent`.
 5. **Live validation + docs** — exercise all of the above against the car/house; README
    intelligence section; workplan Log entries.
 
@@ -188,9 +209,18 @@ test → day-of-week/seasonal baselines without waiting months for local history
   at **≥ 5 clean samples**; below the gate `chargeEfficiency` stays the fallback.
   Policy constants live in the pure module; no daemon-config knobs.
 
+**Decided (2026-11-05, user):**
+- **Weather policy (step 3): Option A — binary threshold, start simple.** The
+  next-24h daylight integral (shortwave Wh/m²) below `weatherSolarThresholdWhM2`
+  raises the buffer by `weatherBufferAdjPercent` (default **0 = off**, hand-edit
+  to opt in). One-sided (never lowers the base plan); window = next 24h from
+  decision time, daylight hours only; stale (>36h), missing, or thin (<18 of 24
+  hourly rows) forecasts are ignored. **Future refinements, not built now:**
+  option B — graded integral (adjustment scaled continuously below the
+  threshold); option C — percentile vs stored past vintages (self-calibrating,
+  no magic energy constant; would need a min-vintages gate like step 2's).
+
 **Pending (user, at step pickup):**
-- **Weather policy:** simple rule (e.g. reserve +N% buffer on low-solar days) vs. computed
-  forecast integral — start simple?
 - **Backfill spike:** in scope for P1c or deferred to a later phase?
 
 ### ⚠️ Reminder — end of planning phase
@@ -313,6 +343,29 @@ uses kept (daemonConfig "effective config", system.ts "effective filter").
 `measured` labels unchanged — they name the per-session ratio that the
 observation aggregates (clause wording + `MeasuredEfficiency`).
 Gate: `npm run check` green — **951 passed / 3 skipped** (no count change).
+
+### 2026-11-05 — P1c step 3 complete: weather-adjusted limits (3 commits)
+
+Branch `p1c/step3-weather-limits`. Policy decision (user): **Option A — binary
+threshold, start simple** (B/C recorded above as future refinements). (1) pure
+`src/utils/weather.ts`: next-24h daylight integral (daylight = irradiance > 0,
+timezone-free) + `weatherAdjustment`, null on every no-op path (default-0
+off-switch, >36h stale vintage, <18/24 window coverage, outlook not low);
+(2) daemon-config knobs `weatherBufferAdjPercent` (0–30, default **0 = off**) +
+`weatherSolarThresholdWhM2` (1–100000, default 2000), `DecisionInput.weather`,
+engine folds it in **once** (one-sided — non-positive ignored; effBuffer drives
+the `below_buffer` interlock with `(base + weather)` wording and feeds
+`computeChargeLimit` so target/`limitedBy`/`stopTargetPercent` all follow;
+`reason_detail` gains ` — weather +N%: detail`), decisionConsumer fetches
+`latestVintage()` → pure policy at the edge (clock at the edge), runDaemon
+plumbs the knobs; (3) `charge-from-battery` prints
+`Reserve: buffer 25% — weather +5%: …` and computes on the adjusted buffer —
+`options.weatherPolicy` injected in tests, and the daemon-config policy is read
+only when a vintage exists, so NO_STORE tests never touch the real file.
+README (auto-start bullet + command-table line) and this entry. Known
+limitation recorded: Wh/m² is a site-level proxy (no PV tilt/efficiency
+model); the threshold is tuned against the proxy.
+Gate: `npm run check` green — **971 passed / 3 skipped** (12 new).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
