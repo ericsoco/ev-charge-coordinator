@@ -31,7 +31,7 @@ import {
   applyEfficiency,
   efficiencyClause,
   estimateEfficiency,
-  type EffectiveEfficiency,
+  type ObservedEfficiency,
 } from '../utils/efficiency.js';
 
 export async function getEvBatterySoc(ctx: CommandContext): Promise<CommandResult> {
@@ -256,12 +256,12 @@ async function confirmStartNow(ctx: CommandContext, targetPercent: number): Prom
  * daemon (never migrates). Missing or unreadable history falls back to the
  * config — the printed clause always says which value shaped the math.
  */
-function effectiveEfficiencyFor(
+function observedEfficiencyFor(
   cfg: EnergyConfig,
   dbPath?: string
-): { effective: EffectiveEfficiency; problem: string | null } {
+): { observed: ObservedEfficiency; problem: string | null } {
   const fallback = (problem: string | null) => ({
-    effective: applyEfficiency(cfg, { efficiency: null, samples: 0 }),
+    observed: applyEfficiency(cfg, { efficiency: null, samples: 0 }),
     problem,
   });
   try {
@@ -270,7 +270,7 @@ function effectiveEfficiencyFor(
     const db = openStoreReadOnly(store);
     try {
       return {
-        effective: applyEfficiency(
+        observed: applyEfficiency(
           cfg,
           estimateEfficiency(recentEfficiencySamples(db, EFFICIENCY_FETCH_LIMIT))
         ),
@@ -321,8 +321,8 @@ export async function chargeFromBattery(
     if ('error' in outcome) return { ok: false, error: outcome.error };
     const cfg = outcome.config;
     // Measured efficiency (P1c step 2): overlay first — the math below runs on
-    // the effective value, and the clause line reports which one that was.
-    const { effective, problem } = effectiveEfficiencyFor(cfg, options.dbPath);
+    // the observed value, and the clause line reports which one that was.
+    const { observed, problem } = observedEfficiencyFor(cfg, options.dbPath);
 
     log(ctx, paint.info('Getting solar battery state...'));
     const batterySoc = await ctx.franklin.getStateOfCharge();
@@ -341,7 +341,7 @@ export async function chargeFromBattery(
       return { ok: false, error: message };
     }
 
-    const limit = computeChargeLimit(evSoc, batterySoc, effective.config);
+    const limit = computeChargeLimit(evSoc, batterySoc, observed.config);
 
     log(ctx, paint.positive(`Solar Battery: ${batterySoc}% (buffer ${cfg.bufferPercent}%)`));
     log(
@@ -351,7 +351,7 @@ export async function chargeFromBattery(
           `EV now: ${limit.evCurrentKwh.toFixed(1)} kWh -> target ${limit.targetPercent}%`
       )
     );
-    log(ctx, paint.info(`Charge efficiency: ${efficiencyClause(effective)}`));
+    log(ctx, paint.info(`Charge efficiency: ${efficiencyClause(observed)}`));
     if (problem !== null) {
       log(ctx, paint.warning(problem));
     }

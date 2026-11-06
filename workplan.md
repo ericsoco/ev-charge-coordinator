@@ -157,7 +157,7 @@ end sessions.
      intermediate targets are irrelevant by construction (recompute from current state —
      state-based, not delta-based); the resume path covers a car that stopped at the old
      target while the daemon slept.
-    - **Effective efficiency (step 2):** the recompute runs on the measured
+    - **Observed efficiency (step 2):** the recompute runs on the measured
       overlay — fetch → estimate → apply from `src/utils/efficiency.ts`, never
       the raw config value (the same path the decision consumer uses).
 5. **Live validation + docs** — exercise all of the above against the car/house; README
@@ -302,6 +302,17 @@ warning + config fallback), `options.dbPath` for tests with every existing call
 pinned to a `NO_STORE` path so the real store is never read; README config note
 + stale "subject to refinement" line updated; this entry.
 Gate: `npm run check` green — **951 passed / 3 skipped** (20 new).
+
+### 2026-11-04 — step 2 follow-up: label rename "effective" → "observed"
+
+User: "effective" is ambiguous — the scalar is derived from our observations.
+Renamed `EffectiveEfficiency` → `ObservedEfficiency`, `effectiveEfficiencyFor`
+→ `observedEfficiencyFor`, all `effective` locals/params → `observed`, the
+step-4 bullet label above, and the `charge-from-battery` comment. Unrelated
+uses kept (daemonConfig "effective config", system.ts "effective filter").
+`measured` labels unchanged — they name the per-session ratio that the
+observation aggregates (clause wording + `MeasuredEfficiency`).
+Gate: `npm run check` green — **951 passed / 3 skipped** (no count change).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 

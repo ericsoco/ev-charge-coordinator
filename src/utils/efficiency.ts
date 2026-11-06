@@ -83,7 +83,7 @@ export function estimateEfficiency(
   return { efficiency: ev / house, samples: window.length };
 }
 
-export interface EffectiveEfficiency {
+export interface ObservedEfficiency {
   /** The config with `chargeEfficiency` overridden when the estimate exists. */
   config: EnergyConfig;
   source: 'measured' | 'config';
@@ -94,7 +94,7 @@ export interface EffectiveEfficiency {
 export function applyEfficiency(
   cfg: EnergyConfig,
   measured: MeasuredEfficiency
-): EffectiveEfficiency {
+): ObservedEfficiency {
   if (measured.efficiency === null) {
     return { config: cfg, source: 'config', measured };
   }
@@ -112,10 +112,10 @@ export function applyEfficiency(
  * two can never drift (PR #62's DRY lesson).
  */
 export function efficiencyClause(
-  effective: EffectiveEfficiency,
+  observed: ObservedEfficiency,
   policy: EfficiencyPolicy = DEFAULT_EFFICIENCY_POLICY
 ): string {
-  const { config, source, measured } = effective;
+  const { config, source, measured } = observed;
   if (source === 'measured' && measured.efficiency !== null) {
     return `efficiency ${measured.efficiency.toFixed(3)} (measured, ${measured.samples} sessions)`;
   }
