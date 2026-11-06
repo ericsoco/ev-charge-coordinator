@@ -10,6 +10,8 @@ FEATURES
 [ ] Base charge amount on:
     [ ] Solar battery historical usage (average / seasonal / day of week) -- build local record over time and/or try to find an API?
     [ ] weather forecast (solar irradiation)
+        [ ] start with simple threshold: if irradiance is < threshold, raise home battery buffer a fixed amount
+        [ ] refine logic to map various amounts of (forecast) irradiance to various buffer adjustments (may not be linear)
     [ ] projected amount of battery storage accrued during EV charging session (based on both of the above)
     [ ] TOU pricing (should be irrelevant if only pulling from battery, but give it some thought)
     [ ] Related -- Franklin poller needs to observe not just battery level but also
