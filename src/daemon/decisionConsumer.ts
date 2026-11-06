@@ -20,7 +20,14 @@ import {
   efficiencyClause,
   estimateEfficiency,
 } from '../utils/efficiency.js';
+import {
+  DEFAULT_WEATHER_POLICY,
+  weatherAdjustment,
+  type WeatherAdjustment,
+  type WeatherPolicy,
+} from '../utils/weather.js';
 import * as decisionStore from '../store/DecisionStore.js';
+import * as weatherStore from '../store/WeatherForecastStore.js';
 import * as sessionStore from '../store/SessionStore.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
 import { evaluateDecision } from './engine.js';
@@ -40,6 +47,8 @@ export interface DecisionConsumerDeps {
   vehicleId: string;
   homeBatteryId: string;
   autoStart: AutoStartConfig;
+  /** Low-solar reserve knobs (P1c step 3); omitted = adjustment off. */
+  weatherPolicy?: WeatherPolicy;
   /**
    * `daemon --dry-run`; the engine derives the mode (dry = !enabled || flag).
    * Dry records the verdict without actuating.
@@ -136,6 +145,14 @@ export function createDecisionConsumer(
                 sessionStore.recentEfficiencySamples(deps.db, EFFICIENCY_FETCH_LIMIT)
               )
             );
+      // Weather-adjusted reserve (P1c step 3): newest vintage → pure policy;
+      // the clock lives at this edge, the engine only applies the verdict.
+      const weather: WeatherAdjustment | null = weatherAdjustment(
+        weatherStore.latestVintage(deps.db),
+        Date.now(),
+        deps.weatherPolicy ?? DEFAULT_WEATHER_POLICY
+      );
+
       let outcome = evaluateDecision({
         sessionAlreadyDecided,
         event: ctx.event,
@@ -144,6 +161,7 @@ export function createDecisionConsumer(
         evSocPercent: ctx.evSocPercent,
         homeBatterySocPercent: homeBattery.latestSample(deps.db)?.socPercent ?? null,
         energyConfig: observed?.config ?? null,
+        weather,
         autoStart: deps.autoStart,
         dryRun: deps.dryRun,
         home,

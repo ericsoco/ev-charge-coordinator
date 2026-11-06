@@ -27,9 +27,48 @@ function input(overrides: Partial<DecisionInput> = {}): DecisionInput {
     dryRun: false,
     home: null,
     vehicleLocation: null,
+    weather: null,
     ...overrides,
   };
 }
+
+describe('weather-adjusted reserve (P1c step 3)', () => {
+  const WEATHER = { adjustmentPercent: 5, detail: 'low solar next 24h (600 < 2000 Wh/m²)' };
+
+  it('raises the buffer in the math and audits it in reasonDetail', () => {
+    const outcome = evaluateDecision(input({ weather: WEATHER }));
+    expect(outcome.accepted).toBe(true);
+    expect(outcome.reasonDetail).toContain('8.8 kWh above 25% buffer');
+    expect(outcome.reasonDetail).toContain(
+      ' — weather +5%: low solar next 24h (600 < 2000 Wh/m²)'
+    );
+  });
+
+  it('the interlock uses the adjusted buffer, naming base and weather', () => {
+    const outcome = evaluateDecision(input({ weather: WEATHER, homeBatterySocPercent: 22 }));
+    expect(outcome).toMatchObject({ accepted: false, reasonCode: 'below_buffer' });
+    expect(outcome.reasonDetail).toBe(
+      'home battery 22% is at or below the 25% buffer (20% base + 5% weather)'
+    );
+    // Same SoC without weather clears the 20% base buffer and would start
+    // (Tesla's 50% floor lifts the raw 40.3%) — the adjustment is what stops it.
+    expect(evaluateDecision(input({ homeBatterySocPercent: 22 })).reasonCode).toBe('started');
+  });
+
+  it('null weather leaves the base plan untouched', () => {
+    const outcome = evaluateDecision(input({ weather: null }));
+    expect(outcome.reasonDetail).toContain('9.4 kWh above 20% buffer');
+    expect(outcome.reasonDetail).not.toContain('weather +');
+  });
+
+  it('a non-positive adjustment is ignored (one-sided guarantee)', () => {
+    const outcome = evaluateDecision(
+      input({ weather: { adjustmentPercent: -5, detail: 'sunny' } })
+    );
+    expect(outcome.reasonDetail).toContain('9.4 kWh above 20% buffer');
+    expect(outcome.reasonDetail).not.toContain('weather +');
+  });
+});
 
 describe('interlocks', () => {
   it('duplicate_session short-circuits before any filter runs', () => {
