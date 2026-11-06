@@ -145,3 +145,14 @@ export function computeChargeLimit(
 
   return { batteryAvailableKwh, evCurrentKwh, evTargetKwh, targetPercent, limitedBy, rawPercent };
 }
+
+/**
+ * The SoC at which the session monitor must stop for this limit: the
+ * unclamped `rawPercent` floored when Tesla's 50% floor masked a lower
+ * computed target, else the limit itself (the car enforces it; our stop is
+ * the backstop). Shared by the plug-in engine and the mid-session
+ * re-targeter (P1c step 4) so both derive it identically.
+ */
+export function stopTargetFor(limit: EnergyChargeLimit): number {
+  return limit.limitedBy === 'tesla-minimum' ? Math.floor(limit.rawPercent) : limit.targetPercent;
+}
