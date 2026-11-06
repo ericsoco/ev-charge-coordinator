@@ -12,6 +12,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import { openStore, openStoreReadOnly } from '../../src/store/database.js';
+import { CURRENT_SCHEMA_VERSION } from '../../src/store/migrations/index.js';
+import { makeLegacyStoreAt } from './legacy-store.js';
 import * as ev from '../../src/store/EvStore.js';
 
 let dir: string;
@@ -60,18 +62,53 @@ it('rejects writes with a readonly error', () => {
   }
 });
 
-it('never migrates: a schema-less file stays schema-less', () => {
+it('refuses a schema-less file without creating tables or a version', () => {
   // A bare file with no tables and no schema version.
   const bare = new DatabaseSync(dbPath);
   bare.close();
 
-  const reader = openStoreReadOnly(dbPath);
+  expect(() => openStoreReadOnly(dbPath)).toThrow(/schema version 0/);
+
+  const check = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const tables = reader
+    const version = check.prepare('PRAGMA user_version').get() as { user_version: number };
+    expect(Number(version.user_version)).toBe(0);
+    const tables = check
       .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table'")
       .get() as { n: number | bigint };
     expect(Number(tables.n)).toBe(0);
   } finally {
-    reader.close();
+    check.close();
   }
+});
+
+it('refuses a stale schema with restart guidance, writing nothing', () => {
+  makeLegacyStoreAt(dbPath, 3);
+
+  expect(() => openStoreReadOnly(dbPath)).toThrow(
+    new RegExp(
+      `schema version 3, but this build expects ${CURRENT_SCHEMA_VERSION}.*` +
+        `daemon applies migrations when it starts`,
+      's'
+    )
+  );
+
+  // The refusal is read-only: still v3, still without the step-1 columns.
+  const check = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const version = check.prepare('PRAGMA user_version').get() as { user_version: number };
+    expect(Number(version.user_version)).toBe(3);
+    const columns = check.prepare('PRAGMA table_info(sessions)').all() as { name: string }[];
+    expect(columns.some((column) => column.name === 'target_percent')).toBe(false);
+  } finally {
+    check.close();
+  }
+});
+
+it('refuses a store written by a newer build', () => {
+  const newer = new DatabaseSync(dbPath);
+  newer.exec('PRAGMA user_version = 999');
+  newer.close();
+
+  expect(() => openStoreReadOnly(dbPath)).toThrow(/newer than this build/);
 });

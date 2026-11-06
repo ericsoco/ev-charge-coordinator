@@ -17,6 +17,30 @@ export function storePath(): string {
   return path.join(getConfigDir(), 'data.sqlite');
 }
 
+/** The file's schema version (PRAGMA user_version). */
+function readSchemaVersion(db: DatabaseSync): number {
+  const row = db.prepare('PRAGMA user_version').get() as {
+    user_version: number | bigint;
+  };
+  return Number(row.user_version);
+}
+
+function newerStoreError(dbPath: string, current: number): Error {
+  return new Error(
+    `Store ${dbPath} has schema version ${current}, newer than this build ` +
+      `understands (${CURRENT_SCHEMA_VERSION}). Upgrade the app or point ` +
+      `ECC_CONFIG_DIR at the right store.`
+  );
+}
+
+function staleStoreError(dbPath: string, current: number): Error {
+  return new Error(
+    `Store ${dbPath} is at schema version ${current}, but this build expects ` +
+      `${CURRENT_SCHEMA_VERSION}. The daemon applies migrations when it starts — ` +
+      `run it once with this build, then retry.`
+  );
+}
+
 /**
  * Apply every pending migration, in order, each in its own transaction.
  *
@@ -25,17 +49,10 @@ export function storePath(): string {
  * - a migration throws → rolled back, rethrown with the store path, file closed.
  */
 function migrate(db: DatabaseSync, dbPath: string): void {
-  const row = db.prepare('PRAGMA user_version').get() as {
-    user_version: number | bigint;
-  };
-  const current = Number(row.user_version);
+  const current = readSchemaVersion(db);
 
   if (current > CURRENT_SCHEMA_VERSION) {
-    throw new Error(
-      `Store ${dbPath} has schema version ${current}, newer than this build ` +
-        `understands (${CURRENT_SCHEMA_VERSION}). Upgrade the app or point ` +
-        `ECC_CONFIG_DIR at the right store.`
-    );
+    throw newerStoreError(dbPath, current);
   }
 
   for (const migration of MIGRATIONS) {
@@ -77,11 +94,21 @@ export function openStore(dbPath: string = storePath()): DatabaseSync {
  * Read-only connection for CLI commands: never migrates, cannot write (a
  * write attempt rejects with SQLITE_READONLY — verified in tests).
  * Throws if the file does not exist; callers surface the "run the daemon
- * first" wording.
+ * first" wording. A store whose schema is behind this build is refused with
+ * the restart guidance — readers must fail helpfully instead of on a raw
+ * missing column, and must never quietly run a migration a read-only open
+ * promised not to run.
  */
 export function openStoreReadOnly(dbPath: string = storePath()): DatabaseSync {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   db.exec('PRAGMA busy_timeout = 5000');
+  const current = readSchemaVersion(db);
+  if (current !== CURRENT_SCHEMA_VERSION) {
+    db.close();
+    throw current < CURRENT_SCHEMA_VERSION
+      ? staleStoreError(dbPath, current)
+      : newerStoreError(dbPath, current);
+  }
   return db;
 }
 

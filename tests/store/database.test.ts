@@ -12,6 +12,7 @@ import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import { openStore, storePath, withTransaction } from '../../src/store/database.js';
 import { CURRENT_SCHEMA_VERSION } from '../../src/store/migrations/index.js';
+import { makeLegacyStoreAt } from './legacy-store.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 
 let dir: string;
@@ -120,6 +121,52 @@ describe('openStore', () => {
           )
           .run()
       ).toThrow(/CHECK constraint failed/);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('legacy stores (stale-schema recovery)', () => {
+  it('openStore migrates a stale store forward to the current schema', () => {
+    makeLegacyStoreAt(dbPath, 3);
+
+    const db = openStore(dbPath);
+    try {
+      expect(pragma(db, 'user_version')).toBe(CURRENT_SCHEMA_VERSION);
+      const names = (db.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]).map(
+        (column) => column.name
+      );
+      expect(names).toContain('target_percent');
+      expect(names).toContain('initial_target_percent');
+      expect(names).toContain('target_change_reason');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('migration 005 backfills initial_target_percent from an armed target', () => {
+    // v4: the step-1 columns exist, the changeset-8 pair does not yet — the
+    // deliberately-old store this backfill was written for but never tested on.
+    makeLegacyStoreAt(dbPath, 4);
+    const legacy = new DatabaseSync(dbPath);
+    legacy
+      .prepare(
+        `INSERT INTO sessions (site_id, vehicle_id, home_battery_id, plug_ts_ms, target_percent)
+         VALUES ('home', 'VIN-TEST', 'GW-TEST', 1000, 55)`
+      )
+      .run();
+    legacy.close();
+
+    const db = openStore(dbPath);
+    try {
+      const row = db
+        .prepare(
+          'SELECT target_percent AS target, initial_target_percent AS initial, ' +
+            'target_change_reason AS reason FROM sessions'
+        )
+        .get();
+      expect(row).toEqual({ target: 55, initial: 55, reason: null });
     } finally {
       db.close();
     }
