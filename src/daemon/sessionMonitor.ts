@@ -108,7 +108,7 @@ async function emitNotify(deps: SessionMonitorDeps, event: NotificationEvent): P
 }
 
 /** Default freshness window: 5 × the shipped batterySampleSec (10 min). */
-const DEFAULT_BATTERY_SAMPLE_MAX_AGE_MS = 600_000;
+export const DEFAULT_BATTERY_SAMPLE_MAX_AGE_MS = 600_000;
 
 /**
  * The charging-progress stage of the EvPoller chain. Called on every rich

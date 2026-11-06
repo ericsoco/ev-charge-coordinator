@@ -18,6 +18,8 @@ export function formatNotificationEvent(event: NotificationEvent): string {
       return `⚡️ charging started (${soc(event.evSocPercent)})`;
     case 'charging-stopped':
       return `🛑 charging stopped (${soc(event.evSocPercent)})${stopReason(event.reason)}`;
+    case 'session-retargeted':
+      return `${event.direction === 'raise' ? '📈' : '📉'} ${event.detail}`;
     case 'failure':
       return `⚠️ ${event.component} failed: ${event.message}`;
     case 'test':

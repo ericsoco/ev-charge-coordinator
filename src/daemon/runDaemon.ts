@@ -22,6 +22,7 @@ import { createBatterySampler } from './BatterySampler.js';
 import { createEvPoller } from './EvPoller.js';
 import { createDecisionConsumer } from './decisionConsumer.js';
 import { createSessionMonitor } from './sessionMonitor.js';
+import { createReTargeter } from './reTarget.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import { buildNotifiers, notifierRequiresSecret, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
@@ -224,6 +225,25 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
       notify: (event) => notifier.notify(event),
       log,
     });
+    // Re-target stage of the same chain (P1c step 4): symmetric raise/lower
+    // of the session target behind the hysteresis deadband + resume after a
+    // monitor stop; same live gating and shadow posture as the monitor.
+    const reTargetOnProgress = createReTargeter({
+      db,
+      vehicleId,
+      autoStart: options.config.autoStart,
+      dryRun: options.dryRun ?? false,
+      setChargeLimit: (percent) => tesla.setChargeLimit(percent),
+      startCharging: () => tesla.startCharging(),
+      weatherPolicy: {
+        ...DEFAULT_WEATHER_POLICY,
+        bufferAdjPercent: options.config.weatherBufferAdjPercent,
+        solarThresholdWhM2: options.config.weatherSolarThresholdWhM2,
+      },
+      batterySampleMaxAgeMs: options.config.batterySampleSec * 1000 * 5,
+      notify: (event) => notifier.notify(event),
+      log,
+    });
     tasks.push(
       createEvPoller({
         db,
@@ -237,7 +257,13 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         log,
         notify: (event) => notifier.notify(event),
         onVehiclePlugIn: decideOnVehiclePlugIn,
-        onChargingProgress: monitorChargingProgress,
+        // Re-target (P1c step 4) evaluates before the stop check in the same
+        // tick: a lowered target is enforced immediately, a raised one moves
+        // the line the stop check reads (the workplan's seam).
+        onChargingProgress: async (progressCtx) => {
+          await reTargetOnProgress(progressCtx);
+          await monitorChargingProgress(progressCtx);
+        },
         // Init plug-in check: live auto-start may wake a sleeping car once so
         // charge_state is readable at boot; collect-only and --dry-run never wake.
         wakeUp: () => tesla.wakeUp(),

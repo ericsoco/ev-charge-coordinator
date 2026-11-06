@@ -176,7 +176,7 @@ describe('EvPoller charging-progress seam (session monitor)', () => {
     await task.run();
     await expect(task.run()).resolves.toBeUndefined();
 
-    expect(logs.join('\n')).toContain('session monitor failed');
+    expect(logs.join('\n')).toContain('charging-progress stage failed');
     expect(evStore.latestSample(db, 'VIN')).not.toBeNull();
     expect(sessionStore.openSessionFor(db, 'VIN')).not.toBeNull();
   });

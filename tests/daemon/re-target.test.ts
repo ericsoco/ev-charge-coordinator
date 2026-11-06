@@ -3,12 +3,24 @@
  * guards, and the resume rules (monitor-stop-only, recovery margin,
  * strict room-below-target). The I/O edge lands with the wiring commit.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import type { DatabaseSync } from 'node:sqlite';
 import {
   RESUME_MIN_RECOVERY_PERCENT,
+  createReTargeter,
   evaluateReTarget,
+  type ReTargeterDeps,
   type ReTargetInput,
 } from '../../src/daemon/reTarget.js';
+import { openStore } from '../../src/store/database.js';
+import * as sessionStore from '../../src/store/SessionStore.js';
+import * as homeBattery from '../../src/store/HomeBatteryStore.js';
+import * as weatherStore from '../../src/store/WeatherForecastStore.js';
+import { DEFAULT_WEATHER_POLICY, type WeatherPolicy } from '../../src/utils/weather.js';
+import type { NotificationEvent } from '../../src/notifiers/types.js';
 import type { EnergyConfig } from '../../src/utils/energy.js';
 
 const CFG: EnergyConfig = {
@@ -249,5 +261,234 @@ describe('evaluateReTarget (pure) — resume', () => {
       })
     );
     expect(verdict).toMatchObject({ change: 'lower', newStopTarget: 42, resume: false });
+  });
+});
+
+describe('createReTargeter (edge)', () => {
+  let dir: string;
+  let db: DatabaseSync;
+  let logs: string[];
+  let calls: string[]; // ordered actuation: 'limit:N' then 'start'
+  let events: NotificationEvent[];
+  let sessionId: number;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-retarget-'));
+    db = openStore(path.join(dir, 'data.sqlite'));
+    logs = [];
+    calls = [];
+    events = [];
+    sessionId = sessionStore.openSession(db, {
+      vehicleId: 'VIN',
+      homeBatteryId: 'GW',
+      plugTsMs: 500,
+    });
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1, socPercent: 70 });
+  });
+
+  afterEach(() => {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function retarget(overrides: Partial<ReTargeterDeps> = {}) {
+    return createReTargeter({
+      db,
+      vehicleId: 'VIN',
+      autoStart: { enabled: true, filters: [] },
+      dryRun: false,
+      setChargeLimit: async (percent) => {
+        calls.push(`limit:${percent}`);
+      },
+      startCharging: async () => {
+        calls.push('start');
+      },
+      getEnergyConfig: () => CFG,
+      log: (message) => logs.push(message),
+      notify: async (event) => {
+        events.push(event);
+      },
+      ...overrides,
+    });
+  }
+
+  const charging = (tsMs: number, soc: number | null = 55) => ({
+    tsMs,
+    evSocPercent: soc,
+    chargingState: 'Charging',
+  });
+  const stopped = (tsMs: number, soc: number | null = 50) => ({
+    tsMs,
+    evSocPercent: soc,
+    chargingState: 'Stopped',
+  });
+
+  it('live raise: limit first, then target + notification (initial → new)', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 55); // seeds initial 55
+    await retarget()(charging(1_000));
+
+    expect(calls).toEqual(['limit:63']);
+    const session = sessionStore.openSessionFor(db, 'VIN')!;
+    expect(session.targetPercent).toBe(63);
+    expect(session.targetChangeReason).toBe('re-target 55% → 63% (solar surplus, battery 70%)');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'session-retargeted',
+      direction: 'raise',
+      detail: 're-target 55% → 63% (solar surplus, battery 70%)',
+    });
+    expect(logs.join('\n')).toContain('re-target 55% → 63%');
+  });
+
+  it('live lower: session target only — the car is never touched', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 45);
+    sessionStore.setSessionTarget(db, sessionId, 65); // initial stays 45
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 45 }); // raw 59.05
+
+    await retarget()(charging(1_000));
+
+    expect(calls).toEqual([]);
+    const session = sessionStore.openSessionFor(db, 'VIN')!;
+    expect(session.targetPercent).toBe(59);
+    expect(session.targetChangeReason).toBe('re-target 45% → 59% (battery 45%)');
+    expect(events[0]).toMatchObject({ type: 'session-retargeted', direction: 'lower' });
+  });
+
+  it('raise + resume: limit → target → start, in that order', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 50); // initial 50, EV at 50, battery 70
+    sessionStore.setSessionStopReason(db, sessionId, 'target_reached'); // raw 58.1
+
+    await retarget()(stopped(1_000));
+
+    expect(calls).toEqual(['limit:58', 'start']);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(58);
+    expect(events[0]).toMatchObject({ type: 'session-retargeted', direction: 'raise' });
+    expect(logs.join('\n')).toContain('resumed charging (battery 70%)');
+  });
+
+  it('pure resume: recovered buffer stop starts without touching the target', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 43); // raw 42.43 — inside the deadband
+    sessionStore.setSessionStopReason(db, sessionId, 'battery_buffer');
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 35 });
+
+    await retarget()(stopped(1_000, 40));
+
+    expect(calls).toEqual(['start']);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(43);
+    expect(events).toHaveLength(0); // a resume alone is not a target change
+    expect(logs.join('\n')).toContain('resumed charging (battery 35%)');
+  });
+
+  it('shadow (autoStart disabled): logs would-act once per episode, never actuates', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 55);
+    const run = retarget({ autoStart: { enabled: false, filters: [] } });
+    await run(charging(1_000));
+    await run(charging(2_000)); // condition persists — no duplicate line
+    expect(calls).toEqual([]);
+    expect(events).toHaveLength(0);
+    expect(logs.filter((line) => line.includes('would raise'))).toHaveLength(1);
+
+    await retarget({ dryRun: true })(charging(3_000)); // merge-dark: same verdict
+    expect(calls).toEqual([]);
+  });
+
+  it('a failed limit logs every attempt but notifies once per episode', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 55);
+    let failing = true;
+    let attempts = 0;
+    const run = retarget({
+      setChargeLimit: async (percent) => {
+        attempts += 1;
+        if (failing) throw new Error('proxy down');
+        calls.push(`limit:${percent}`);
+      },
+    });
+
+    await run(charging(1_000));
+    await run(charging(2_000));
+    expect(attempts).toBe(2);
+    expect(logs.filter((line) => line.includes('actuation failed'))).toHaveLength(2);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'failure', component: 're-target' });
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(55); // not written
+
+    failing = false; // next tick retries and completes
+    await run(charging(3_000));
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(63);
+    expect(events).toHaveLength(2); // the one failure + the applied change
+  });
+
+  it('a stale battery sample never acts (freshness guard, monitor parity)', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 55);
+    await retarget()(charging(1_000_000)); // sample is 999 999 ms old > 600 000
+    expect(calls).toEqual([]);
+    expect(logs).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('folds the step-3 weather reserve into the effective buffer', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 50);
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 22 });
+    const policy: WeatherPolicy = { ...DEFAULT_WEATHER_POLICY, bufferAdjPercent: 5 };
+    // Low-solar vintage (24 window hours × 25 W/m² = 600 < 2000) fetched at t=1_000.
+    weatherStore.insertForecast(
+      db,
+      Array.from({ length: 48 }, (_, i) => ({
+        hourTsMs: 1_000 + i * 3_600_000,
+        irradianceWm2: 25,
+        temperatureC: 10,
+      })),
+      1_000
+    );
+
+    // With the reserve the effective buffer is 25 → battery 22 yields to it.
+    await retarget({ weatherPolicy: policy })(charging(1_000));
+    expect(calls).toEqual([]);
+
+    // Default policy (off): the same tick computes (raw 55.32 vs stored 50) → raise.
+    await retarget()(charging(2_000));
+    expect(calls).toEqual(['limit:55']);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(55);
+  });
+
+  it('folds the step-2 observed efficiency into the recompute', async () => {
+    // Five clean sessions at 0.95 (config says 0.90): raw 63.55 vs 63.1 —
+    // the stored 62 sits inside the config-only deadband but beyond the
+    // measured one, so only the measured path moves (to 64, not 63).
+    for (let i = 0; i < 5; i++) {
+      const id = sessionStore.openSession(db, {
+        vehicleId: 'OTHER',
+        homeBatteryId: 'GW',
+        plugTsMs: 100 + i,
+      });
+      sessionStore.closeOpenSession(db, 'OTHER', 101 + i);
+      sessionStore.finalizeSession(db, id, {
+        energyKwh: 9.5,
+        energyPercent: 10,
+        elapsedMs: 60_000,
+        houseEnergyKwh: 10,
+        efficiency: 0.95,
+      });
+    }
+    sessionStore.setSessionTarget(db, sessionId, 62);
+
+    await retarget()(charging(1_000));
+
+    expect(calls).toEqual(['limit:64']);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(64);
+  });
+});
+
+describe('runDaemon composition (source pin)', () => {
+  it('re-target evaluates before the stop check in the same tick', () => {
+    const source = fs.readFileSync(
+      new URL('../../src/daemon/runDaemon.ts', import.meta.url),
+      'utf8'
+    );
+    const retargetAt = source.indexOf('await reTargetOnProgress(');
+    const monitorAt = source.indexOf('await monitorChargingProgress(');
+    expect(retargetAt).toBeGreaterThan(-1);
+    expect(monitorAt).toBeGreaterThan(-1);
+    expect(retargetAt).toBeLessThan(monitorAt);
   });
 });

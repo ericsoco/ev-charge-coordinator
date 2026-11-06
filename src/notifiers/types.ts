@@ -45,6 +45,16 @@ export interface ChargingStoppedEvent {
   reason: SessionStopReason | null;
 }
 
+export interface SessionRetargetedEvent {
+  type: 'session-retargeted';
+  tsMs: number;
+  sessionId: number;
+  vehicleId: string;
+  direction: 'raise' | 'lower';
+  /** The initial → new reason string; identical to target_change_reason. */
+  detail: string;
+}
+
 export interface FailureEvent {
   type: 'failure';
   tsMs: number;
@@ -63,6 +73,7 @@ export type NotificationEvent =
   | DecisionMadeEvent
   | ChargingStartedEvent
   | ChargingStoppedEvent
+  | SessionRetargetedEvent
   | FailureEvent
   | TestEvent;
 

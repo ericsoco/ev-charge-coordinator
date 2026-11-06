@@ -172,7 +172,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
       await deps.onChargingProgress(ctx);
     } catch (error) {
       log(
-        `[ev-poll] session monitor failed: ${
+        `[ev-poll] charging-progress stage failed: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
