@@ -49,7 +49,7 @@
 
 ## P1c — intelligence (active plan)
 
-> Status: **Steps 1–3 complete (2026-11-05); steps 4–5 not started.** Design basis:
+> Status: **Steps 1–4 complete (2026-11-05); step 5 not started.** Design basis:
 > [design.md](./docs/design.md) §3.4 (actuator + session monitor), §3.6 (intelligence
 > inputs), §5 (phasing). Product basis: [requirements.md](./docs/requirements.md) Oct 10
 > (sub-50% stop-at-target) + the battery-buffer evolution note above. Each step below is a
@@ -181,6 +181,25 @@ end sessions.
       buffer (base + low-solar adjustment) — reuse the `latestVintage()` →
       `weatherAdjustment` path from `src/utils/weather.ts`, never the raw
       `bufferPercent`.
+   *(Branch `p1c/step4-solar-retarget` — **complete** (2026-11-05): pure
+   `evaluateReTarget` + I/O edge `createReTargeter` in `src/daemon/reTarget.ts`,
+   composed into the charging-progress hook **before** the stop check (the
+   seam — a lowered target is enforced in the same tick). Symmetric raise
+   (signed limit → `setSessionTarget` → notify) / lower (target only, monitor
+   enforces next tick); deadband vs the RAW target = **1 EV point**
+   (`RETARGET_MIN_DELTA_PERCENT`, derived from 7,233 real samples: daylight
+   20-min p90 6.21% battery × 0.162 = 1.01 → ≤1 change/20 min at typical
+   drift, 2-min noise 8× below); resume only for monitor-stopped sessions
+   (`stop_reason` set) at battery > buffer + **2%**
+   (`RESUME_MIN_RECOVERY_PERCENT`, clears the 2-min noise p99 of 1.58%; bounds
+   buffer cycles to ~15 min) with strict room below the target (a
+   target-reached stop cannot micro-burst). Shared `stopTargetFor()` now feeds
+   engine and re-targeter; step-2/3 overlays folded at the edge; new
+   `session-retargeted` event (📈/📉) carries the same initial → new string as
+   `target_change_reason`. Known limitation: a `Complete` stop with
+   `stop_reason` null (car stopped itself while the monitor slept) is not
+   resumed — resume is deliberately monitor-stop-only; next plug-in
+   re-decides.)*
 5. **Live validation + docs** — exercise all of the above against the car/house; README
    intelligence section; workplan Log entries.
 
@@ -198,8 +217,9 @@ test → day-of-week/seasonal baselines without waiting months for local history
 - **Sub-50% semantics:** the monitor stops at the *unclamped* computed target
   (`Math.floor(rawPercent)`), never at Tesla's 50% floor.
 - **Re-target policy (step 4):** symmetric raise/lower; hysteresis ≤ ~1 change per 20 min
-  (translate to a % SoC margin by analyzing our historical samples when step 4 is
-  planned); resume charging after a monitor stop once home-battery SoC is sufficient;
+  (derived at step-4 planning, 2026-11-05, from 7,233 real samples: a 1 EV-point
+  target deadband + resume at buffer + 2% battery — see the reTarget.ts constants);
+  resume charging after a monitor stop once home-battery SoC is sufficient;
   notify on mid-session target changes.
 
 **Decided (2026-11-04, user):**
@@ -392,6 +412,33 @@ newer-build refusal, `openStore` migrates v3 → v5 (the restart recovery), the
 script-spawn regression test against a v3 store (exit 1, restart message, never
 `no such column`). README troubleshooting entry.
 Gate: `npm run check` green — **957 passed / 2 skipped** (5 new tests).
+
+### 2026-11-05 — P1c step 4 complete: solar-surplus re-targeting (3 commits)
+
+Branch `p1c/step4-solar-retarget`. The workplan's "derive the % SoC margin
+when step 4 is planned" task ran against the real store (7,233 samples):
+battery→EV factor 13.5×0.9/75 = 0.162; daylight 20-min |ΔSoC| p90 = 6.21%
+battery → 1.01 EV points ⇒ **`RETARGET_MIN_DELTA_PERCENT = 1`** (≤1 change per
+20 min at p90 drift; 2-min noise floor 0.74% battery → 0.12 points, 8× below);
+resume margin **`RESUME_MIN_RECOVERY_PERCENT = 2`** battery (above the 2-min
+noise p99 of 1.58% so stop↔resume cannot flap; ~15 min bounds buffer cycles —
+a deliberate refinement of the planned 1, which p99 noise would have breached).
+Three commits: (1) `stopTargetFor()` extracted from engine.ts so engine and
+re-targeter derive the sub-50 stop identically + pure `evaluateReTarget`
+(deadband vs the raw target — rounding boundaries cannot flap; symmetric
+change; resume only for monitor-stopped sessions with strict room below the
+target; battery ≤ buffer yields to the monitor) — 17 tests; (2)
+`createReTargeter` edge (monitor-parity freshness guard, step-2 observed
+efficiency + step-3 weather reserve folded at the edge, live/shadow
+merge-dark, failure notify-once + next-tick retry, limit → target → start
+order) composed BEFORE the stop check in the same hook, `session-retargeted`
+event (📈/📉) with the same initial → new string as `target_change_reason`,
+EvPoller catch wording generalized to "charging-progress stage" — edge +
+format + composition-order source pin; (3) README subsection, design.md
+margin note, this entry. Known limitation: a `Complete` stop with
+`stop_reason` null (car stopped itself while the monitor slept) is not
+resumed — resume is deliberately monitor-stop-only; next plug-in re-decides.
+Gate: `npm run check` green — **1005 passed / 3 skipped** (28 new).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 

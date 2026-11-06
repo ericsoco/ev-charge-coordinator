@@ -541,6 +541,32 @@ Stop latency is cadence-bound: up to ~2–3 min after the battery
 crosses the buffer (battery samples every `batterySampleSec`, EV reads every
 `evSamplePluggedSec`).
 
+### Solar-surplus re-targeting
+
+While a session charges, every EV rich read also recomputes the charge limit
+from the latest home-battery SoC + current EV SoC — the same kWh math, with
+the observed-efficiency and weather-reserve overlays folded in — and moves the
+session's target when the plan has genuinely moved:
+
+- **Symmetric raise/lower** behind a **1 EV-point deadband** evaluated against
+  the raw target, so a rounding boundary can never flap. A *raise* sends the
+  signed `setChargeLimit` first, then records `sessions.target_percent`, then
+  notifies; a *lower* records the target only — the session monitor enforces it
+  on its next tick. The margin is derived from real history: at the daylight
+  p90 drift (6.21% battery per 20 min × 0.162 = 1.01 EV points) this is exactly
+  ≤1 change per 20 min; 2-min meter noise sits 8× below it.
+- **Resume after a monitor stop** — only when `stop_reason` is set (a manual
+  or car stop is never overridden), the battery is more than **2% above the
+  buffer** (clears the 2-min noise p99 of 1.58%, so stop ↔ resume cannot
+  flap), and the EV is still below the target. A raise that creates the room
+  runs limit → target → start in one tick.
+- Same live gating as the monitor (shadow logs `would raise/lower/resume` once
+  per episode). Every applied change logs and pushes
+  `📈 re-target 45% → 55% (solar surplus, battery 68%)` — the same
+  initial → new string stored in `target_change_reason`, so `sessions` and the
+  notification can never disagree. Stale battery samples skip the tick: never
+  re-target from old data.
+
 ### Notifications (ntfy, Slack)
 
 The daemon reports its typed events through pluggable notifiers (docs/design.md
