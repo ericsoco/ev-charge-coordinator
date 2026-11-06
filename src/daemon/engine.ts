@@ -14,6 +14,7 @@ import type { HomeLocation } from '../utils/credentials.js';
 import type { VehicleLocation } from '../types/ev.js';
 import {
   computeChargeLimit,
+  stopTargetFor,
   type EnergyChargeLimit,
   type EnergyConfig,
   type EnergyLimitedBy,
@@ -196,9 +197,6 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
     filterResults: chain.results,
     limitedBy: limit.limitedBy,
     targetPercent: limit.targetPercent,
-    stopTargetPercent:
-      limit.limitedBy === 'tesla-minimum'
-        ? Math.floor(limit.rawPercent)
-        : limit.targetPercent,
+    stopTargetPercent: stopTargetFor(limit),
   };
 }
