@@ -86,15 +86,15 @@ describe('estimateEfficiency', () => {
 
 describe('applyEfficiency', () => {
   it('below the gate the config stands untouched', () => {
-    const effective = applyEfficiency(CFG, { efficiency: null, samples: 2 });
-    expect(effective.source).toBe('config');
-    expect(effective.config).toBe(CFG);
+    const observed = applyEfficiency(CFG, { efficiency: null, samples: 2 });
+    expect(observed.source).toBe('config');
+    expect(observed.config).toBe(CFG);
   });
 
   it('above the gate only chargeEfficiency changes', () => {
-    const effective = applyEfficiency(CFG, { efficiency: 0.913, samples: 12 });
-    expect(effective.source).toBe('measured');
-    expect(effective.config).toEqual({ ...CFG, chargeEfficiency: 0.913 });
+    const observed = applyEfficiency(CFG, { efficiency: 0.913, samples: 12 });
+    expect(observed.source).toBe('measured');
+    expect(observed.config).toEqual({ ...CFG, chargeEfficiency: 0.913 });
   });
 
   it('throws when an out-of-range estimate slips past the filters', () => {
@@ -106,8 +106,8 @@ describe('applyEfficiency', () => {
 
 describe('efficiencyClause (shared wording)', () => {
   it('names the measured value and session count', () => {
-    const effective = applyEfficiency(CFG, { efficiency: 0.913, samples: 12 });
-    expect(efficiencyClause(effective)).toBe('efficiency 0.913 (measured, 12 sessions)');
+    const observed = applyEfficiency(CFG, { efficiency: 0.913, samples: 12 });
+    expect(efficiencyClause(observed)).toBe('efficiency 0.913 (measured, 12 sessions)');
   });
 
   it('config fallback explains why: no history, or under the gate', () => {

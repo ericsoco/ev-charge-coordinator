@@ -127,7 +127,7 @@ export function createDecisionConsumer(
       // config before the math runs; below the gate the config stands. The
       // clause appended to reasonDetail audits which value shaped the target.
       const cfg = getEnergyConfig();
-      const effective =
+      const observed =
         cfg === null
           ? null
           : applyEfficiency(
@@ -143,16 +143,16 @@ export function createDecisionConsumer(
         chargingState: ctx.chargingState,
         evSocPercent: ctx.evSocPercent,
         homeBatterySocPercent: homeBattery.latestSample(deps.db)?.socPercent ?? null,
-        energyConfig: effective?.config ?? null,
+        energyConfig: observed?.config ?? null,
         autoStart: deps.autoStart,
         dryRun: deps.dryRun,
         home,
         vehicleLocation,
       });
-      if (effective !== null && outcome.limitedBy !== null && outcome.reasonDetail !== null) {
+      if (observed !== null && outcome.limitedBy !== null && outcome.reasonDetail !== null) {
         outcome = {
           ...outcome,
-          reasonDetail: `${outcome.reasonDetail} — ${efficiencyClause(effective)}`,
+          reasonDetail: `${outcome.reasonDetail} — ${efficiencyClause(observed)}`,
         };
       }
 
