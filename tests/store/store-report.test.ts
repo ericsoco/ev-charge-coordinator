@@ -15,6 +15,7 @@ import * as ev from '../../src/store/EvStore.js';
 import * as sessions from '../../src/store/SessionStore.js';
 import * as weather from '../../src/store/WeatherForecastStore.js';
 import * as decisions from '../../src/store/DecisionStore.js';
+import { makeLegacyStoreAt } from './legacy-store.js';
 
 const REPO = process.cwd();
 const VIN = 'VIN-TEST';
@@ -144,5 +145,31 @@ describe('store-report', () => {
 
   it('fails loudly on a missing store', () => {
     expect(() => runStdout('--json', '--db', path.join(dir, 'nope.sqlite'))).toThrow();
+  });
+
+  it('fails cleanly on a stale store instead of a raw SQL error', () => {
+    // The regression: a v3 store (pre-step-1 columns) + a current dist's
+    // SESSION_COLUMNS used to crash the script with `no such column`.
+    const stalePath = path.join(dir, 'stale.sqlite');
+    makeLegacyStoreAt(stalePath, 3);
+
+    let stderr = '';
+    let status: number | null = null;
+    try {
+      execFileSync('node', ['scripts/store-report.mjs', '--json', '--db', stalePath], {
+        cwd: REPO,
+        encoding: 'utf8',
+        env: { ...process.env, ECC_DISABLE_KEYCHAIN: '1' },
+      });
+    } catch (error) {
+      const failure = error as { status?: number; stderr?: string };
+      status = failure.status ?? null;
+      stderr = String(failure.stderr ?? '');
+    }
+
+    expect(status).toBe(1);
+    expect(stderr).toContain('schema version 3');
+    expect(stderr).toContain('daemon applies migrations');
+    expect(stderr).not.toContain('no such column');
   });
 });
