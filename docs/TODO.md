@@ -55,6 +55,9 @@ TASKS / BUGS
 [X] Every `npm start daemon restart` throws an error the first run, succeeds the second.
     Error: bootstrap of /Users/ericsoco/Library/LaunchAgents/com.transmote.ev-charge-coordinator.daemon.plist failed: Bootstrap failed: 5: Input/output error Try re-running the command as root for richer errors.
 
+[ ] Refine ntfy messaging
+    [ ] More human-readable and helpful
+    [ ] Remove noisy logs
 [ ] Expose common commands in package.json to run via `npm run x`
 [ ] Consider removing `get-ev-bsoc` in favor of `get-charging-state`
 [ ] Clean up README (remove slop; make dev setup steps clear and contiguous; same for end-user steps; ensure unified docs across CLI + REPL, as there is some divergence)

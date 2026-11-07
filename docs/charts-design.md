@@ -127,6 +127,7 @@ For navigation elements, leverage modern device-native styling, but simplified.
 E.g. avoid complex Liquid Glass-style refraction; favor subtle transparency and flat design instead.
 For interactive elements generally, leverage Material 3 Expressive concepts;
 if we choose Svelte, [Noph UI](noph.dev) seems like the right choice.
+For layout and spacing, follow best practices outlined by [Material 3](https://m3.material.io/styles/spacing/overview).
 
 ## 2. Application tabs
 The application will have two tabs: Current state monitor and History. There may be more in the future.
@@ -145,21 +146,61 @@ The second application tab. Label it "Then".
 Displays a dashboard of time-series charts and dropdowns that provide a view
 into data in our stores, to help the user understand the functioning of the system.
 
-#### Charts
+#### BSoC + Sessions chart
+At the top of the tab, render a time-series chart that uses the full container width.
 
-TODO NEXT:
-[ ] need to see what's stored for weather, why does `npm run store` show nothing?
-[ ] `npm run store` currently fails, looks like we need to run a backfill to add
-    new target_percent column from the last changeset (Step 2)?
-[ ] flesh out the charts prompt here, based on my prioritized list
-    in # Charts above and in my sketches
-[ ] Address questions + ideas below to complete the prompt
+The time series chart displays two values (on the y-axis) over a single time scale (on the x-axis):
+* Vehicle BSoC
+* Home battery BSoC
+Color each line differently, and add a legend below the chart to label the colors.
 
+When the time series chart has interaction focus, it should support timescale (x-axis)
+zoom and pan, using standard scroll gestures/inputs per mouse, trackpad, touchscreen, etc.
+Scrolling vertically zooms the time scale in/out; scrolling horizontally scrubs
+the time scale forward/backward in time. The maximum zoom displays two hours of data;
+the minimum zoom displays one year of data (if available, and if performant).
 
-Questions + ideas to add to prompt:
-- How to handle time scales? continuous zoomable line chart? amcharts does this so well...how to emulate with echarts...?
-- Layout must rotate along with phone -- horizontal aspect ratio is best way to view time series charts
-- Weather icons (sun, cloud, moon, etc) are more legible + familiar than something displaying solar irradiance.
-  OpenMeteo should pull this data too, to display as icons evenly across the top of P1 I/O chart;
-  also, underlay these with a gradient band representing solar irradiance.
+I'll leave it to you to handle pagination / lazy loading of data beyond the initial payload,
+on user interaction.
 
+Add markers to indicate charging sessions: a faint vertical line on the chart at the start
+and at the end of the charging session, with the chart background slightly tinted in between.
+On hover/touch of a charging session, display a tooltip that includes metadata about the session:
+* Charging start time
+* Charging end time
+* Vehicle % BSoC start -> end
+* Home battery % BSoC start -> end
+
+#### Sessions history selector
+Below the BSoC + Sessions chart, render a dropdown selector that contains a list of
+charging sessions. Each session is labeled with its start date + time. Selecting a
+charging session scrolls and zooms the BSoC + Sessions chart to bring the selected
+session into focus, over a one-second eased transition.
+
+I'll leave it to you to handle pagination / lazy loading of data beyond the initial payload.
+
+#### System monitor
+Below the Sessions history selector, add another chart. Similar to the BSoC + Sessions
+chart, this is a zoomable + scrollable full-conatiner width time-series chart.
+This chart displays a number of values, as area charts; it has a vertically-centered
+zero-line with some time-series values displayed above and others displayed below.
+
+The values (all units in kWh):
+* Grid export, displayed above the centerline
+* Grid import, displayed below the centerline
+* Solar energy produced, displayed above the centerline
+* Energy used by the home/vehicle, displayed below the centerline
+
+Overlaid across the top of the chart (with some buffer to avoid overlapping the
+time-series area chart lines themselves), render a top bar displaying weather conditions.
+The background of the bar is a light-dark gradient (at 60% alpha) that corresponds to solar irradiance.
+Overlaid on the backgound are icons for the weather, spaced at even (px) intervals.
+Note: this will require fetching more data from OpenMeteo, likely fetching `weather_code`
+and `is_day`, and the icon mapping implemented in the OpenMeteo website project
+as [documented here](https://github.com/open-meteo/open-meteo/issues/789#issuecomment-5023503709).
+Spacing of the icons depends on the zoom, but never displays more than one icon
+per hour on the horizontal time axis. As the chart zooms out, drop icons evenly
+to avoid visual clutter and maintain even spacing.
+
+Display this weather bar only when zoomed in to where one week of data or less
+is visible on the chart. Fade the bar in/out over 0.5 seconds as needed when zooming.
