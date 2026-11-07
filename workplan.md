@@ -479,6 +479,21 @@ of why the floor exists. **Deferred to EV #2 — naming decision (user,
 section above for the full scope). Gate: `npm run check` green — **1006
 passed / 3 skipped** (1 new).
 
+### 2026-11-06 — `npm run store`: weather_forecasts latest row
+
+Branch `feat/store-report-weather-latest`. The report's `weather_forecasts`
+section printed only `rows` + `latest vintage` — no row content — leaving the
+open question at the top of `docs/charts-design.md` ("need to see what's
+stored for weather, why does `npm run store` show nothing?") unanswered; it was
+the only section without a `latest` line. Added
+`latest: humanize(store.weather.latestVintage(db)[0] ?? null)` — the first
+hour of the newest vintage (the same representative row the schema-pin reads),
+so human mode (`latest: {...}` after the vintage line) and `--json` both gain
+it; the generic printer needed no change. Tests pin the JSON shape
+(humanized `fetchedTs`/`hourTs`) and the human-mode line. Gate:
+`npm run check` green — **1005 passed / 3 skipped** (assertions extended, no
+new test cases).
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"
