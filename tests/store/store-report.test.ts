@@ -109,6 +109,15 @@ describe('store-report', () => {
     });
     expect(report.sessions.avgEfficiency).toBeCloseTo(5 / 6, 3);
     expect(report.weather_forecasts).toMatchObject({ rows: 2, hoursInLatestVintage: 2 });
+    // First hour of the newest vintage, humanized like the sample tables' latest.
+    expect(report.weather_forecasts.latest).toMatchObject({
+      siteId: 'home',
+      fetchedTs: '1970-01-01T00:00:00.999Z',
+      hourTs: '1970-01-01T00:00:01.000Z',
+      irradianceWm2: 100,
+      temperatureC: 15,
+      rawJson: '{}',
+    });
     expect(report.decisions.rows).toBe(2);
     expect(report.decisions.recent5[0]).toMatchObject({
       ts: '1970-01-01T00:00:04.000Z',
@@ -141,6 +150,10 @@ describe('store-report', () => {
     expect(decisionLine).toMatch(/decision: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} session/);
     expect(stdout).toContain('service_error');
     expect(stdout).toContain('actuation failed: complete');
+    // Weather section prints its latest collected row, like the sample tables.
+    const weatherLatestLine = stdout.split('\n').find((entry) => entry.includes('"irradianceWm2"'));
+    expect(weatherLatestLine).toMatch(/^ {2}latest: /);
+    expect(weatherLatestLine).toContain('"hourTs":"1970-01-01T00:00:01.000Z","irradianceWm2":100');
   });
 
   it('fails loudly on a missing store', () => {

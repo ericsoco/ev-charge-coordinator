@@ -152,6 +152,8 @@ const report = {
               `SELECT COUNT(*) AS n FROM weather_forecasts WHERE fetched_ts_ms = ${Number(weatherAgg.latestVintage)}`
             ).n
           ),
+    // First hour of the newest vintage — the shape of what the latest fetch stored.
+    latest: humanize(store.weather.latestVintage(db)[0] ?? null),
   },
   decisions: {
     rows: Number(decisionsAgg.rows),
