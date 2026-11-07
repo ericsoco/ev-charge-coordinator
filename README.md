@@ -411,7 +411,7 @@ suspends the agent, every poll freezes, and a car that wakes on plug-in
   planned solar re-targeting recomputes from current SoCs on wake (with resume)
   instead of replaying missed updates. What sleep still costs, accepted:
   **nothing software-side can stop charging while the Mac sleeps** — the
-  sub-50% case stays capped by Tesla's own 50% limit, the house buffer's only
+  sub-minimum case stays capped by the car's own limit floor (50% on Tesla), the house buffer's only
   backstop is Franklin's hardware, and a session that both starts and ends
   entirely during sleep is never observed.
 - Alternative / belt-and-suspenders: `sudo pmset -a sleep 0` — system-wide,
@@ -516,9 +516,9 @@ While a session charges, the daemon re-evaluates two stops on every EV rich read
 
 - **Target stop** — EV SoC reaches the session's computed stop target
   (`sessions.target_percent`, armed by the auto-start decision before it
-  actuates). This is the sub-50% case the car's own limit cannot express: the
-  kWh math may say 42%, Tesla clamps limits to ≥50%, so only an API stop can
-  honor the real target.
+  actuates). This is the sub-minimum case the car's own limit cannot express:
+  the kWh math may say 42%, but the vehicle's limit floor (50% on Tesla)
+  refuses it, so only an API stop can honor the real target.
 - **Battery-buffer stop** — home-battery SoC hits `bufferPercent`, regardless of
   who started charging (the buffer protects the house).
 
@@ -709,7 +709,8 @@ down on `exit` and by one-shot commands when they exit.
 1. Read the current state of charge from your solar battery
 2. Convert the energy above your configured buffer (your reserve) into kWh
 3. Add that energy to the EV's current charge, accounting for charging
-   efficiency, and request the resulting percent limit (Tesla clamps to 50-100%)
+   efficiency, and request the resulting percent limit (clamped to the
+   vehicle's bounds — 50-100% on Tesla)
 4. Show the computed plan, then (with no flag in a terminal) ask to apply it:
    `y` sets the limit and starts charging, `n` sends nothing; `--start` skips
    the prompt and does both, `--dry-run` stops after the preview
@@ -722,12 +723,13 @@ different quantities):
 available   = batteryCapacityKwh × max(0, batterySoc − bufferPercent) / 100
 evCurrent   = evBatteryKwh × evSoc / 100
 evTarget    = min(evBatteryKwh, evCurrent + available × chargeEfficiency)
-targetLimit = clamp(round(evTarget / evBatteryKwh × 100), 50, 100)
+targetLimit = clamp(round(evTarget / evBatteryKwh × 100), minPercent, maxPercent)
 ```
 
 The plan also reports *why* the target landed where it did: `battery` (the house
 pack cannot lift the limit further), `ev-capacity` (the car would overfill), or
-`tesla-minimum` (the kWh math fell below Tesla's 50% floor).
+`vehicle-minimum` (the kWh math fell below the vehicle's minimum settable
+limit — 50% on Tesla, bounds from `DEFAULT_CHARGE_LIMIT_BOUNDS`).
 
 This ensures your EV only charges using excess energy from your solar battery system.
 
@@ -872,6 +874,10 @@ The architecture is designed to be extensible. To add support for a new EV or ba
 1. Create a new service class implementing the `EVService` interface in `src/types/ev.ts`
 2. Implement all required methods (authenticate, getStateOfCharge, setChargeLimit, etc.)
 3. Add the service to the CLI
+4. Pass the vehicle's own `ChargeLimitBounds` to `computeChargeLimit` —
+   `DEFAULT_CHARGE_LIMIT_BOUNDS` in `src/utils/energy.ts` (50-100) is Tesla's
+   policy, not a universal constant. The CLI setter reads the same defaults
+   until bounds flow from the service.
 
 ### New Battery Type
 
