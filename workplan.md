@@ -59,7 +59,9 @@
 
 ## P1c — intelligence (active plan)
 
-> Status: **Steps 1–4 complete (2026-11-05); step 5 not started.** Design basis:
+> Status: **Steps 1–4 complete (2026-11-05); step 5 in progress — partial live
+> validation 2026-11-07** (findings in the Log; the user's manual-check runbook status
+> lives in TODO.md, not mirrored here). Design basis:
 > [design.md](./docs/design.md) §3.4 (actuator + session monitor), §3.6 (intelligence
 > inputs), §5 (phasing). Product basis: [requirements.md](./docs/requirements.md) Oct 10
 > (sub-50% stop-at-target) + the battery-buffer evolution note above. Each step below is a
@@ -211,7 +213,9 @@ end sessions.
    resumed — resume is deliberately monitor-stop-only; next plug-in
    re-decides.)*
 5. **Live validation + docs** — exercise all of the above against the car/house; README
-   intelligence section; workplan Log entries.
+   intelligence section; workplan Log entries. *(In progress 2026-11-07 — partial
+   results + three follow-ups in the Log: the `runtime.json` re-record bug, re-target
+   label wording, the meter-reset-edge decision.)*
 
 **Spike (design §5 spike 1) — in scope; run 2026-11-06, green:** Franklin cloud
 history endpoints live test → day-of-week/seasonal baselines without waiting months
@@ -530,6 +534,71 @@ login covers every history endpoint — no new auth needed.**
   `scripts/spike-franklin-history.{py,mjs}`.
 
 Gate: `npm run check` green — **1005 passed / 3 skipped** (spike scripts + docs only).
+
+### 2026-11-07 — P1c step 5 (partial): validation findings + two bugs + one decision
+
+Manual-check status is tracked by the user in TODO.md (not mirrored here). Results
+below were verified read-only against the live store and daemon logs:
+
+- **B1 observed efficiency — verified, not a defect.** Independent SQL over the clean
+  set (closed, 0 < eff ≤ 1, house ≥ 0.5 kWh, newest 20) reproduces the CLI exactly:
+  **n = 9, ΣEV 45.14 / Σhouse 59.20 → ratio-of-sums 0.7624** = the printed 0.762.
+  The low-vs-0.9 gap reads straight off the data: pure-ish overnight session id 24 =
+  0.825 (real inverter + charger loss), id 21 = 0.4 (house loads diluted the
+  denominator), solar-assist sessions (2026-11-06: 1.649 / 1.239) excluded by the
+  ≤ 1 filter as designed. Known limitation stands; no action.
+- **B3 buffer stop** — believed observed in past live sessions; the explicit
+  controlled confirm (raise buffer to SoC−1 mid-session → stop → restore → resume)
+  stays open in the user's checklist.
+- **B5 hysteresis — retarget gaps were 16 m 07 s and 12 m 54 s (under 20 min), and
+  that matches the decided design.** Session 27 (Nov 6): 14:27:09 57→58,
+  14:43:16 57→59, 14:56:10 57→60. The mechanism is the 1-EV-point deadband
+  (`RETARGET_MIN_DELTA_PERCENT`) — a *drift-proportional* proxy for "~1 change per
+  20 min", not a timer: this session's battery drifted ~10% per 20 min = 1.6× the
+  daylight p90 (6.21%) the constant was derived from, so ≈12.5 min expected spacing,
+  13–16 observed. Strictly monotonic, never reversed; 2-min noise (0.12 EV points)
+  8× below the deadband — no flapping. A hard ≥20-min clamp remains an open policy
+  choice (not taken).
+- **B5 overlays — confirmed by back-computing every tick** (tick EV sample + latest
+  prior battery sample, buffer 30, observed 0.762): raw = 58.29 / 59.21 / 60.33 →
+  floors 58/59/60 = all three logged values. Tick 1 discriminates: config 0.9 would
+  give 59, the log says 58 ⇒ **the observed-efficiency overlay drove it**. The
+  weather overlay is a no-op by config (`weatherBufferAdjPercent: 0`) and the
+  reproductions confirm the buffer stayed unadjusted; tick 3 legitimately used a
+  2-min-old battery sample (inside the 5×120 s freshness window); the plug-in
+  decision's initial 57 is consistent with the pre-plug battery reading. Session
+  closed with the car self-stopping at the raised limit 60 (`stop_reason` NULL =
+  the documented Complete-while-monitor-slept case, not a miss).
+
+**Follow-ups surfaced (to plan, likely with step 5):**
+
+1. **Bug — `runtime.json` goes stale after a reconnect-respawn.** Live-verified
+   2026-11-07 ~08:55: the record says pid 45693 (Nov 6 23:00:50) while the actual
+   proxy on :3001 is pid 51995 (Nov 7 07:42:50) — `FranklinWHService.reconnect()`
+   spawns a replacement with a **new token**, but only the spawner ever writes
+   `runtime.json` (`runDaemon` startup / `start.ts`), and the daemon records once at
+   startup. Result: interactive-CLI attach fails with "rejected this CLI's token",
+   and the error's `lsof kill` advice does **not** fix it (the next respawn is still
+   unrecorded) — only `evcc daemon restart` does. Fix candidates: rewrite the record
+   when `spawnedProxyPid` diverges (battery-tick check or an `onProxySpawned` hook),
+   plus error-text guidance toward `daemon restart`.
+2. **Wording — re-target raises are labeled `(solar surplus, …)` unconditionally**
+   (`reTarget.ts:137`), but the Nov 6 raises fired while the battery *discharged*
+   65→37 (EV SoC gain outpaced available-energy shrink). Label should reflect the
+   actual direction/cause.
+3. **Decision — meter-reset-edge** (the step-2 deferral): (a) implement quarantine —
+   `monotonicDelta` reports a dropped negative step → session closes with
+   `efficiency = NULL` so the rolling estimate never absorbs a short denominator; or
+   (b) re-defer with the recorded bound (lost slice ≤ one 120-s sample interval of
+   house load ≈ 0.1–0.2 kWh — below the 0.5 kWh clean-floor, and >1 outcomes already
+   self-exclude). Awaiting the user's call.
+
+Next in step 5: the remaining manual checks (B2 target stop, B3 explicit, resume,
+B6 weather on-path, B7 robustness) per the user's TODO.md, then the README
+gap-check and the closing Log entry.
+
+Gate: `npm run check` green — **1007 passed / 2 skipped** (docs only; baseline moved
+with the charts/requirements changes landed on main).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
