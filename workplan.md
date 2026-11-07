@@ -213,9 +213,10 @@ end sessions.
 5. **Live validation + docs** — exercise all of the above against the car/house; README
    intelligence section; workplan Log entries.
 
-**Possible parallel spike (design §5 spike 1):** Franklin cloud history endpoints live
-test → day-of-week/seasonal baselines without waiting months for local history
-(§3.6.3). Independent of steps 1–4; decide in/out below.
+**Spike (design §5 spike 1) — in scope; run 2026-11-06, green:** Franklin cloud
+history endpoints live test → day-of-week/seasonal baselines without waiting months
+for local history (§3.6.3). Findings in the Log entry below; re-run tooling kept at
+`scripts/spike-franklin-history.{py,mjs}`.
 
 ### Decisions
 
@@ -250,8 +251,10 @@ test → day-of-week/seasonal baselines without waiting months for local history
   threshold); option C — percentile vs stored past vintages (self-calibrating,
   no magic energy constant; would need a min-vintages gate like step 2's).
 
-**Pending (user, at step pickup):**
-- **Backfill spike:** in scope for P1c or deferred to a later phase?
+**Decided (2026-11-06, user):**
+- **Backfill spike: in scope for P1c — run immediately (done).** All 10 history
+  probes answered code 200 live; see the 2026-11-06 Log entry. Follow-up (Flask
+  proxy method + baseline ingestion) still to be planned as its own step.
 
 ### ⚠️ Reminder — end of planning phase
 
@@ -450,6 +453,7 @@ margin note, this entry. Known limitation: a `Complete` stop with
 resumed — resume is deliberately monitor-stop-only; next plug-in re-decides.
 Gate: `npm run check` green — **1005 passed / 3 skipped** (28 new).
 
+<<<<<<< HEAD
 ### 2026-11-06 — vehicle-neutral charge-limit refactor (Tesla audit follow-up)
 
 Audit of make-specific logic (main + the then-unlanded step-4 branch), tiered:
@@ -493,6 +497,42 @@ it; the generic printer needed no change. Tests pin the JSON shape
 (humanized `fetchedTs`/`hourTs`) and the human-mode line. Gate:
 `npm run check` green — **1005 passed / 3 skipped** (assertions extended, no
 new test cases).
+=======
+### 2026-11-06 — P1c spike: Franklin cloud history endpoints live test (10/10 OK)
+
+Branch `spike/franklin-cloud-history`. Ran design.md §5 spike 1 against the live
+account via `node scripts/spike-franklin-history.mjs` (creds from the store; the
+Python probe rides the proxy's own `loginToken` transport). **Auth: the existing
+login covers every history endpoint — no new auth needed.**
+
+- **Backfill workhorse: `GET api-energy/electric/getFhpElectricData`**
+  (`?type=1..5&dayTime|startDate=…&gatewayId&lang=en_US`) — parallel kWh arrays
+  per bucket keyed by `deviceTimeArray`: type 1 day (`dayTime`), 2 week
+  (`startDate` = Monday → 7 daily buckets), 3 month (`startDate` = 1st → one
+  bucket per day), 4 year (12 `YYYY-MM`), 5 lifetime (one `YYYY` per year).
+  Fields: solar `kwhSu`, grid `kwhUtiIn/Out`, battery `kwhFhpChg/Di`, home
+  `kwhLoad`, load split `kwhGridLoad/kwhSolarLoad/kwhFhpLoad`, battery-by-source
+  `gridChBat/batOutGrid/soChBat/soOutGrid`, V2L + PV-input arrays (null on our
+  hardware).
+- **Depth:** 2025-11 (same month last year) fully populated; 2024-11 all-null;
+  lifetime lists 2025 + 2026 only — data reaches back to commissioning, no
+  retention cliff seen. **Day-of-week/seasonal backfill ≈ 1 GET per month of
+  history.**
+- **5-min detail: `GET api-energy/power/getFhpPowerByDay?dayTime=…`** → 288
+  gateway-local samples (`YYYY-MM-DD HH:MM:SS`), `socArray` %, `kwhTotalArray`,
+  `runStatusArray`, power arrays in **kW** (matches the known kW wire format).
+- **Also verified:** `hes-gateway/terminal/iotChargePowers` (paginated charge
+  sessions: energy, start/end SoC, times; `total` in envelope) and
+  `hes-gateway/terminal/backupHistorySummary` (totals + `lastRecord`).
+- **Envelope:** `{code: 200, message, msg, result, total?, success?}` —
+  `message` can be `null` while `msg: "Success"`; empty history returns
+  parallel arrays of `null`, not an error.
+- **Not built (follow-up to plan):** 1–2 Flask proxy methods (design §6) +
+  ingesting the backfill into §3.6.3 baselines. Re-run anytime with
+  `scripts/spike-franklin-history.{py,mjs}`.
+
+Gate: `npm run check` green — **1005 passed / 3 skipped** (spike scripts + docs only).
+>>>>>>> 12dd012 (docs: record Franklin history spike findings (10/10 live))
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
