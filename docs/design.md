@@ -266,9 +266,16 @@ and the user is told how to fix it — never a silent allow.
   Franklin **cloud API does have history endpoints** used by the app's charts
   (independently mapped by [david2069/franklinwh-cloud](https://david2069.github.io/franklinwh-cloud/API_ENDPOINTS_MAPPING/):
   `get_electric_data(data_type, day_time)`, `get_power_by_day(dayTime)`,
-  `get_power_details(type, timeperiod)`, `get_backup_history(...)`). Backfill
-  = add 1–2 methods to our Flask proxy; **needs a live spike** (dynamic URLs,
-  undocumented).
+  `get_power_details(type, timeperiod)`, `get_backup_history(...)`).
+  **Live spike passed 2026-11-06** (`scripts/spike-franklin-history.py`,
+  10/10 probes code 200): the proxy's `loginToken` auth covers every history
+  endpoint; `GET api-energy/electric/getFhpElectricData` (`type=1..5`;
+  `dayTime` for type 1, `startDate` for 2–5 — week must be Monday) returns
+  parallel daily/monthly kWh arrays back to commissioning (~1 GET per month of
+  history); `GET api-energy/power/getFhpPowerByDay` returns 288 gateway-local
+  5-min kW samples; charge sessions at `hes-gateway/terminal/iotChargePowers`.
+  Backfill = add 1–2 methods to our Flask proxy (full shapes in workplan Log
+  2026-11-06).
 - **Franklin local access:**
   [`franklinwh-local-api`](https://pypi.org/project/franklinwh-local-api/) —
   async Modbus TCP client to the aGate on **LAN port 502**: no cloud/account,
