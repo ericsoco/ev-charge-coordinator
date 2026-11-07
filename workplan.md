@@ -453,7 +453,6 @@ margin note, this entry. Known limitation: a `Complete` stop with
 resumed — resume is deliberately monitor-stop-only; next plug-in re-decides.
 Gate: `npm run check` green — **1005 passed / 3 skipped** (28 new).
 
-<<<<<<< HEAD
 ### 2026-11-06 — vehicle-neutral charge-limit refactor (Tesla audit follow-up)
 
 Audit of make-specific logic (main + the then-unlanded step-4 branch), tiered:
@@ -497,7 +496,6 @@ it; the generic printer needed no change. Tests pin the JSON shape
 (humanized `fetchedTs`/`hourTs`) and the human-mode line. Gate:
 `npm run check` green — **1005 passed / 3 skipped** (assertions extended, no
 new test cases).
-=======
 ### 2026-11-06 — P1c spike: Franklin cloud history endpoints live test (10/10 OK)
 
 Branch `spike/franklin-cloud-history`. Ran design.md §5 spike 1 against the live
@@ -532,7 +530,6 @@ login covers every history endpoint — no new auth needed.**
   `scripts/spike-franklin-history.{py,mjs}`.
 
 Gate: `npm run check` green — **1005 passed / 3 skipped** (spike scripts + docs only).
->>>>>>> 12dd012 (docs: record Franklin history spike findings (10/10 live))
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
