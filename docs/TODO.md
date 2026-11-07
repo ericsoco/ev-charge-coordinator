@@ -73,3 +73,102 @@ TASKS / BUGS
     [X] Clean up index.ts?
         Very bloated now, can individual commands be moved out?
         How are REPL + one-shot / Commander kept in sync?
+
+MANUAL TESTS post-Phase 1c
+**2026-11-06 22:41 PST**
+
+# What's next
+
+Yes — **P1c step 5 ("Live validation + docs") is the remaining P1c step**, with two caveats before you plan your week around it:
+
+1. **One deferred code item rode along into step 5:** step 2's Log explicitly says *"meter-reset-edge detection deferred to step 5."* So step 5 is validation + docs + a small decision: implement meter-reset-edge detection or consciously re-defer it (the clean-session filters already exclude the poisonous rows — eff > 1, house < 0.5 kWh — so this is a "detect and *tell* the user" feature, not a correctness gap).
+2. **README coverage is mostly already done** — steps 1–4 each landed their README subsections (session monitor §512, weather reserve §497, re-targeting §544, efficiency fallback §82). Step 5's docs work is therefore a *gap-check-and-reconcile pass* driven by what validation reveals, not a from-scratch section.
+
+Everything else queued is **after** P1c, not part of it: the Franklin backfill follow-up (proxy methods + baseline ingestion — "to be planned as its own step"), self-hosted ntfy (blocked on your VPS-vs-Cloudflare decision), the EV#2/`vehicle` rename refactor (deferred by decision), and your TODO.md items.
+
+---
+
+# How to validate — detailed runbook
+
+**Your live config (read just now):** `bufferPercent: 30`, `chargeEfficiency: 0.9`, `weatherBufferAdjPercent: 0` (off), auto-start **enabled** with 25 m geofence, notifiers log + ntfy, sample cadences 120 s battery / 60 s EV-while-plugged.
+
+## ✅ Phase A — Pre-flight (10 minutes, no charging needed)
+
+1. ✅ **Fresh main + gate:** `git checkout main && git pull && npm run check` → expect 1005/3 green; `npm run build` (dist is what launchd runs).
+2. ✅ **Daemon restart + health:** `evcc daemon restart` → `evcc status` (daemon alive, battery/EV sample ages fresh, store attached). Watch `evcc daemon logs` for sampler errors.
+3. ✅ **Notifications:** `evcc notify test` → push must arrive on the phone. Every validation below produces an ntfy event; if test fails, fix before trusting "no notification arrived" as evidence of anything.
+4. ✅ **Baseline store snapshot** (so you can diff after): `npm run store` and note session/decision counts; optionally `sqlite3 ~/.ev-charge-coordinator/data.sqlite 'SELECT id, reason_detail FROM decisions ORDER BY id DESC LIMIT 3;'`.
+
+## ⭕️ Phase B — Feature validations
+
+### ✅ B1. Observed efficiency (safe, zero-risk, do first)
+- `evcc charge-from-battery --dry-run` → the output must print **`Charge efficiency: 0.xxx (measured, N sessions)`** once N ≥ 5 clean sessions (you almost certainly cleared the gate months ago). Sanity-check the value is plausible (roughly 0.85–0.95, not 0.9 exactly — you're checking *measured*, not config).
+- Confirm it flows into real decisions: trigger a plug-in decision (arrive home, plug in), then read the newest `decisions.reason_detail` — it must contain the same `efficiency 0.xxx (measured, N sessions)` clause, and the `decision-made` ntfy should carry it too.
+- **Pass =** clause present with N ≥ 5 and value ≠ hard-coded 0.9; target math uses it (visible in the computed target on the decision).
+
+### ✅ B2. Session monitor — target stop (`target_reached`)
+The sub-50% case is *the normal case* here: your 13.5 kWh battery over a 30% buffer yields ~9.5 kWh max → targets around **SoC + ~11 EV points**, always below Tesla's 50% clamp. So any charge-from-battery / auto-start session exercises it.
+
+- Start a session (`evcc charge-from-battery --start`, or let auto-start fire on plug-in). Note the planned target in `evcc sessions` (`target N% (from M%)` display) and on the decision row.
+- Let it charge to N. **Expected within ~1 EV poll (≤ 60 s):** signed `stop-ev-charging` issued, session closes with **`stop_reason = 'target_reached'`**, `charging-stopped` notification with the reason, log line.
+- Verify the clamp split: Tesla limit shown ≥ 50 (or whatever was set), yet the stop happened at N < 50 — that's the polling stop working, the whole point of requirements Oct 10 phase 2.
+- **Pass =** stop at N (±1 poll), reason recorded, notification arrived.
+
+### ⭕️ B3. Session monitor — buffer stop (`battery_buffer`)
+Waiting for a natural evening drain to exactly 30% is slow; use the **controlled trick** (stop-direction is the conservative/safe direction):
+
+1. During an active charging session, raise the buffer to just above current battery SoC: `evcc config --set-buffer <SoC−1>` (e.g. battery at 62 → set 61).
+2. **Expected:** within a couple of ticks the monitor stops charging, `stop_reason = 'battery_buffer'`, notification with that reason.
+3. Then restore `--set-buffer 30`.
+- **Pass =** reason recorded correctly and the stop is attributed to battery, not target (check the session row + notification wording).
+
+### ⭕️ B4. Resume after a monitor stop (step 4)
+The B3 test sets up resume for free — monitor-stopped session, then you lower the buffer so battery is now > `buffer + 2%` (your known-constants: resume margin **2 points**, deadband **1 EV point**, `RETARGET_MIN_DELTA_PERCENT = 1`):
+
+- **Expected within a few ticks:** charging restarts (no new limit command needed if unchanged), `charging-started` notification, session continues (same session row — it resumes, not re-creates).
+- **Known limitation — do NOT file as a bug:** a session the *car itself* ended (`Complete`, `stop_reason` null) is deliberately never resumed; next plug-in re-decides.
+
+### ⭕️ B5. Solar-surplus re-target (the hardest to catch naturally — monitor a live session)
+Needs battery SoC *moving* during EV charging. Realistic windows: daytime charging under sun (battery rising → **raise**), or evening discharge (battery falling → **lower**).
+
+While charging, watch `evcc sessions` and ntfy:
+- ✅ **Raise:** new Tesla limit issued → session `target_percent` updated → **📈** `session-retargeted` notification whose text matches `target_change_reason` exactly, phrased **"initial → new current"** (e.g. *"increasing the session target from an initial value of 45% to 55%"*). `initial_target_percent` stays at 45.
+- ⭕️ **Lower:** target row updated **only** (no Tesla command) and the monitor enforces it next tick — if EV SoC is already ≥ the new target, the session stops with `target_reached` in the same/next tick (that ordering — re-target evaluation *before* the stop check — is the seam step 4 built).
+- ✅ **Hysteresis:** over a 20+ min stretch, no more than ~1 change (deadband 1 EV point vs the **raw** target). Repeated identical evaluations must not re-notify.
+- ⭕️ **Stale-data guard:** put the Mac to sleep mid-session ≥ a few sample periods, wake it — the first evaluation must **not** fire a spurious re-target from old samples, and hysteresis is measured from the last actual change (sleep satisfies it). This is the "spotty uptime" analysis from step 4; catch it if your session spans a lid-close.
+- ⭕️ **Overlays:** the raise/lower math should reflect observed efficiency + effective buffer (weather, if enabled) rather than raw config — visible via the battery % in the 📈/📉 text and the decision reason.
+
+### ⭕️ B6. Weather reserve (step 3) — two states
+⭕️ **Off-path (current config):** with `weatherBufferAdjPercent: 0`, confirm `reason_detail` has **no** weather clause (your live decisions today should show none — that's half the test).
+
+⭕️ **On-path (controlled):**
+1. Hand-edit `daemon-config.json`: `"weatherBufferAdjPercent": 10`. To *guarantee* the "low solar" condition regardless of actual forecast, also temporarily set `"weatherSolarThresholdWhM2": 100000` (validated max — any next-24h integral counts as low).
+2. `evcc daemon restart` (knobs are read at daemon start).
+3. Trigger a decision (plug in). **Expected:** `reason_detail` ends with **` — weather +10%: <detail>`**; effective buffer = 30 + 10 = 40 drives the `below_buffer` interlock wording *(base + weather)* and **shrinks** the computed target (more reserve kept). `evcc charge-from-battery --dry-run` should print **`Reserve: buffer 30% — weather +10%: …`**.
+4. Set the threshold back to 2000, decide your real-world `weatherBufferAdjPercent` (0 = stay off, or a modest 5), restart again.
+- Stale (>36 h)/missing/thin forecasts → ignored: covered by unit tests; you only need the on-path live.
+
+⭕️ ### B7. Robustness spot-checks
+- ⭕️ **Restart mid-session:** `evcc daemon restart` while charging — session target persists (store), monitor re-arms, no double-stop, no lost reason.
+- ⭕️ **Dry-run authority:** optionally run a `--dry-run` daemon across a charging window — the monitor must **not** stop anything (monitor authority is live-only: `autoStart.enabled && !dryRun`).
+- After any anomaly, `evcc daemon logs` + `sqlite3 … data.sqlite` are the evidence trail.
+
+## Phase C — Docs closeout (the actual step-5 deliverables)
+
+1. **README gap-check:** walk the intelligence sections against your validation notes — stop-reason semantics, resume rules + the not-resumed limitation, weather knob + restart requirement, efficiency clause wording. Fix what diverged from reality.
+2. **Meter-reset-edge decision:** implement the deferred detection (flag/mark affected sessions at close) or record an explicit re-deferral with reasoning in the Log.
+3. **Workplan Log entry** for step 5: validation matrix (B1–B7 pass/fail + dates), any fixes made, README deltas; flip the P1c status header to *steps 1–5 complete*; refresh the stale "Current state (verified 2026-11-03)" date. Gate `npm run check` on the branch, land per your branch discipline.
+
+## Suggested sequencing
+
+| When | What |
+|---|---|
+| Tonight | Phase A + B1 + B6-off (read-only) |
+| Next plug-in | B1 decision clause + B2 target stop + B6-on if enabled |
+| Same/next session | B3 buffer raise → B5 resume via buffer restore (one controlled window) |
+| Next sunny charging window | B5 re-target raise/lower + sleep/wake guard |
+| After | Phase C closeout |
+
+**Biggest practical risk:** B5 needs a charging session with moving battery SoC — if the car won't charge long enough naturally, do what step 4 planning did: engineer one evening (plug in at low SoC, let battery swing) and watch the logs.
+
+Want me to draft the exact `sqlite3` verification queries per test (expected rows before/after), or turn this into a checklist in the workplan when you switch to Act mode?
