@@ -47,7 +47,7 @@ function input(overrides: Partial<ReTargetInput> = {}): ReTargetInput {
 describe('evaluateReTarget (pure) — change', () => {
   it('raises on surplus beyond the deadband: stop target + Tesla limit', () => {
     const verdict = evaluateReTarget(input());
-    expect(verdict).toMatchObject({ change: 'raise', newStopTarget: 63, newTeslaLimit: 63 });
+    expect(verdict).toMatchObject({ change: 'raise', newStopTarget: 63, newChargeLimit: 63 });
     expect(verdict.resume).toBe(false);
     expect(verdict.detail).toBe('re-target 55% → 63% (solar surplus, battery 70%)');
   });
@@ -57,7 +57,7 @@ describe('evaluateReTarget (pure) — change', () => {
     expect(evaluateReTarget(input({ sessionTargetPercent: 63 }))).toMatchObject({
       change: 'none',
       newStopTarget: null,
-      newTeslaLimit: null,
+      newChargeLimit: null,
     });
     // ev 50, battery 60 → raw 56.48 vs stored 56: rounds to 56, delta 0.48 < 1
     // — a raw oscillating around the .5 boundary never fires.
@@ -73,7 +73,7 @@ describe('evaluateReTarget (pure) — change', () => {
         sessionInitialTargetPercent: 45,
       })
     );
-    expect(verdict).toMatchObject({ change: 'lower', newStopTarget: 59, newTeslaLimit: null });
+    expect(verdict).toMatchObject({ change: 'lower', newStopTarget: 59, newChargeLimit: null });
     expect(verdict.detail).toBe('re-target 45% → 59% (battery 45%)');
   });
 
@@ -81,21 +81,21 @@ describe('evaluateReTarget (pure) — change', () => {
     const verdict = evaluateReTarget(
       input({ evSocPercent: 40, sessionTargetPercent: 47, sessionInitialTargetPercent: 47 })
     );
-    expect(verdict).toMatchObject({ change: 'raise', newStopTarget: 48, newTeslaLimit: 50 });
+    expect(verdict).toMatchObject({ change: 'raise', newStopTarget: 48, newChargeLimit: 50 });
   });
 
   it('a lower below the floor stops at the unclamped truth', () => {
     const verdict = evaluateReTarget(
       input({ evSocPercent: 40, homeBatterySocPercent: 32, sessionTargetPercent: 43 }) // raw 41.94
     );
-    expect(verdict).toMatchObject({ change: 'lower', newStopTarget: 41, newTeslaLimit: null });
+    expect(verdict).toMatchObject({ change: 'lower', newStopTarget: 41, newChargeLimit: null });
   });
 
   it('a battery-limited lower stops where the math lands (at the EV)', () => {
     const verdict = evaluateReTarget(
       input({ evSocPercent: 50, homeBatterySocPercent: 21, sessionTargetPercent: 60 }) // raw 50.16
     );
-    expect(verdict).toMatchObject({ change: 'lower', newStopTarget: 50, newTeslaLimit: null });
+    expect(verdict).toMatchObject({ change: 'lower', newStopTarget: 50, newChargeLimit: null });
   });
 
   it('reason phrases initial → new even after earlier re-targets', () => {
@@ -177,7 +177,7 @@ describe('evaluateReTarget (pure) — resume', () => {
     expect(verdict).toMatchObject({
       change: 'raise',
       newStopTarget: 58,
-      newTeslaLimit: 58,
+      newChargeLimit: 58,
       resume: true,
     });
   });

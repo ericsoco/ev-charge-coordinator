@@ -55,13 +55,14 @@ export interface DecisionOutcome {
   filterResults: FilterResult[];
   /** From computeChargeLimit when the math ran; null when it did not. */
   limitedBy: EnergyLimitedBy | null;
-  /** Tesla limit the math produced; null when it did not run. */
+  /** Vehicle limit the math produced; null when it did not run. */
   targetPercent: number | null;
   /**
    * SoC at which the session monitor must stop charging: the unclamped
-   * `rawPercent` floored (never overshoot the energy budget) when Tesla's
-   * 50% floor masked a lower computed target, else the Tesla limit itself
-   * (the car enforces it; our stop is the backstop). Null with declines.
+   * `rawPercent` floored (never overshoot the energy budget) when the
+   * vehicle's minimum settable limit masked a lower computed target, else the
+   * limit itself (the car enforces it; our stop is the backstop). Null with
+   * declines.
    */
   stopTargetPercent: number | null;
 }

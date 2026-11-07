@@ -273,7 +273,7 @@ describe('stopTargetPercent (the monitor\u2019s stop threshold)', () => {
     );
     expect(outcome).toMatchObject({
       accepted: true,
-      limitedBy: 'tesla-minimum',
+      limitedBy: 'vehicle-minimum',
       targetPercent: 50,
       stopTargetPercent: 42,
     });

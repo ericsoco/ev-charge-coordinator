@@ -17,8 +17,8 @@
  * detection is future hardening.
  */
 import type { DatabaseSync } from 'node:sqlite';
-import type { TeslaService } from '../services/TeslaService.js';
 import type { EventKind } from '../store/types.js';
+import type { EVService } from '../types/ev.js';
 import * as evStore from '../store/EvStore.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import * as homeBatteryStore from '../store/HomeBatteryStore.js';
@@ -75,7 +75,7 @@ const ASLEEP_HEARTBEAT_MS = 3_600_000;
 export interface EvPollerDeps {
   db: DatabaseSync;
   /** Only these two reads are used; tests pass fakes. */
-  ev: Pick<TeslaService, 'getVehicleState' | 'getStatus'>;
+  ev: Pick<EVService, 'getVehicleState' | 'getStatus'>;
   vehicleId: string;
   homeBatteryId: string;
   /** Tick cadence (evStatusPollSec), seconds. */

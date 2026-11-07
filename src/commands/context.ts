@@ -71,11 +71,3 @@ export function logError(ctx: CommandContext, message: string): void {
 export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-/**
- * Tesla rejects a charge limit below 50%, so both the explicit setter and the
- * "charge from battery" rule treat 50 as the floor rather than clamping a
- * request the user did not make.
- */
-export const MIN_EV_CHARGE_LIMIT = 50;
-export const MAX_EV_CHARGE_LIMIT = 100;

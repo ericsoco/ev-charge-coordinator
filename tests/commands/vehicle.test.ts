@@ -327,7 +327,7 @@ describe('chargeFromBattery', () => {
     expect(calls.setChargeLimit[0]).toEqual([91]);
   });
 
-  it("falls back to Tesla's 50% floor and says why", async () => {
+  it('falls back to the vehicle floor and says why', async () => {
     // 40% - 20% buffer = 2.7 kWh spare; EV at 20% lands at raw 23.2%.
     const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 40 },
@@ -338,7 +338,7 @@ describe('chargeFromBattery', () => {
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([50]);
-    expect(out.join('\n')).toContain("below Tesla's 50% minimum");
+    expect(out.join('\n')).toContain("below the vehicle's 50% minimum");
   });
 
   it('refuses to compute when the proxy omits battery_soc', async () => {

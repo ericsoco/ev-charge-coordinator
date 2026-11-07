@@ -1,6 +1,6 @@
 /**
  * Session monitor (design §3.4): while charging, stop at the computed target
- * (the sub-50% case Tesla's limit cannot express) and stop when the home
+ * (the sub-minimum case the vehicle's own limit cannot express) and stop when the home
  * battery hits its buffer.
  *
  * Split like engine/decisionConsumer: `evaluateSessionStop` is pure policy —

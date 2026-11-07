@@ -11,8 +11,6 @@ import * as fs from 'fs';
 import {
   describeError,
   log,
-  MAX_EV_CHARGE_LIMIT,
-  MIN_EV_CHARGE_LIMIT,
   type CommandContext,
   type CommandResult,
 } from './context.js';
@@ -20,6 +18,7 @@ import type { Session } from './session.js';
 import * as paint from '../utils/color.js';
 import { describeConfigProblems, energyConfigPath } from '../utils/config.js';
 import {
+  DEFAULT_CHARGE_LIMIT_BOUNDS,
   computeChargeLimit,
   energyConfigFieldProblem,
   type EnergyConfig,
@@ -80,8 +79,9 @@ export async function setEvChargeLimit(
   ctx: CommandContext,
   percent: number
 ): Promise<CommandResult> {
-  if (Number.isNaN(percent) || percent < MIN_EV_CHARGE_LIMIT || percent > MAX_EV_CHARGE_LIMIT) {
-    const message = `Charge limit must be between ${MIN_EV_CHARGE_LIMIT} and ${MAX_EV_CHARGE_LIMIT}`;
+  const { minPercent, maxPercent } = DEFAULT_CHARGE_LIMIT_BOUNDS;
+  if (Number.isNaN(percent) || percent < minPercent || percent > maxPercent) {
+    const message = `Charge limit must be between ${minPercent} and ${maxPercent}`;
     log(ctx, paint.warning(message));
     return { ok: false, error: message };
   }
@@ -428,7 +428,7 @@ export async function chargeFromBattery(
       // Insufficient energy: name the reason and the numbers behind it. The
       // kWh breakdown above is the evidence for this line.
       const message =
-        evSoc >= MAX_EV_CHARGE_LIMIT
+        evSoc >= DEFAULT_CHARGE_LIMIT_BOUNDS.maxPercent
           ? 'Cannot charge: the EV is already fully charged'
           : limit.batteryAvailableKwh <= 0
             ? `Not enough energy to charge: the solar battery has no energy above its ${effBufferPercent}% buffer${weatherNote}`
@@ -439,16 +439,22 @@ export async function chargeFromBattery(
       return { ok: false, error: message };
     }
 
-    if (limit.limitedBy === 'tesla-minimum') {
+    if (limit.limitedBy === 'vehicle-minimum') {
       log(
         ctx,
         paint.warning(
-          `Energy math says ${limit.rawPercent.toFixed(1)}%, below Tesla's ` +
-            `${MIN_EV_CHARGE_LIMIT}% minimum - setting ${MIN_EV_CHARGE_LIMIT}%`
+          `Energy math says ${limit.rawPercent.toFixed(1)}%, below the vehicle's ` +
+            `${DEFAULT_CHARGE_LIMIT_BOUNDS.minPercent}% minimum - setting ` +
+            `${DEFAULT_CHARGE_LIMIT_BOUNDS.minPercent}%`
         )
       );
     } else if (limit.limitedBy === 'ev-capacity') {
-      log(ctx, paint.info(`Target limited by the EV pack capacity (${MAX_EV_CHARGE_LIMIT}%)`));
+      log(
+        ctx,
+        paint.info(
+          `Target limited by the EV pack capacity (${DEFAULT_CHARGE_LIMIT_BOUNDS.maxPercent}%)`
+        )
+      );
     }
 
     if (options.dryRun) {
@@ -528,11 +534,15 @@ export function createSetEvChargeLimitCommand(deps: { session: Session }): Comma
   return new Command('set-ev-charge-limit')
     .allowExcessArguments(false)
     .description('Set the EV charge limit')
-    .argument('<percent>', 'Charge limit percentage (50-100)')
+    .argument(
+      '<percent>',
+      `Charge limit percentage (${DEFAULT_CHARGE_LIMIT_BOUNDS.minPercent}-${DEFAULT_CHARGE_LIMIT_BOUNDS.maxPercent})`
+    )
     .action(async (percent: string) => {
+      const { minPercent, maxPercent } = DEFAULT_CHARGE_LIMIT_BOUNDS;
       const limit = parseInt(percent);
-      if (isNaN(limit) || limit < MIN_EV_CHARGE_LIMIT || limit > MAX_EV_CHARGE_LIMIT) {
-        console.error(paint.warning(`Charge limit must be between ${MIN_EV_CHARGE_LIMIT} and ${MAX_EV_CHARGE_LIMIT}`));
+      if (isNaN(limit) || limit < minPercent || limit > maxPercent) {
+        console.error(paint.warning(`Charge limit must be between ${minPercent} and ${maxPercent}`));
         process.exit(1);
       }
 
