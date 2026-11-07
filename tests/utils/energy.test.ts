@@ -4,7 +4,7 @@
  * computeChargeLimit with an explicit config.
  */
 import { describe, expect, it } from 'vitest';
-import { computeChargeLimit, type EnergyConfig } from '../../src/utils/energy.js';
+import { computeChargeLimit, stopTargetFor, type EnergyConfig } from '../../src/utils/energy.js';
 
 /**
  * 13.5 kWh house pack, 75 kWh EV, 20% buffer, 90% efficiency -- kept literal on
@@ -74,14 +74,28 @@ describe('computeChargeLimit - charge efficiency', () => {
   });
 });
 
-describe('computeChargeLimit - Tesla 50% floor', () => {
-  it('sets 50% and reports tesla-minimum when the math lands below it', () => {
+describe('computeChargeLimit - vehicle minimum floor (default bounds)', () => {
+  it('sets the floor and reports vehicle-minimum when the math lands below it', () => {
     const limit = computeChargeLimit(20, 40, CFG);
 
     expect(limit.batteryAvailableKwh).toBeCloseTo(2.7, 3);
     expect(limit.rawPercent).toBeCloseTo(23.24, 2);
     expect(limit.targetPercent).toBe(50);
-    expect(limit.limitedBy).toBe('tesla-minimum');
+    expect(limit.limitedBy).toBe('vehicle-minimum');
+  });
+
+  it('custom bounds replace the vehicle policy (the EV #2 seam)', () => {
+    // A vehicle whose floor is 20: raw 23.24 is settable there, so no floor
+    // verdict and no clamping up to Tesla's 50.
+    const open = computeChargeLimit(20, 40, CFG, { minPercent: 20, maxPercent: 100 });
+    expect(open.targetPercent).toBe(23);
+    expect(open.limitedBy).toBe('none');
+
+    // Below THAT vehicle's floor the same mechanism reports vehicle-minimum.
+    const below = computeChargeLimit(5, 90, CFG, { minPercent: 30, maxPercent: 100 });
+    expect(below.rawPercent).toBeLessThan(30);
+    expect(below.limitedBy).toBe('vehicle-minimum');
+    expect(stopTargetFor(below)).toBe(Math.floor(below.rawPercent));
   });
 });
 

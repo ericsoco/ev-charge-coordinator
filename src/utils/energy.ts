@@ -2,14 +2,12 @@
  * Energy math for `charge-from-battery`.
  *
  * Pure module: no I/O, no services, no store. Two state-of-charge readings --
- * each a percent of a different pack -- are converted into one Tesla
+ * each a percent of a different pack -- are converted into one vehicle
  * charge-limit percent via kWh, the only unit both packs share. Comparing raw
  * percentages is dimensionally invalid (percent of a ~13.5 kWh house battery
  * against percent of a ~75 kWh car), so there is deliberately no percent-based
  * path here.
  */
-
-import { MAX_EV_CHARGE_LIMIT, MIN_EV_CHARGE_LIMIT } from '../commands/context.js';
 
 /** Tunables for the charge-limit computation. Capacities are usable kWh. */
 export interface EnergyConfig {
@@ -24,12 +22,32 @@ export interface EnergyConfig {
 }
 
 /**
+ * The vehicle's settable charge-limit bounds. The DEFAULT is Tesla's policy
+ * (rejects anything below 50%); a future EV adapter passes its own bounds --
+ * the clamp and the floor verdict below key off this, never off a hardcoded
+ * make. The CLI setter validates against the default until bounds flow from
+ * the service (EV #2 seam, recorded in the workplan).
+ */
+export interface ChargeLimitBounds {
+  /** Lowest limit the vehicle accepts, percent. */
+  minPercent: number;
+  /** Highest limit the vehicle accepts, percent. */
+  maxPercent: number;
+}
+
+/** Tesla's bounds today — the only vehicle implemented so far. */
+export const DEFAULT_CHARGE_LIMIT_BOUNDS: ChargeLimitBounds = {
+  minPercent: 50,
+  maxPercent: 100,
+};
+
+/**
  * Why the target is what it is: nothing constrained it (`none`), the available
  * house energy cannot raise the target above the EV's current charge
  * (`battery`), the EV pack would overfill (`ev-capacity`), or the kWh math
- * landed below Tesla's 50% floor (`tesla-minimum`).
+ * landed below the vehicle's minimum settable limit (`vehicle-minimum`).
  */
-export type EnergyLimitedBy = 'none' | 'battery' | 'ev-capacity' | 'tesla-minimum';
+export type EnergyLimitedBy = 'none' | 'battery' | 'ev-capacity' | 'vehicle-minimum';
 
 /** The computed charge-limit decision and the reasoning to show the user. */
 export interface EnergyChargeLimit {
@@ -39,11 +57,11 @@ export interface EnergyChargeLimit {
   evCurrentKwh: number;
   /** Energy the EV would hold at the target, in kWh. */
   evTargetKwh: number;
-  /** Integer Tesla limit to request, clamped to 50-100. */
+  /** Integer vehicle limit to request, clamped to the bounds. */
   targetPercent: number;
   /** What shaped the target; see EnergyLimitedBy. */
   limitedBy: EnergyLimitedBy;
-  /** The unclamped percentage, for explaining a `tesla-minimum` result. */
+  /** The unclamped percentage, for explaining a `vehicle-minimum` result. */
   rawPercent: number;
 }
 
@@ -103,16 +121,18 @@ function validateSoC(soc: number, label: string): void {
 }
 
 /**
- * Compute the Tesla charge limit that delivers the spare house energy to the EV.
+ * Compute the vehicle charge limit that delivers the spare house energy to
+ * the EV, bounded by the vehicle's settable limits.
  *
  * batteryAvailableKwh = capacity x max(0, batterySoc - bufferPercent) / 100
  * evTargetKwh         = min(evCapacity, evCurrent + available x efficiency)
- * targetPercent       = clamp(round(evTargetKwh / evCapacity x 100), 50, 100)
+ * targetPercent       = clamp(round(evTargetKwh / evCapacity x 100), bounds)
  */
 export function computeChargeLimit(
   evSocPercent: number,
   batterySocPercent: number,
-  cfg: EnergyConfig
+  cfg: EnergyConfig,
+  bounds: ChargeLimitBounds = DEFAULT_CHARGE_LIMIT_BOUNDS
 ): EnergyChargeLimit {
   validateEnergyConfig(cfg);
   validateSoC(evSocPercent, 'EV');
@@ -127,8 +147,8 @@ export function computeChargeLimit(
   );
   const rawPercent = (evTargetKwh / cfg.evBatteryKwh) * 100;
   const targetPercent = Math.min(
-    MAX_EV_CHARGE_LIMIT,
-    Math.max(MIN_EV_CHARGE_LIMIT, Math.round(rawPercent))
+    bounds.maxPercent,
+    Math.max(bounds.minPercent, Math.round(rawPercent))
   );
 
   // `battery` is the insufficient-energy case: the limit the math produces
@@ -137,10 +157,10 @@ export function computeChargeLimit(
   let limitedBy: EnergyLimitedBy = 'none';
   if (targetPercent <= evSocPercent || rawPercent <= evSocPercent) {
     limitedBy = 'battery';
-  } else if (rawPercent >= MAX_EV_CHARGE_LIMIT) {
+  } else if (rawPercent >= bounds.maxPercent) {
     limitedBy = 'ev-capacity';
-  } else if (rawPercent < MIN_EV_CHARGE_LIMIT) {
-    limitedBy = 'tesla-minimum';
+  } else if (rawPercent < bounds.minPercent) {
+    limitedBy = 'vehicle-minimum';
   }
 
   return { batteryAvailableKwh, evCurrentKwh, evTargetKwh, targetPercent, limitedBy, rawPercent };
@@ -148,11 +168,11 @@ export function computeChargeLimit(
 
 /**
  * The SoC at which the session monitor must stop for this limit: the
- * unclamped `rawPercent` floored when Tesla's 50% floor masked a lower
- * computed target, else the limit itself (the car enforces it; our stop is
- * the backstop). Shared by the plug-in engine and the mid-session
- * re-targeter (P1c step 4) so both derive it identically.
+ * unclamped `rawPercent` floored when the vehicle's minimum settable limit
+ * masked a lower computed target, else the limit itself (the car enforces
+ * it; our stop is the backstop). Shared by the plug-in engine and the
+ * mid-session re-targeter (P1c step 4) so both derive it identically.
  */
 export function stopTargetFor(limit: EnergyChargeLimit): number {
-  return limit.limitedBy === 'tesla-minimum' ? Math.floor(limit.rawPercent) : limit.targetPercent;
+  return limit.limitedBy === 'vehicle-minimum' ? Math.floor(limit.rawPercent) : limit.targetPercent;
 }

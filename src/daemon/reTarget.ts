@@ -77,12 +77,12 @@ export interface ReTargetInput {
 }
 
 export interface ReTargetVerdict {
-  /** Session-target move to apply; 'none' → newStopTarget/newTeslaLimit null. */
+  /** Session-target move to apply; 'none' → newStopTarget/newChargeLimit null. */
   change: ReTargetChange;
   /** The new stop target (what the monitor enforces); set iff change ≠ none. */
   newStopTarget: number | null;
-  /** Tesla limit to send; set iff change === 'raise' (lower never touches the car). */
-  newTeslaLimit: number | null;
+  /** Vehicle limit to send; set iff change === 'raise' (lower never touches the car). */
+  newChargeLimit: number | null;
   /** Start charging this tick — monitor-stopped session with recovered battery. */
   resume: boolean;
   /** initial → new phrasing for target_change_reason + notification; '' otherwise. */
@@ -90,7 +90,7 @@ export interface ReTargetVerdict {
 }
 
 function idle(): ReTargetVerdict {
-  return { change: 'none', newStopTarget: null, newTeslaLimit: null, resume: false, detail: '' };
+  return { change: 'none', newStopTarget: null, newChargeLimit: null, resume: false, detail: '' };
 }
 
 /**
@@ -117,7 +117,7 @@ export function evaluateReTarget(input: ReTargetInput): ReTargetVerdict {
 
   let change: ReTargetChange = 'none';
   let newStopTarget: number | null = null;
-  let newTeslaLimit: number | null = null;
+  let newChargeLimit: number | null = null;
   let detail = '';
 
   if (stored !== null && managesState) {
@@ -126,10 +126,11 @@ export function evaluateReTarget(input: ReTargetInput): ReTargetVerdict {
     if (delta >= RETARGET_MIN_DELTA_PERCENT || delta <= -RETARGET_MIN_DELTA_PERCENT) {
       change = delta > 0 ? 'raise' : 'lower';
       newStopTarget = stopTargetFor(limit);
-      // Raise: the car must be allowed to reach the new target (sub-50 →
-      // Tesla clamps to its floor; the stop target still carries the truth).
+      // Raise: the car must be allowed to reach the new target (below the
+      // vehicle's minimum the send clamps to its floor; the stop target still
+      // carries the truth).
       // Lower: session-target only — the monitor stops at its next tick.
-      newTeslaLimit = change === 'raise' ? limit.targetPercent : null;
+      newChargeLimit = change === 'raise' ? limit.targetPercent : null;
       const initial = input.sessionInitialTargetPercent ?? stored;
       detail =
         change === 'raise'
@@ -151,7 +152,7 @@ export function evaluateReTarget(input: ReTargetInput): ReTargetVerdict {
     evSoc < effectiveTarget &&
     batterySoc > cfg.bufferPercent + RESUME_MIN_RECOVERY_PERCENT;
 
-  return { change, newStopTarget, newTeslaLimit, resume, detail };
+  return { change, newStopTarget, newChargeLimit, resume, detail };
 }
 
 export interface ReTargeterDeps {
@@ -160,7 +161,7 @@ export interface ReTargeterDeps {
   autoStart: AutoStartConfig;
   /** `daemon --dry-run`; live = enabled && !dryRun (the engine's mode mirror). */
   dryRun: boolean;
-  /** Signed limit raise (live only); the sub-50 case clamps to the Tesla floor. */
+  /** Signed limit raise (live only); a sub-minimum send clamps to the vehicle floor. */
   setChargeLimit: (percent: number) => Promise<void>;
   /** Signed start for a resumed session (live only). */
   startCharging: () => Promise<void>;
@@ -277,8 +278,8 @@ export function createReTargeter(
         // Order mirrors the decision consumer: raise sends the limit first,
         // then records the target (a partial failure retries cleanly next
         // tick — the deadband still sees the old stored target), then start.
-        if (verdict.change === 'raise' && verdict.newTeslaLimit !== null) {
-          await deps.setChargeLimit(verdict.newTeslaLimit);
+        if (verdict.change === 'raise' && verdict.newChargeLimit !== null) {
+          await deps.setChargeLimit(verdict.newChargeLimit);
         }
         if (verdict.change !== 'none' && verdict.newStopTarget !== null) {
           sessionStore.setSessionTarget(deps.db, session.id, verdict.newStopTarget, verdict.detail);
