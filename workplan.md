@@ -46,6 +46,16 @@
 - **Battery-buffer product evolution** (`docs/requirements.md` Oct 10 / Oct 14 entries:
   sub-50% target handling with polling stop) — **picked up as P1c below** (2026-11-03); the
   plug-in trigger half of those entries shipped with P1b.
+- **EV #2 / second vehicle API (deferred — shape driven by the second
+  implementation, not speculation):** rename the Tesla wiring seams then
+  (`ctx.tesla`, `services.tesla`, `session.initializeTesla()`), flow
+  `ChargeLimitBounds` from the service descriptor into the CLI setter, and
+  relocate `TeslaTokens` out of `types/ev.ts`. **Naming decision (user,
+  2026-11-06): prefer the token `vehicle` over `ev`** for that work — the
+  plain word beats a lowercased acronym (`ctx.vehicle`,
+  `initializeVehicle()`, never `ctx.ev`/`services.ev`); the same preference
+  applies to any existing `ev*` renames decided then. The bounds seam itself
+  already landed (Log, 2026-11-06).
 
 ## P1c — intelligence (active plan)
 
@@ -439,6 +449,35 @@ margin note, this entry. Known limitation: a `Complete` stop with
 `stop_reason` null (car stopped itself while the monitor slept) is not
 resumed — resume is deliberately monitor-stop-only; next plug-in re-decides.
 Gate: `npm run check` green — **1005 passed / 3 skipped** (28 new).
+
+### 2026-11-06 — vehicle-neutral charge-limit refactor (Tesla audit follow-up)
+
+Audit of make-specific logic (main + the then-unlanded step-4 branch), tiered:
+**Tier 1** shared-core hardcodes — `MIN/MAX_EV_CHARGE_LIMIT` living in
+`commands/context.ts` with `utils/energy.ts` importing them (layering
+inversion), `tesla-minimum` in `EnergyLimitedBy` reaching notifications and
+`npm run store` verbatim, the sub-50 floor derivation, Tesla-worded CLI
+messages; **Tier 2** concrete-class wiring (`CommandContext.tesla`,
+`runDaemon services.tesla`, `Pick<TeslaService>`, `newTeslaLimit`);
+**Tier 3** the adapter itself (`src/services/Tesla*`, auth/pair-key,
+credentials) — correctly isolated, untouched. Branch
+`refactor/vehicle-neutral-limits` (2 commits): (1) `ChargeLimitBounds` +
+`DEFAULT_CHARGE_LIMIT_BOUNDS` (50/100, documented as Tesla's policy) in
+`utils/energy.ts` — kills the layering inversion; `computeChargeLimit` takes
+an optional bounds param, all call sites unchanged (**zero behavior change**);
+`tesla-minimum` → `vehicle-minimum` everywhere live (no migration —
+`limited_by` is free TEXT and nothing reads it programmatically; historical
+audit rows keep the historical string); `newTeslaLimit` → `newChargeLimit`;
+`Pick<TeslaService>` → `Pick<EVService>`; the CLI setter validates and
+help-texts off the default bounds; seam test proves custom bounds (min 20)
+compute without Tesla's floor while a min-30 vehicle still gets
+`vehicle-minimum` + the floor stop-target. (2) this entry + README
+(session-monitor wording, flow formula, `limited_by` value list, New EV Type
+bounds step); requirements.md's Tesla-50 lines left as the historical record
+of why the floor exists. **Deferred to EV #2 — naming decision (user,
+2026-11-06): prefer the token `vehicle` over `ev`** (see the Decisions
+section above for the full scope). Gate: `npm run check` green — **1006
+passed / 3 skipped** (1 new).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
