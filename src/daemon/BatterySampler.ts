@@ -27,6 +27,13 @@ export interface BatterySamplerDeps {
   homeBatteryId: string;
   sampleSec: number;
   nowMs?: () => number;
+  /**
+   * Post-sample stage, run only after the rows land (the re-targeter's
+   * battery-tick resume — a sleeping car has no EV rich reads to trigger
+   * on). Isolated: a stage failure never fails sampling.
+   */
+  afterSample?: () => Promise<void>;
+  log?: (message: string) => void;
 }
 
 export function createBatterySampler(deps: BatterySamplerDeps): ScheduledTask {
@@ -70,6 +77,17 @@ export function createBatterySampler(deps: BatterySamplerDeps): ScheduledTask {
           homeUseKwh: stats.totals.homeUse,
         });
       });
+      if (deps.afterSample) {
+        try {
+          await deps.afterSample();
+        } catch (error) {
+          deps.log?.(
+            `[battery-sample] after-sample stage failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
     },
   };
 }

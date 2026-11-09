@@ -67,6 +67,12 @@ export interface ChargingProgressContext {
   tsMs: number;
   evSocPercent: number | null;
   chargingState: string;
+  /**
+   * Which stage produced the tick (diagnostics only): this poller's rich
+   * read, or the re-targeter's battery-sample path — the latter exists so a
+   * sleeping car (no rich reads) can still be resumed from stored state.
+   */
+  source?: 'ev-poll' | 'battery-sample';
 }
 
 /** First asleep observation, then hourly — silence stays explicable. */
@@ -425,6 +431,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         tsMs,
         evSocPercent: battery.soc,
         chargingState: battery.chargingState,
+        source: 'ev-poll',
       });
 
       // Program-init reconciliation: the first rich read of this process is

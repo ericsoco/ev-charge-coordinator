@@ -600,6 +600,39 @@ gap-check and the closing Log entry.
 Gate: `npm run check` green — **1007 passed / 2 skipped** (docs only; baseline moved
 with the charts/requirements changes landed on main).
 
+### 2026-11-09 — Fix: re-target/resume evaluates on battery ticks while the car sleeps
+
+Branch `fix/battery-tick-resume`. User question: why isn't the daemon restarting charging
+now that the home battery recovered over the past hour? Diagnosis (read-only, live
+log/store/config): session 31 monitor-stopped at 13:14 (`target_reached`, EV SoC 34 ≥
+target 31), car asleep since 13:24:56, battery climbed 24.9% → 38.1% — but the
+re-target/resume stage is chained **only** to EV rich reads (`onChargingProgress`), and
+EvPoller runs probe-only ticks while the car is not `online`. No rich reads → no verdict
+tick → a recovered battery triggered nothing (the battery sampler ran no decision stage).
+The policy itself was correct: on the next tick it would have computed raw ≈ 36.9 → raise
+31→36 + resume in one verdict (buffer 30, margin +2, EV 34 < 36).
+
+**Fix (Option A, approved by user):** `createReTargeter` gained a second trigger,
+`onBatteryTick` — called after every successful battery sample (`BatterySampler.afterSample`,
+isolated so a stage failure never fails sampling) and evaluating the SAME pure verdict from
+the latest stored EV observation. The start command performs the one wake (reads still
+never wake — design stance intact). Duplicate-start guard: in-memory
+`resumeIssuedForSampleMs` (episode-flag pattern) suppresses battery-tick resumes for an
+observation already acted on; a fresh rich read re-enables evaluation (fresh state owns
+the truth). `ChargingProgressContext.source` (`ev-poll` | `battery-sample`) tags the
+resumed log line (`… [battery-sample]`) for diagnosability. The session monitor
+deliberately does NOT ride the battery path — its stop checks need a fresh EV read and a
+stored `Charging` must not act from there (pinned by a source-pin test). `runDaemon`
+late-binds `reTargetStage` into the sampler's `afterSample` (exists only with the Tesla
+service).
+
+Tests: 8 battery-tick edge cases (raise+resume from stored state, one-start-per-observation,
+no-EV-row no-op, manual-stop + buffer guards, shadow would-act episode, failure retry) +
+2 sampler `afterSample` isolation cases + 1 runDaemon source pin. README resume section
+updated ("The tick that runs while the car sleeps"). Known limitation stands: a
+`Complete` stop (`stop_reason` null) is never resumed. Gate: `npm run check` green —
+**1016 passed / 3 skipped** (11 new); `node dist/index.js --help` OK.
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"

@@ -560,6 +560,15 @@ session's target when the plan has genuinely moved:
   buffer** (clears the 2-min noise p99 of 1.58%, so stop ↔ resume cannot
   flap), and the EV is still below the target. A raise that creates the room
   runs limit → target → start in one tick.
+- **The tick that runs while the car sleeps** — the EV-rich-read path above
+  stops entirely when the car goes offline after a stop, so the same verdict
+  is *also* evaluated **after every battery sample**, from the latest stored
+  EV observation. This is what resumes charging when the home battery
+  recovers with solar while the car sleeps; the start command performs the
+  one wake (reads still never wake). At most one start is issued per stored
+  observation — a fresh rich read re-enables evaluation — and the resumed
+  log line names its path: `[re-target] resumed charging (battery 38.1%)
+  [battery-sample]`.
 - Same live gating as the monitor (shadow logs `would raise/lower/resume` once
   per episode). Every applied change logs and pushes
   `📈 re-target 45% → 55% (solar surplus, battery 68%)` — the same
