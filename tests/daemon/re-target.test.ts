@@ -18,6 +18,7 @@ import {
 import { openStore } from '../../src/store/database.js';
 import * as sessionStore from '../../src/store/SessionStore.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
+import * as evStore from '../../src/store/EvStore.js';
 import * as weatherStore from '../../src/store/WeatherForecastStore.js';
 import { DEFAULT_WEATHER_POLICY, type WeatherPolicy } from '../../src/utils/weather.js';
 import type { NotificationEvent } from '../../src/notifiers/types.js';
@@ -477,6 +478,117 @@ describe('createReTargeter (edge)', () => {
     expect(calls).toEqual(['limit:64']);
     expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(64);
   });
+
+  // --- battery-sample tick: the sleeping-car resume path -------------------
+  // The poll path never runs while the car sleeps (no rich reads); these pin
+  // the second trigger: evaluate from the LATEST STORED EV observation.
+
+  /** The 2026-11-09 live shape: monitor-stopped, car asleep since the stop. */
+  function seedSleepingStop(batterySoc = 38.1) {
+    sessionStore.setSessionTarget(db, sessionId, 31);
+    sessionStore.setSessionStopReason(db, sessionId, 'target_reached');
+    evStore.insertSample(db, {
+      vehicleId: 'VIN',
+      tsMs: 900,
+      state: 'online',
+      chargingState: 'Stopped',
+      socPercent: 34,
+    });
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 990, socPercent: batterySoc });
+  }
+
+  it('battery tick raises + resumes from stored state (the car is asleep)', async () => {
+    seedSleepingStop();
+
+    // ev 34, battery 38.1, buffer 20 → raw 36.93: raise 31 → 36 (vehicle
+    // limit clamps to the floor), then resume — the verdict a rich read
+    // would have produced, evaluated without one.
+    await retarget({ nowMs: () => 1_000 }).onBatteryTick();
+
+    expect(calls).toEqual(['limit:50', 'start']);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(36);
+    expect(logs.join('\n')).toContain('re-target 31% → 36% (solar surplus, battery 38.1%)');
+    expect(logs.join('\n')).toContain('resumed charging (battery 38.1%) [battery-sample]');
+    expect(events[0]).toMatchObject({ type: 'session-retargeted', direction: 'raise' });
+  });
+
+  it('one resume per EV observation — a fresh rich read re-enables it', async () => {
+    seedSleepingStop();
+    const run = retarget({ nowMs: () => 1_000 });
+
+    await run.onBatteryTick();
+    await run.onBatteryTick(); // same stored observation — no duplicate start
+    expect(calls).toEqual(['limit:50', 'start']);
+
+    // A fresh observation lands (still stopped): fresh state owns the truth.
+    evStore.insertSample(db, {
+      vehicleId: 'VIN',
+      tsMs: 1_100,
+      state: 'online',
+      chargingState: 'Stopped',
+      socPercent: 34,
+    });
+    await run.onBatteryTick();
+    expect(calls).toEqual(['limit:50', 'start', 'start']);
+  });
+
+  it('no EV observation yet → the battery tick is a no-op', async () => {
+    await retarget({ nowMs: () => 1_000 }).onBatteryTick();
+    expect(calls).toEqual([]);
+    expect(logs).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('battery tick never resumes a manual/car stop', async () => {
+    seedSleepingStop();
+    sessionStore.setSessionStopReason(db, sessionId, null);
+    await retarget({ nowMs: () => 1_000 }).onBatteryTick();
+    expect(calls).toEqual([]);
+    expect(logs).toEqual([]);
+  });
+
+  it('battery at/below the buffer never acts on the tick (monitor owns it)', async () => {
+    seedSleepingStop(19); // CFG buffer 20
+    await retarget({ nowMs: () => 1_000 }).onBatteryTick();
+    expect(calls).toEqual([]);
+    expect(logs).toEqual([]);
+  });
+
+  it('battery tick shadow mode: would-act once per episode, never actuates', async () => {
+    seedSleepingStop();
+    const run = retarget({
+      nowMs: () => 1_000,
+      autoStart: { enabled: false, filters: [] },
+    });
+    await run.onBatteryTick();
+    await run.onBatteryTick();
+    expect(calls).toEqual([]);
+    expect(events).toEqual([]);
+    expect(logs.filter((line) => line.includes('would raise'))).toHaveLength(1);
+  });
+
+  it('a failed start on the battery tick logs honestly and retries next tick', async () => {
+    seedSleepingStop();
+    let failing = true;
+    const run = retarget({
+      nowMs: () => 1_000,
+      startCharging: async () => {
+        if (failing) throw new Error('proxy down');
+        calls.push('start');
+      },
+    });
+
+    await run.onBatteryTick(); // limit + target land, start fails
+    expect(calls).toEqual(['limit:50']);
+    expect(logs.filter((line) => line.includes('actuation failed'))).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'failure', component: 're-target' });
+
+    failing = false; // no resume was issued → the next tick retries
+    await run.onBatteryTick();
+    expect(calls).toEqual(['limit:50', 'start']);
+    expect(logs.join('\n')).toContain('resumed charging (battery 38.1%) [battery-sample]');
+  });
 });
 
 describe('runDaemon composition (source pin)', () => {
@@ -490,5 +602,20 @@ describe('runDaemon composition (source pin)', () => {
     expect(retargetAt).toBeGreaterThan(-1);
     expect(monitorAt).toBeGreaterThan(-1);
     expect(retargetAt).toBeLessThan(monitorAt);
+  });
+
+  it('the battery sampler hosts only the re-target resume trigger', () => {
+    const source = fs.readFileSync(
+      new URL('../../src/daemon/runDaemon.ts', import.meta.url),
+      'utf8'
+    );
+    expect(source).toContain('reTargetStage?.onBatteryTick()');
+    // The session monitor must never ride the battery path: its stop checks
+    // need a fresh EV read, and a stored 'Charging' must not act from there.
+    const afterSampleAt = source.indexOf('afterSample:');
+    const monitorCallAt = source.indexOf('monitorChargingProgress(', afterSampleAt);
+    const evPollerAt = source.indexOf('createEvPoller', afterSampleAt);
+    expect(afterSampleAt).toBeGreaterThan(-1);
+    expect(monitorCallAt).toBeGreaterThan(evPollerAt); // monitor lives only in the poll chain
   });
 });

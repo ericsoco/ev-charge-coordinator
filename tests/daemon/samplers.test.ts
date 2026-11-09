@@ -208,6 +208,48 @@ describe('BatterySampler', () => {
     expect(homeBattery.latestSample(db)).toBeNull();
     expect(homeBattery.latestCounters(db)).toBeNull();
   });
+
+  it('the after-sample stage runs post-commit and never fails sampling', async () => {
+    const logs: string[] = [];
+    let sawRow = false;
+    const task = createBatterySampler({
+      db,
+      franklin: { getStats: async () => franklinFixture(), reconnect: async () => {} },
+      homeBatteryId: GW,
+      sampleSec: 120,
+      nowMs: () => 5_000,
+      afterSample: async () => {
+        sawRow = homeBattery.latestSample(db) !== null; // rows land first
+        throw new Error('stage down');
+      },
+      log: (message) => logs.push(message),
+    });
+    await task.run(); // resolves: the stage is isolated
+
+    expect(sawRow).toBe(true);
+    expect(homeBattery.latestSample(db)).toMatchObject({ tsMs: 5_000, socPercent: 62.5 });
+    expect(logs.join('\n')).toContain('after-sample stage failed: stage down');
+  });
+
+  it('the after-sample stage is skipped when the sample itself fails', async () => {
+    let ran = 0;
+    const task = createBatterySampler({
+      db,
+      franklin: {
+        getStats: async () => {
+          throw new Error('gateway unreachable');
+        },
+        reconnect: async () => {},
+      },
+      homeBatteryId: GW,
+      sampleSec: 120,
+      afterSample: async () => {
+        ran += 1;
+      },
+    });
+    await expect(task.run()).rejects.toThrow('gateway unreachable');
+    expect(ran).toBe(0);
+  });
 });
 
 describe('EvPoller', () => {

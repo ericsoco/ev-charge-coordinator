@@ -22,7 +22,7 @@ import { createBatterySampler } from './BatterySampler.js';
 import { createEvPoller } from './EvPoller.js';
 import { createDecisionConsumer } from './decisionConsumer.js';
 import { createSessionMonitor } from './sessionMonitor.js';
-import { createReTargeter } from './reTarget.js';
+import { createReTargeter, type ReTargeter } from './reTarget.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import { buildNotifiers, notifierRequiresSecret, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
@@ -169,6 +169,12 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
     }
   }
 
+  // Late-bound second trigger: the battery sampler below hosts the
+  // re-targeter's battery-tick resume (a sleeping car has no EV rich reads,
+  // so the poll-path chain never runs for it); it exists only when the Tesla
+  // service does. Assigned when the re-target stage is created further down.
+  let reTargetStage: ReTargeter | null = null;
+
   if (franklin && options.homeBatteryId) {
     tasks.push(
       createBatterySampler({
@@ -177,6 +183,12 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         homeBatteryId: options.homeBatteryId,
         sampleSec: options.config.batterySampleSec,
         nowMs,
+        // Re-target only — never the session monitor: stop checks need a
+        // fresh EV read, and a stored 'Charging' must not act from here.
+        afterSample: async () => {
+          await reTargetStage?.onBatteryTick();
+        },
+        log,
       })
     );
   } else {
@@ -244,6 +256,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
       notify: (event) => notifier.notify(event),
       log,
     });
+    reTargetStage = reTargetOnProgress;
     tasks.push(
       createEvPoller({
         db,
