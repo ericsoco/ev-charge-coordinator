@@ -31,6 +31,12 @@ import type { Notifier } from '../notifiers/types.js';
 import { createWeatherSampler, type FetchForecast } from './WeatherSampler.js';
 import { DEFAULT_WEATHER_POLICY } from '../utils/weather.js';
 import { clearRuntimeState, readRuntimeState, writeRuntimeState } from '../services/ProcessManager.js';
+import {
+  resolveApiToken,
+  startApiServer,
+  type ActuatorPort,
+  type ApiServerHandle,
+} from '../api/server.js';
 
 export interface RunDaemonOptions {
   services: { franklin: FranklinWHService | null; tesla: TeslaService | null };
@@ -63,6 +69,13 @@ export interface RunDaemonOptions {
    * from config.notifiers + credential-store secrets.
    */
   notifier?: Notifier;
+  /**
+   * Display-only read API (P2 step 2, design §7 seam). Omitted = no server
+   * (`--once`, tests); the CLI passes {} for defaults — port ECC_API_PORT ??
+   * 3002, token from the credential store, static web/dist when built.
+   * Continuous mode only; a bind failure fails the daemon start loudly.
+   */
+  api?: { port?: number; token?: string; webDistDir?: string };
 }
 
 export interface DaemonOutcome {
@@ -82,6 +95,8 @@ interface Prepared {
   ownedProxyPid: number | null;
   /** Notification sink for the chain and task-failure reports. */
   notifier: Notifier;
+  /** Read API server, started in startDaemon; null in `--once`. */
+  api: ApiServerHandle | null;
 }
 
 /** Retention prunes daily; the interval only needs to be "roughly a day". */
@@ -316,7 +331,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
     tsMs: nowMs(),
     kind: 'daemon_start',
   });
-  return { lock, db, tasks, eventVehicleId, runtime, ownedProxyPid, notifier };
+  return { lock, db, tasks, eventVehicleId, runtime, ownedProxyPid, notifier, api: null };
 }
 
 async function teardown(
@@ -325,6 +340,12 @@ async function teardown(
   log: (message: string) => void,
   nowMs: () => number
 ): Promise<void> {
+  // The API reads through this db handle — close it before anything below.
+  if (prepared.api !== null) {
+    await prepared.api.close().catch((error) => {
+      log(`[api] close failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
   try {
     sessionStore.insertEvent(prepared.db, {
       vehicleId: prepared.eventVehicleId,
@@ -402,6 +423,35 @@ export async function startDaemon(options: RunDaemonOptions): Promise<DaemonHand
   const log = options.log ?? console.log;
   const nowMs = options.nowMs ?? Date.now;
   const prepared = await prepare(options);
+
+  if (options.api) {
+    try {
+      const token = await resolveApiToken(options.api.token);
+      const { tesla } = options.services;
+      // Design §7 seam: the wrapped actuator rides into the app; step 2
+      // registers no control routes on it.
+      const actuator: ActuatorPort | undefined = tesla
+        ? {
+            setChargeLimit: (percent) => tesla.setChargeLimit(percent),
+            startCharging: () => tesla.startCharging(),
+            stopCharging: () => tesla.stopCharging(),
+          }
+        : undefined;
+      prepared.api = await startApiServer({
+        db: prepared.db,
+        vehicleId: options.vehicleId,
+        token,
+        port: options.api.port,
+        webDistDir: options.api.webDistDir,
+        actuator,
+        nowMs,
+      });
+      log(`[api] read API on http://127.0.0.1:${prepared.api.port} — bearer token: ${token}`);
+    } catch (error) {
+      await teardown(prepared, options, log, nowMs);
+      throw error;
+    }
+  }
 
   const notifyFailure = createFailureThrottle(prepared.notifier, { nowMs });
   const scheduler = createScheduler(prepared.tasks, (task, error) => {

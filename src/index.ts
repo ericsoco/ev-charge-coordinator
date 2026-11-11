@@ -35,6 +35,7 @@ import {
   createStartEvChargingCommand,
   createStopEvChargingCommand,
 } from './commands/vehicle.js';
+import { createApiTokenCommand } from './commands/apiToken.js';
 import { createAuthenticateCommand } from './commands/authenticate.js';
 import { createConfigCommand } from './commands/config.js';
 import { createPairTeslaKeyCommand } from './commands/pairTeslaKey.js';
@@ -104,6 +105,7 @@ program.addCommand(createExitCommand({ session }));
 program.addCommand(createDaemonCommand({ session }));
 program.addCommand(createStatusCommand({ session }));
 program.addCommand(createSessionsCommand({ session }));
+program.addCommand(createApiTokenCommand());
 program.addCommand(createSetHomeLocationCommand({ session }));
 program.addCommand(createGetEvBsocCommand({ session }));
 program.addCommand(createGetBatterySocCommand({ session }));
