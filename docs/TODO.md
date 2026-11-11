@@ -19,8 +19,11 @@ FEATURES
 [ ] Create dashboard to display time series of the various stores
     [X] Research charting libs (done -- see docs/charts-research.md)
         Use eCharts: licensing, bundle size (tree-shaking), some advanced func.
-    [ ] review stores and decide on included data sources + functionality
+    [X] review stores and decide on included data sources + functionality
     [ ] design layout
+        [ ] Now page big number charts: start with this:
+            https://codefronts.com/motion/css-number-counter-animations/svg-stroke-dash-progress-ring-counter/
+            but slow down counter tick animation, since numbers will change infrequently
     [ ] automate execution:
         [ ] switch cline (> settings) to smarter model for Plan mode (Act can stay medium)
         [ ] create new branch to use as base ref for cline kanban worktrees
@@ -59,6 +62,7 @@ TASKS / BUGS
     [ ] More human-readable and helpful
     [ ] Remove noisy logs
 [ ] Expose common commands in package.json to run via `npm run x`
+[ ] Add convenience npm script to open config / daemon-config json files in an editor
 [ ] Consider removing `get-ev-bsoc` in favor of `get-charging-state`
 [ ] Clean up README (remove slop; make dev setup steps clear and contiguous; same for end-user steps; ensure unified docs across CLI + REPL, as there is some divergence)
     [ ] So far, have cleaned up up to "## CLI Reference". Continue from there.
