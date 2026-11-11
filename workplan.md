@@ -194,6 +194,18 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-11 — `dev:webhost` script added (LAN testing)
+
+Branch `dev-webhost-script`. Root `package.json` gains **`dev:webhost`** =
+`npm run dev --workspace=evcc-web -- --host`. The existing `dev:web` couldn't take a
+`--host` flag: `npm run dev:web -- --host` appends the flag to the *inner* npm command
+(`npm run dev --workspace=evcc-web --host`), where npm swallows it as unknown config
+(`npm warn Unknown cli config "--host"`) — Vite then binds `127.0.0.1` only, so phones
+on the LAN get "couldn't connect". Verified live: `dev:webhost` → `vite --host` →
+`*:5173 (LISTEN)` + HTTP 200 at `http://192.168.42.43:5173/`; extra params also pass
+through (`dev:webhost -- --port 5199` → `vite --host --port 5199`). Gate:
+`npm run check` green.
+
 ### 2026-11-10 — workplan restructured for Phase 2; P2 plan + decisions recorded
 
 Branch `docs/phase2-workplan-restructure`. **Phase 1 → history:** the P1c section and
