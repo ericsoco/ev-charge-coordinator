@@ -45,9 +45,9 @@
   unplugged `start-ev-charging` fails loudly; auto-start decision rows → real start
   (buffer interlock + geofence + ntfy); monitor stops + re-target raise with observed
   efficiency back-computed (2026-11-07); resume from battery ticks (2026-11-09).
-- **Phase 2 (graphical UX) planned 2026-11-10** — requirements 2026.Nov.07; all
-  decisions resolved with the user; see **P2 — graphical UX** below. Step 1 not
-  started.
+- **Phase 2 (graphical UX) underway** — requirements 2026.Nov.07; all decisions
+  resolved with the user (2026-11-10); see **P2 — graphical UX** below. Step 1
+  (web scaffold + responsive shell) landed 2026-11-11.
 
 ## Decisions on future work
 
@@ -102,7 +102,7 @@
 
 ## P2 — graphical UX (active plan)
 
-> Status: **planned 2026-11-10; step 1 not started.** Design basis:
+> Status: **step 1 complete (2026-11-11); step 2 not started.** Design basis:
 > [requirements.md](./docs/requirements.md) 2026.Nov.07 entry, [design.md](./docs/design.md)
 > §3.9/§7 seams + §8, [charts-research.md](./docs/charts-research.md). Same discipline as
 > Phase 1: each step = separate branch, gated on `npm run check`, dated Log entry.
@@ -147,6 +147,7 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
    with labeled icons, M3/Noph theming); portrait/landscape/desktop breakpoints; dev
    proxy → daemon; `NOTICE` file (ECharts Apache-2.0); CI gate extended (app
    build/typecheck/tests run inside `npm run check`).
+   *(Branch `p2/step1-scaffold-shell` — **complete 2026-11-11**; details in the Log.)*
 2. **Daemon HTTP seam + read API** — express in the daemon: `GET /api/now`,
    `GET /api/series?metric&from&to&bucket` (server-side downsampling for the 2 h–1 yr
    zoom), `GET /api/sessions`, `GET /api/messages`; bearer auth; CORS/dev mode;
@@ -212,6 +213,30 @@ SPA-vs-SSR answer (SSR adds a render server + hydration to a private data-driven
 for zero first-paint benefit; not a one-way door). design.md gains a §8 pointer. Also
 retired the stale "Web GUI out of scope" bullet (superseded by Phase 2).
 Gate: `npm run check` green — **1016 passed / 3 skipped** (docs only).
+
+### 2026-11-11 — P2 step 1 complete: web scaffold + responsive shell
+
+Branch `p2/step1-scaffold-shell`. `web/` added as npm workspace **`evcc-web`** —
+single root lockfile, `npm ci` unchanged. Svelte 5 + Vite SPA: Noph UI
+(`defaultTheme` + `NavigationBar`/`NavigationRail`), emoji tabs ⚡️/🔄/💬 exactly per
+requirements, M3 4dp spacing, responsive swap at 840 px (bottom bar → left rail) with
+safe-area insets; the three placeholder pages name the steps that fill them (3 / 4–6 /
+7). Dev server proxies `/api` → `127.0.0.1:3002` (`ECC_API_PORT` overridable — the
+step-2 contract). Root wiring: `check` now ends in `check:web` (vite build +
+svelte-check + web vitest), new `dev:web`, `clean` covers `web/dist`, CI gains a
+"Web app" step; root vitest was already scoped to `tests/**` (no change needed).
+`NOTICE` created for ECharts (Apache-2.0, lands step 4). Fixes found while greening:
+`.svelte` imports needed a local ambient shim (svelte's own `*.svelte` wildcard is
+not pulled into the svelte-check program), tsconfig must include `src/**/*.svelte`,
+vitest must resolve Svelte's **browser** build (server build throws
+`lifecycle_function_unavailable`), and jsdom needs matchMedia/ResizeObserver/
+IntersectionObserver/Web Animations polyfills (`web/src/test-setup.ts`). Noph license
+read from its package at install — permissive (recorded here rather than NOTICE).
+Gate: `npm run check` green — **1016 passed / 3 skipped** (root) + web build +
+svelte-check **0 errors / 0 warnings** + **4/4 web tests**; `node dist/index.js --help`
+OK. Dev-server smoke: index + `main.ts` 200, `/api/now` → 502 (proxy wired; step-2
+server absent as expected). Known gap: README gets its "Graphical UX" section in
+step 9 per plan.
 
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)

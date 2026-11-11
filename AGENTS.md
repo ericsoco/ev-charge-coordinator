@@ -22,13 +22,15 @@ TypeScript/Node.js application that coordinates EV charging with home solar batt
 
 ## Build Commands
 ```bash
-npm ci                # Install dependencies (lockfile-exact)
+npm ci                # Install dependencies (lockfile-exact; includes the web/ workspace)
 npm run build         # Compile TypeScript
-npm run check         # build + lint + typecheck + unit tests (gate for any change)
+npm run check         # build + lint + typecheck + unit tests + web app (gate for any change)
 npm run test          # unit tests only (vitest); live tests need RUN_LIVE_TESTS=1
 npm run lint          # ESLint
 npm run typecheck     # tsc --noEmit over src + tests
 npm run dev           # Run with tsx (dev mode)
+npm run dev:web       # Vite dev server for web/ (proxies /api → 127.0.0.1:3002)
+npm run check:web     # web/ workspace: vite build + svelte-check + its unit tests
 npm start             # Run compiled version
 python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt  # Python deps
 ```
@@ -40,13 +42,17 @@ python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt  # Pyt
   DDL), `*Store.ts` repositories, `types.ts` row interfaces; schema↔code is enforced by
   `tests/store/schema-pin.test.ts`
 - `python/franklin_proxy.py`: Proxies requests to franklinwh Python library
+- `web/`: Svelte 5 + Vite app (Now/Then/Messages tabs) — npm workspace `evcc-web`
+  with its own tests; dev server proxies `/api` to the daemon API (P2 step 2)
+- `NOTICE`: third-party attributions beyond the MIT `LICENSE` (ECharts/Apache-2.0
+  arrives in P2 step 4)
 
 ## External APIs
 - **Tesla Fleet API**: OAuth2 auth, requires developer account and virtual key
 - **FranklinWH**: Uses `franklinwh` Python package, auth via username/password/gateway_id
 
 ## Testing
-- Run `npm run check` before landing any change (build + lint + typecheck + unit tests)
+- Run `npm run check` before landing any change (build + lint + typecheck + unit tests + web app)
 - CI (`.github/workflows/ci.yml`) runs the same gate on Node 24 and 26, plus
   `python -m py_compile python/franklin_proxy.py`
 - Tests hitting the real FranklinWH / Tesla APIs are gated behind `RUN_LIVE_TESTS=1`

@@ -1,0 +1,13 @@
+THIRD-PARTY NOTICES
+
+This product includes or references third-party software beyond the MIT
+license text in LICENSE. The following applies:
+
+Apache License, Version 2.0
+- Apache ECharts (https://echarts.apache.org/) — time-series charting library
+  for the web/ app, added in P2 step 4. Copyright The Apache Software
+  Foundation and ECharts committers. Licensed under
+  https://www.apache.org/licenses/LICENSE-2.0. Its license and NOTICE
+  obligations will be reproduced here as required when the dependency lands.
+
+Non-MIT attributions are appended here as dependencies land.
