@@ -46,8 +46,9 @@
   (buffer interlock + geofence + ntfy); monitor stops + re-target raise with observed
   efficiency back-computed (2026-11-07); resume from battery ticks (2026-11-09).
 - **Phase 2 (graphical UX) underway** — requirements 2026.Nov.07; all decisions
-  resolved with the user (2026-11-10); see **P2 — graphical UX** below. Steps 1–2
-  (web scaffold + shell; daemon HTTP seam + read API) landed 2026-11-11.
+  resolved with the user (2026-11-10); see **P2 — graphical UX** below. Steps 1–3
+  (web scaffold + shell; daemon HTTP seam + read API; Now tab live data)
+  landed 2026-11-11.
 
 ## Decisions on future work
 
@@ -102,7 +103,7 @@
 
 ## P2 — graphical UX (active plan)
 
-> Status: **steps 1–2 complete (2026-11-11); step 3 next.** Design basis:
+> Status: **steps 1–3 complete (2026-11-11); step 4 next.** Design basis:
 > [requirements.md](./docs/requirements.md) 2026.Nov.07 entry, [design.md](./docs/design.md)
 > §3.9/§7 seams + §8, [charts-research.md](./docs/charts-research.md). Same discipline as
 > Phase 1: each step = separate branch, gated on `npm run check`, dated Log entry.
@@ -280,6 +281,22 @@ placeholder fallback, JSON 404s (no control endpoints), actuator wrapped on
 surfaced via the daemon boot log + new `evcc api-token`; endpoint shapes in the
 new `docs/api.md`.
 Gate: `npm run check` green — **1053 passed / 3 skipped** (root) + web 4/4, svelte-check 0 errors.
+
+### 2026-11-11 — P2 step 3 complete: Now tab live data
+
+Branch `p2/step3-now-tab`. `GET /api/now` (step 2) now drives the Now tab:
+single-column stack per the layout brief — vehicle card (giant SoC,
+charging state + limit, freshness), home-battery card (SoC, solar/load,
+freshness), brief session sentence ("Charging since 14:03, target 60%").
+Stale badge when the battery sample is >5 min old (the sampler heartbeat —
+vehicle age legitimately grows while the car sleeps). 10 s poll + refresh
+on tab focus; skeleton first paint, friendly empty-store state, error +
+retry, and a token panel on 401 (bearer token stored per device in
+localStorage; paste from `evcc api-token`). New: `web/src/lib/api.ts`
+(typed client), `web/src/lib/nowText.ts` (pure formatting),
+`web/tests/now.test.ts` + `api.test.ts` (13 tests); App.test now stubs
+/api/now.
+Gate: `npm run check` green — **1053 passed / 3 skipped** (root) + web **17/17**, svelte-check 0 errors.
 
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
