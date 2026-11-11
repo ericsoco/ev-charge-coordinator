@@ -288,3 +288,26 @@ describe('CredentialStore - home location secret', () => {
     expect(await fresh.getHomeLocation()).toEqual({ latitude: 51.5074, longitude: -0.1278 });
   });
 });
+
+describe('CredentialStore - read API bearer token (P2 step 2)', () => {
+  it('mints a 32-byte hex token on first use and returns it thereafter', async () => {
+    const store = new mod.CredentialStore();
+    const token = await store.ensureApiToken();
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(await store.ensureApiToken()).toBe(token);
+    // Persisted: a fresh instance (new process, next daemon start) agrees.
+    expect(await new mod.CredentialStore().ensureApiToken()).toBe(token);
+  });
+
+  it('merges alongside other credentials (notifiers/franklin intact)', async () => {
+    const store = new mod.CredentialStore();
+    await store.setFranklinCredentials('u', 'p', 'GW');
+    await store.setNtfyTopic('topic');
+    const token = await store.ensureApiToken();
+
+    const reloaded = new mod.CredentialStore();
+    expect((await reloaded.getFranklinCredentials())?.gatewayId).toBe('GW');
+    expect((await reloaded.getNotifierSecrets())?.ntfyTopic).toBe('topic');
+    expect(await reloaded.ensureApiToken()).toBe(token);
+  });
+});
