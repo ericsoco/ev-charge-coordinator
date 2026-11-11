@@ -296,6 +296,17 @@ and the user is told how to fix it — never a silent allow.
 - **Multiuser safety:** filters + decision audit generalize naturally to
   per-user/per-site policy.
 
+## 8. Phase 2 — web UX (pointer, added 2026-11-10)
+
+Phase 2's product requirements live in requirements.md (2026.Nov.07); the
+plan-of-record — steps, resolved decisions (Svelte 5 SPA, ECharts, Cloudflare Tunnel,
+bearer auth, in-app Web Push, Noph UI, express read API), and fast-follows — lives in
+workplan.md under "P2 — graphical UX". Implementation rides the §7 HTTP seam: the
+daemon hosts an express server that serves the static `web/` bundle plus a
+display-only read API (`/api/now`, `/api/series`, `/api/sessions`, `/api/messages`);
+the actuator stays wrapped for the start/stop fast-follow. ECharts is Apache-2.0 — a
+NOTICE file accompanies the MIT LICENSE.
+
 
 
 
