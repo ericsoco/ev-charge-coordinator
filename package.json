@@ -29,6 +29,7 @@
     "check": "npm run build && npm run lint && npm run typecheck && npm test && npm run check:web",
     "check:web": "npm run build --workspace=evcc-web && npm run check --workspace=evcc-web",
     "dev:web": "npm run dev --workspace=evcc-web",
+    "dev:webhost": "npm run dev --workspace=evcc-web -- --host",
     "clean": "rm -rf dist web/dist",
     "check:franklin": "node scripts/run-python-check.mjs"
   },
