@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TAB, TABS, isTabId } from './tabs';
+import { DEFAULT_TAB, TABS, isTabId } from '../src/lib/tabs';
 
 describe('tab registry', () => {
   it('lists the three required tabs in order with their icons', () => {

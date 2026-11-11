@@ -42,8 +42,9 @@ python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt  # Pyt
   DDL), `*Store.ts` repositories, `types.ts` row interfaces; schema↔code is enforced by
   `tests/store/schema-pin.test.ts`
 - `python/franklin_proxy.py`: Proxies requests to franklinwh Python library
-- `web/`: Svelte 5 + Vite app (Now/Then/Messages tabs) — npm workspace `evcc-web`
-  with its own tests; dev server proxies `/api` to the daemon API (P2 step 2)
+- `web/`: Svelte 5 + Vite app (Now/Then/Messages tabs) — npm workspace `evcc-web`;
+  tests live in `web/tests/` (mirroring the root `tests/` pattern); dev server
+  proxies `/api` to the daemon API (P2 step 2)
 - `NOTICE`: third-party attributions beyond the MIT `LICENSE` (ECharts/Apache-2.0
   arrives in P2 step 4)
 

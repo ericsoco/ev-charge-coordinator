@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
-import App from './App.svelte';
+import App from '../src/App.svelte';
 
 afterEach(cleanup);
 
