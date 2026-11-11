@@ -238,6 +238,21 @@ OK. Dev-server smoke: index + `main.ts` 200, `/api/now` → 502 (proxy wired; st
 server absent as expected). Known gap: README gets its "Graphical UX" section in
 step 9 per plan.
 
+### 2026-11-11 — P2 step 1 follow-up: web tests relocated to `web/tests/`
+
+Review response: test files had been colocated under `web/src/` (a common modern
+default) — but the repo pattern is a top-level `tests/` tree, and `web/` now mirrors
+the root layout (`src/` + `tests/`). `git mv` moved `App.test.ts`, `tabs.test.ts`,
+and `test-setup.ts` (→ `tests/setup.ts`, test infra out of shippable `src/`);
+imports point at `../src/...`; `vite.config.ts` `test.include`/`setupFiles`
+updated; `tsconfig` include gains `tests/**/*.ts` so svelte-check still typechecks
+the tests. Root vitest is unaffected — its `tests/**` glob is root-relative and
+does not match `web/tests/` (root count unchanged). Also answered for the record:
+`vite-env.d.ts` in the scaffold is the standard Vite declaration file holding
+`/// <reference types="vite/client" />` (import.meta.env/HMR + asset-import
+typings); no runtime effect. Gate: `npm run check` green — **1016 passed /
+3 skipped** (root) + web build + svelte-check **0/0** + **4/4 web tests**.
+
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
