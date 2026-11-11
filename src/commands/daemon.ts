@@ -121,7 +121,10 @@ export function createDaemonCommand(deps: { session: Session }): Command {
           return;
         }
 
-        const handle = await startDaemon(daemonOptions);
+        // P2 step 2: the read API rides the continuous daemon only — defaults
+        // (ECC_API_PORT ?? 3002, credential-store token, web/dist) live in
+        // startDaemon; `--once` never starts a server.
+        const handle = await startDaemon({ ...daemonOptions, api: {} });
         console.log(paint.info('Daemon running in the foreground. Stop with Ctrl-C.'));
         await new Promise<void>((resolve) => {
           const stop = () => {

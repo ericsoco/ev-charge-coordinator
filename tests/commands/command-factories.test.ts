@@ -33,6 +33,7 @@ import {
   createStartEvChargingCommand,
   createStopEvChargingCommand,
 } from '../../src/commands/vehicle.js';
+import { createApiTokenCommand } from '../../src/commands/apiToken.js';
 import { createAuthenticateCommand } from '../../src/commands/authenticate.js';
 import { createConfigCommand } from '../../src/commands/config.js';
 import { createPairTeslaKeyCommand } from '../../src/commands/pairTeslaKey.js';
@@ -173,6 +174,11 @@ const SPECS: FactorySpec[] = [
     name: 'sessions',
     make: (h) => createSessionsCommand({ session: h.session }),
     options: ['--limit <n>', '--open'],
+  },
+  {
+    name: 'api-token',
+    make: () => createApiTokenCommand({ getToken: async () => 'tok-from-deps' }),
+    options: [],
   },
   {
     name: 'set-home-location',
@@ -319,6 +325,7 @@ describe('one-shot commands reject stray positionals', () => {
     ['daemon', ['stop', 'extra']],
     ['status', ['extra']],
     ['sessions', ['extra']],
+    ['api-token', ['extra']],
     ['set-home-location', ['1', '2', '3']],
     ['get-ev-bsoc', ['extra']],
     ['get-battery-soc', ['extra']],
@@ -448,6 +455,7 @@ describe('index.ts registration order (--help listing)', () => {
       'Daemon',
       'Status',
       'Sessions',
+      'ApiToken',
       'SetHomeLocation',
       'GetEvBsoc',
       'GetBatterySoc',
@@ -461,6 +469,20 @@ describe('index.ts registration order (--help listing)', () => {
       'Config',
       'PairTeslaKey',
     ]);
+  });
+});
+
+describe('api-token action', () => {
+  it('prints the token from its deps alone on stdout', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const cmd = createApiTokenCommand({ getToken: async () => 'tok-from-deps' });
+      await cmd.parseAsync(['node', 'evcc'], { from: 'node' });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith('tok-from-deps');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
