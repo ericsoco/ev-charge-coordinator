@@ -1,0 +1,31 @@
+/* Layout only — Noph's defaultTheme supplies the --np-* color roles.
+   Spacing follows the Material 3 4dp grid (requirements 1d). */
+:root {
+  --evcc-space-1: 4px;
+  --evcc-space-2: 8px;
+  --evcc-space-3: 16px;
+  --evcc-space-4: 24px;
+  --evcc-space-5: 32px;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  background: var(--np-color-surface, #ffffff);
+  color: var(--np-color-on-surface, #1a1a1a);
+}
+
+#app {
+  min-height: 100vh;
+  min-height: 100dvh;
+}

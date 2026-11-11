@@ -42,5 +42,8 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: Web app (build + check)
+        run: npm run check:web
+
       - name: Python proxy compiles
         run: python -m py_compile python/franklin_proxy.py
