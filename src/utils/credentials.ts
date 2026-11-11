@@ -79,6 +79,14 @@ interface StoredCredentials {
     ntfyTopic?: string;
     slackWebhookUrl?: string;
   };
+  /**
+   * Read API bearer token (P2 step 2): one shared secret guarding every
+   * /api route, stored like the notifier secrets — never config.json.
+   * Partial updates merge, like notifiers/tesla.
+   */
+  api?: {
+    token?: string;
+  };
 }
 
 /** The only keychain operations this module needs, backed by @napi-rs/keyring. */
@@ -397,6 +405,21 @@ export class CredentialStore {
     await this.initialize();
     delete this.credentials.notifiers;
     await this.save();
+  }
+
+  /**
+   * The read API's shared bearer token: minted on first use (32 random bytes,
+   * hex) and returned as-is thereafter — the daemon's server, `evcc api-token`,
+   * and the web app must all see the same value across restarts.
+   */
+  async ensureApiToken(): Promise<string> {
+    await this.initialize();
+    const existing = this.credentials.api?.token;
+    if (existing !== undefined && existing.length > 0) return existing;
+    const token = crypto.randomBytes(32).toString('hex');
+    this.credentials.api = { ...this.credentials.api, token };
+    await this.save();
+    return token;
   }
 
   // Clear all
