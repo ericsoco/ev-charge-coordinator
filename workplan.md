@@ -46,8 +46,8 @@
   (buffer interlock + geofence + ntfy); monitor stops + re-target raise with observed
   efficiency back-computed (2026-11-07); resume from battery ticks (2026-11-09).
 - **Phase 2 (graphical UX) underway** — requirements 2026.Nov.07; all decisions
-  resolved with the user (2026-11-10); see **P2 — graphical UX** below. Step 1
-  (web scaffold + responsive shell) landed 2026-11-11.
+  resolved with the user (2026-11-10); see **P2 — graphical UX** below. Steps 1–2
+  (web scaffold + shell; daemon HTTP seam + read API) landed 2026-11-11.
 
 ## Decisions on future work
 
@@ -102,7 +102,7 @@
 
 ## P2 — graphical UX (active plan)
 
-> Status: **step 1 complete (2026-11-11); step 2 not started.** Design basis:
+> Status: **steps 1–2 complete (2026-11-11); step 3 next.** Design basis:
 > [requirements.md](./docs/requirements.md) 2026.Nov.07 entry, [design.md](./docs/design.md)
 > §3.9/§7 seams + §8, [charts-research.md](./docs/charts-research.md). Same discipline as
 > Phase 1: each step = separate branch, gated on `npm run check`, dated Log entry.
@@ -264,6 +264,22 @@ does not match `web/tests/` (root count unchanged). Also answered for the record
 `/// <reference types="vite/client" />` (import.meta.env/HMR + asset-import
 typings); no runtime effect. Gate: `npm run check` green — **1016 passed /
 3 skipped** (root) + web build + svelte-check **0/0** + **4/4 web tests**.
+
+### 2026-11-11 — P2 step 2: daemon HTTP seam + read API
+
+Branch `p2/step2-read-api` (3 commits; rebased onto main after step 1 landed).
+**Shipped:** express read API inside the daemon (design §7): `GET /api/now`,
+`/api/series` (server-side downsampling — bucketed AVG + W→kWh trapezoid
+integration, 15-min gap cap, auto-bucket ladder ≤400 pts / hard cap 4000),
+`/api/sessions` (paginated; label, target/stop_reason/SoC start–end tooltips),
+`/api/messages` (final envelope, empty until step 7); bearer auth on every /api
+route, dev-origin CORS, loopback `ECC_API_PORT ?? 3002`, static `web/dist` with
+placeholder fallback, JSON 404s (no control endpoints), actuator wrapped on
+`app.locals` for the start/stop fast-follow. Token:
+`credentialStore.ensureApiToken()` (32-byte hex, notifiers-merge pattern)
+surfaced via the daemon boot log + new `evcc api-token`; endpoint shapes in the
+new `docs/api.md`.
+Gate: `npm run check` green — **1053 passed / 3 skipped** (root) + web 4/4, svelte-check 0 errors.
 
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
