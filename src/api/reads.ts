@@ -14,41 +14,7 @@ import * as sessionStore from '../store/SessionStore.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import { ApiError } from './ApiError.js';
 import { intParamOr } from './params.js';
-
-export interface NowVehicle {
-  vehicleId: string;
-  socPercent: number | null;
-  chargingState: string | null;
-  chargeLimitSoc: number | null;
-  sampleTsMs: number;
-  /** nowMs − sampleTsMs — the Now tab's stale-data indicator. */
-  ageMs: number;
-}
-
-export interface NowBattery {
-  socPercent: number | null;
-  powerW: number | null;
-  homeLoadW: number | null;
-  solarW: number | null;
-  gridW: number | null;
-  sampleTsMs: number;
-  ageMs: number;
-}
-
-/** Active-session summary for the Now tab's brief text. */
-export interface NowSession {
-  id: number;
-  plugTsMs: number;
-  targetPercent: number | null;
-  stopReason: SessionStopReason | null;
-}
-
-export interface NowResponse {
-  nowMs: number;
-  vehicle: NowVehicle | null;
-  battery: NowBattery | null;
-  session: NowSession | null;
-}
+import type { NowResponse } from './types.js';
 
 export interface NowDeps {
   db: DatabaseSync;
