@@ -7,7 +7,7 @@ import {
   formatTime,
   sessionLine,
   vehicleCaption,
-} from '../src/lib/nowText';
+} from '../src/pages/nowText';
 import type { NowResponse } from '../src/lib/api';
 
 /** Minimal Response stand-ins — jsdom need not implement the real class. */
