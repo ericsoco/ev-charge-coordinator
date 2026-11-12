@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Now from '../src/pages/Now.svelte';
+import { session } from '../src/lib/apiSession.svelte';
 import {
   formatAge,
   formatKw,
@@ -47,6 +48,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   window.localStorage.clear();
+  session.needsToken = false;
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
 });
@@ -85,23 +87,13 @@ describe('Now tab — live data', () => {
 });
 
 describe('Now tab — auth, stale, polling, errors', () => {
-  it('asks for the token on 401; Save stores it and refetches with the header', async () => {
-    fetchMock
-      .mockResolvedValueOnce(unauthorized())
-      .mockResolvedValueOnce(ok(fixture()));
+  it('raises the shared session flag on 401 — the gate itself is App-level', async () => {
+    fetchMock.mockResolvedValue(unauthorized());
     render(Now);
 
-    await screen.findByText('API token required');
-    await fireEvent.input(screen.getByLabelText(/paste the read api token/i), {
-      target: { value: 'sekrit' },
-    });
-    await fireEvent.submit(screen.getByRole('form', { name: 'API token' }));
-
-    await screen.findByText('62');
-    expect(window.localStorage.getItem('evcc.apiToken')).toBe('sekrit');
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/now', {
-      headers: { Authorization: 'Bearer sekrit' },
-    });
+    // The page does NOT render auth UI; App's TokenPanel keys off this flag.
+    await waitFor(() => expect(session.needsToken).toBe(true));
+    expect(screen.queryByText('API token required')).toBeNull();
   });
 
   it('flags stale sampling when the battery age passes 5 minutes', async () => {

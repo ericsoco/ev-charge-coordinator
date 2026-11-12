@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Badge, Card } from 'noph-ui';
-  import { AuthError, fetchNow, setApiToken, type NowResponse } from '../lib/api';
+  import { fetchNow } from '../lib/api';
+  import { createApiLoader } from '../lib/apiSession.svelte';
   import { batteryCaption, formatAge, sessionLine, vehicleCaption } from './nowText';
 
   /** Poll cadence (P2 decisions: polling, no SSE). Tests pass a short one. */
@@ -14,12 +15,16 @@
    */
   const STALE_MS = 5 * 60_000;
 
-  let data = $state<NowResponse | null>(null);
-  let error = $state<string | null>(null);
-  let needsToken = $state(false);
-  let tokenDraft = $state('');
-  /** First fetch settled — distinguishes the skeleton from every real state. */
-  let loaded = $state(false);
+  // Load/refresh/auth handling is page-agnostic (lib/apiSession.svelte): a
+  // 401 raises the app-wide token gate in App instead of page-local UI.
+  // pollMs is read when start() runs (getter defers the prop read past init).
+  const loader = createApiLoader(fetchNow, {
+    get pollMs() {
+      return pollMs;
+    },
+  });
+
+  const data = $derived(loader.state.data);
 
   const stale = $derived(
     data !== null && data.battery !== null && data.battery.ageMs > STALE_MS
@@ -39,78 +44,21 @@
       (data?.battery ? ` · updated ${formatAge(data.battery.ageMs)}` : '')
   );
 
-  async function refresh(): Promise<void> {
-    try {
-      data = await fetchNow();
-      error = null;
-      needsToken = false;
-    } catch (cause) {
-      if (cause instanceof AuthError) {
-        needsToken = true;
-        error = null;
-      } else {
-        error = cause instanceof Error ? cause.message : String(cause);
-      }
-    } finally {
-      loaded = true;
-    }
-  }
-
-  function saveToken(): void {
-    const token = tokenDraft.trim();
-    if (token === '') return;
-    setApiToken(token);
-    tokenDraft = '';
-    needsToken = false;
-    void refresh();
-  }
-
-  onMount(() => {
-    void refresh();
-    const timer = setInterval(() => void refresh(), pollMs);
-    const onVisibility = (): void => {
-      if (document.visibilityState === 'visible') void refresh();
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  });
+  onMount(() => loader.start());
 </script>
 
 <section class="now">
   <h1 class="title">Now</h1>
 
-  {#if needsToken}
-    <Card variant="elevated" headline="API token required">
-      <form
-        aria-label="API token"
-        class="token-form"
-        onsubmit={(event) => {
-          event.preventDefault();
-          saveToken();
-        }}
-      >
-        <label for="api-token">
-          Paste the read API token — run <code>ev-charge-coordinator api-token</code> on the
-          host to print it. Stored on this device only.
-        </label>
-        <div class="token-row">
-          <input id="api-token" type="password" autocomplete="off" bind:value={tokenDraft} />
-          <button type="submit">Save</button>
-        </div>
-      </form>
-    </Card>
-  {:else if !loaded}
+  {#if !loader.state.loaded}
     <div class="skeleton card-skeleton" aria-hidden="true"></div>
     <div class="skeleton card-skeleton" aria-hidden="true"></div>
     <div class="skeleton line-skeleton" aria-hidden="true"></div>
     <p class="hint" role="status">Loading…</p>
-  {:else if error !== null && data === null}
+  {:else if loader.state.error !== null && data === null}
     <Card variant="elevated" headline="Can't reach the read API">
-      <p class="hint">{error}</p>
-      <button type="button" onclick={() => void refresh()}>Retry</button>
+      <p class="hint">{loader.state.error}</p>
+      <button type="button" onclick={() => void loader.refresh()}>Retry</button>
     </Card>
   {:else if empty}
     <p class="empty" role="status">
@@ -130,8 +78,10 @@
       <p class="caption">{batteryText}</p>
     </Card>
     <p class="session" role="status">{line}</p>
-    {#if error !== null}
-      <p class="warn" role="alert">Refresh failed: {error} — showing the last good sample.</p>
+    {#if loader.state.error !== null}
+      <p class="warn" role="alert">
+        Refresh failed: {loader.state.error} — showing the last good sample.
+      </p>
     {/if}
   {/if}
 </section>
@@ -191,24 +141,6 @@
     margin: 0;
     font-size: 0.9rem;
     color: var(--np-color-error, #b3261e);
-  }
-
-  .token-form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--evcc-space-2, 8px);
-  }
-
-  .token-row {
-    display: flex;
-    gap: var(--evcc-space-2, 8px);
-  }
-
-  .token-row input {
-    flex: 1;
-    min-width: 0;
-    padding: var(--evcc-space-1, 4px) var(--evcc-space-2, 8px);
-    font: inherit;
   }
 
   button {
