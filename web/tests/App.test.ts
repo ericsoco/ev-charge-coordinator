@@ -18,14 +18,39 @@ function payload(): unknown {
   };
 }
 
+/** The Then tab fetches /api/series + /api/sessions alongside /api/now. */
+function seriesPayload(metric: string): unknown {
+  return {
+    metric,
+    unit: 'percent',
+    aggregation: 'avg',
+    from: 1,
+    to: 2,
+    bucketMs: 300_000,
+    points: [[1, 60]],
+  };
+}
+
+function sessionsPayload(): unknown {
+  return { total: 0, limit: 200, offset: 0, sessions: [] };
+}
+
 let fetchMock: ReturnType<typeof vi.fn>;
 
-// The Now tab fetches /api/now on mount (P2 step 3); stub a minimal payload
-// so the shell tests stay offline and deterministic.
+// The Now tab fetches /api/now on mount (P2 step 3) and the Then tab fetches
+// the series + sessions endpoints (P2 step 4); stub each route so the shell
+// tests stay offline and deterministic.
 beforeEach(() => {
   window.localStorage.clear();
   session.needsToken = false;
-  fetchMock = vi.fn().mockResolvedValue(ok(payload()));
+  fetchMock = vi.fn().mockImplementation((url: string) => {
+    if (url.startsWith('/api/series')) {
+      const metric = url.includes('metric=battery_soc') ? 'battery_soc' : 'ev_soc';
+      return Promise.resolve(ok(seriesPayload(metric)));
+    }
+    if (url.startsWith('/api/sessions')) return Promise.resolve(ok(sessionsPayload()));
+    return Promise.resolve(ok(payload()));
+  });
   vi.stubGlobal('fetch', fetchMock);
 });
 
@@ -56,7 +81,11 @@ describe('app shell', () => {
   it('switches tabs from the navigation', async () => {
     render(App);
     await clickTab(/Then/);
-    expect(screen.getByRole('main').textContent).toContain('P2 steps 4');
+    expect(screen.getByRole('main').textContent).toContain('Then');
+    // Step 4 renders the BSoC chart container once its data arrives.
+    expect(
+      await screen.findByRole('img', { name: /state of charge over time/i })
+    ).toBeDefined();
     await clickTab(/Messages/);
     expect(screen.getByRole('main').textContent).toContain('P2 step 7');
     await clickTab(/Now/);
