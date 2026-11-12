@@ -298,6 +298,20 @@ localStorage; paste from `evcc api-token`). New: `web/src/lib/api.ts`
 /api/now.
 Gate: `npm run check` green — **1053 passed / 3 skipped** (root) + web **17/17**, svelte-check 0 errors.
 
+### 2026-11-11 — P2 step 3 follow-up: shared API types + page-agnostic load session
+
+Branch `p2/step3-now-tab` (3 refactor commits). **Shared contract:** response
+shapes lift to `src/api/types.ts` — one definition imported by the server
+(`./types.js`, NodeNext) and the web app (bundler path; added to
+`web/tsconfig.json` include); `docs/api.md` links it as the executable mirror.
+**Colocation:** `nowText.ts` moves to `web/src/pages/` beside Now.svelte.
+**Auth/refresh seam:** new `web/src/lib/apiSession.svelte.ts` — module-global
+`session.needsToken` (any endpoint's 401, so whichever page is deeplinked first
+gates the same way) + `createApiLoader` (initial fetch, interval, focus
+refresh, keep-last-good-data, refetch-after-save); `TokenPanel.svelte` renders
+from App off that flag; Now slims to rendering only.
+Gate: `npm run check` green — **1054 passed / 2 skipped** (root) + web **18/18**, svelte-check 0 errors / 0 warnings.
+
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
