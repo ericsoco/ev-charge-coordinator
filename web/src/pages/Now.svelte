@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { Badge, Card } from 'noph-ui';
   import { AuthError, fetchNow, setApiToken, type NowResponse } from '../lib/api';
-  import { batteryCaption, formatAge, sessionLine, vehicleCaption } from '../lib/nowText';
+  import { batteryCaption, formatAge, sessionLine, vehicleCaption } from './nowText';
 
   /** Poll cadence (P2 decisions: polling, no SSE). Tests pass a short one. */
   let { pollMs = 10_000 }: { pollMs?: number } = $props();

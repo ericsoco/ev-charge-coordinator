@@ -2,7 +2,7 @@
  * Pure text formatting for the Now tab — no DOM, unit-testable. Product
  * copy: big numbers, a brief session sentence, local wall-clock times.
  */
-import type { NowResponse, NowVehicle, NowBattery } from './api';
+import type { NowResponse, NowVehicle, NowBattery } from '../lib/api';
 
 const STOP_REASON_LABELS: Record<string, string> = {
   target_reached: 'target reached',
