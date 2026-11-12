@@ -13,9 +13,22 @@ import type {
   NowResponse,
   NowSession,
   NowVehicle,
+  SeriesMetricName,
+  SeriesResult,
+  SessionSummary,
+  SessionsResponse,
 } from '../../../src/api/types';
 
-export type { NowBattery, NowResponse, NowSession, NowVehicle };
+export type {
+  NowBattery,
+  NowResponse,
+  NowSession,
+  NowVehicle,
+  SeriesMetricName,
+  SeriesResult,
+  SessionSummary,
+  SessionsResponse,
+};
 
 const TOKEN_KEY = 'evcc.apiToken';
 
@@ -36,13 +49,34 @@ export function clearApiToken(): void {
 /** The API rejected our token (or none is stored) — render the token panel. */
 export class AuthError extends Error {}
 
-/** GET /api/now with the stored bearer token. Throws AuthError on 401. */
-export async function fetchNow(): Promise<NowResponse> {
+/** GET a read-API route with the stored bearer token. Throws AuthError on 401. */
+async function apiGet<T>(path: string): Promise<T> {
   const token = getApiToken();
-  const response = await fetch('/api/now', {
+  const response = await fetch(path, {
     headers: token === null ? {} : { Authorization: `Bearer ${token}` },
   });
   if (response.status === 401) throw new AuthError('API token missing or invalid');
   if (!response.ok) throw new Error(`read API responded ${response.status}`);
-  return (await response.json()) as NowResponse;
+  return (await response.json()) as T;
+}
+
+/** GET /api/now. */
+export async function fetchNow(): Promise<NowResponse> {
+  return apiGet<NowResponse>('/api/now');
+}
+
+/** GET /api/series for one metric over [fromMs, toMs]; server auto-buckets. */
+export async function fetchSeries(
+  metric: SeriesMetricName,
+  fromMs: number,
+  toMs: number
+): Promise<SeriesResult> {
+  const query = new URLSearchParams({ metric, from: String(fromMs), to: String(toMs) });
+  return apiGet<SeriesResult>(`/api/series?${query}`);
+}
+
+/** GET /api/sessions page (newest first). */
+export async function fetchSessions(limit: number, offset: number): Promise<SessionsResponse> {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return apiGet<SessionsResponse>(`/api/sessions?${query}`);
 }

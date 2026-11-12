@@ -3,6 +3,8 @@ import {
   AuthError,
   clearApiToken,
   fetchNow,
+  fetchSeries,
+  fetchSessions,
   getApiToken,
   setApiToken,
 } from '../src/lib/api';
@@ -66,5 +68,57 @@ describe('fetchNow', () => {
       json: async () => ({ error: 'boom' }),
     } as unknown as Response);
     await expect(fetchNow()).rejects.toThrow(/500/);
+  });
+});
+
+describe('fetchSeries', () => {
+  const SERIES = {
+    metric: 'ev_soc',
+    unit: 'percent',
+    aggregation: 'avg',
+    from: 1000,
+    to: 2000,
+    bucketMs: 300_000,
+    points: [],
+  };
+
+  it('builds the metric/from/to query with the stored token', async () => {
+    setApiToken('tok-2');
+    fetchMock.mockResolvedValue(ok(SERIES));
+    await fetchSeries('ev_soc', 1000, 2000);
+    expect(fetchMock).toHaveBeenCalledWith('/api/series?metric=ev_soc&from=1000&to=2000', {
+      headers: { Authorization: 'Bearer tok-2' },
+    });
+  });
+
+  it('throws AuthError on 401', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'unauthorized' }),
+    } as unknown as Response);
+    await expect(fetchSeries('battery_soc', 1, 2)).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe('fetchSessions', () => {
+  const PAGE = { total: 0, limit: 200, offset: 400, sessions: [] };
+
+  it('builds the limit/offset query with the stored token', async () => {
+    setApiToken('tok-3');
+    fetchMock.mockResolvedValue(ok(PAGE));
+    await fetchSessions(200, 400);
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions?limit=200&offset=400', {
+      headers: { Authorization: 'Bearer tok-3' },
+    });
+  });
+
+  it('throws AuthError on 401', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'unauthorized' }),
+    } as unknown as Response);
+    await expect(fetchSessions(50, 0)).rejects.toBeInstanceOf(AuthError);
   });
 });
