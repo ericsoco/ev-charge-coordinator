@@ -46,9 +46,9 @@
   (buffer interlock + geofence + ntfy); monitor stops + re-target raise with observed
   efficiency back-computed (2026-11-07); resume from battery ticks (2026-11-09).
 - **Phase 2 (graphical UX) underway** — requirements 2026.Nov.07; all decisions
-  resolved with the user (2026-11-10); see **P2 — graphical UX** below. Steps 1–3
-  (web scaffold + shell; daemon HTTP seam + read API; Now tab live data)
-  landed 2026-11-11.
+  resolved with the user (2026-11-10); see **P2 — graphical UX** below. Steps 1–4
+  (web scaffold + shell; daemon HTTP seam + read API; Now tab live data; Then tab
+  BSoC + Sessions chart) landed 2026-11-11.
 
 ## Decisions on future work
 
@@ -103,7 +103,8 @@
 
 ## P2 — graphical UX (active plan)
 
-> Status: **steps 1–3 complete (2026-11-11); step 4 next.** Design basis:
+> Status: **steps 1–4 complete (2026-11-11); step 5 (sessions selector) next.**
+> Design basis:
 > [requirements.md](./docs/requirements.md) 2026.Nov.07 entry, [design.md](./docs/design.md)
 > §3.9/§7 seams + §8, [charts-research.md](./docs/charts-research.md). Same discipline as
 > Phase 1: each step = separate branch, gated on `npm run check`, dated Log entry.
@@ -159,6 +160,7 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
    clamped 2 h–1 yr; horizontal = scrub); session `markLine` start/end + `markArea`
    tint band; touch/hover tooltip (start/end time, EV % start→end, home %
    start→end); legend below.
+   *(Branch `p2/step4-bsoc-chart` — **complete 2026-11-11**; details in the Log.)*
 5. **Sessions selector** — lazy/paginated dropdown (start date + time labels);
    select → 1 s eased `dataZoom` focus on the session.
 6. **System monitor + weather bar** — ±kWh area charts around a centered zero line
@@ -311,6 +313,50 @@ gates the same way) + `createApiLoader` (initial fetch, interval, focus
 refresh, keep-last-good-data, refetch-after-save); `TokenPanel.svelte` renders
 from App off that flag; Now slims to rendering only.
 Gate: `npm run check` green — **1054 passed / 2 skipped** (root) + web **18/18**, svelte-check 0 errors / 0 warnings.
+
+### 2026-11-11 — P2 step 4 complete: BSoC + Sessions chart
+
+Branch `p2/step4-bsoc-chart` (4 commits). **Shipped:** ECharts 6.1 (modular
+`echarts/core` registration; `NOTICE` already credited it in step 1) driving the
+Then tab per requirements 2b — dual BSoC line series (Vehicle + Home battery,
+distinct colors) over one time x-axis, y-axis 0–100 %, **legend below**;
+direction-aware wheel input (`classifyWheel`: vertical-dominant → zoom anchored
+at the cursor pixel, horizontal-dominant → scrub) with ECharts pinch/mouse-drag
+kept for touch/mouse, inside `dataZoom` clamped `minValueSpan`/`maxValueSpan`
+2 h–1 yr plus axis bounds; session markers — dashed start/end `markLine`s (open
+session: start line only) + tinted `markArea` band plug→unplug (open → now).
+Axis tooltip carries the session block on hover/touch inside a band: start/end
+time, EV % start→end, home % start→end (open → "in progress" / "→ now"; null
+edges → "—"), then both series values. **Lazy loading** (requirements 2b): initial
+24 h fetch, debounced refetch of the visible window +25 % padding when the view
+leaves the loaded bounds or loaded data is >16× too coarse; sessions paged
+(≤10 × 200, newest-first) until they cover the window; the user's window is
+preserved and clamped into fresh bounds across refetches (also breaks the
+fetch loop if bounds tighten).
+
+**Plumbing:** the shared contract from the step-3 follow-up completed —
+`SeriesResult` (+ `SeriesMetricName`/`Unit`/`Aggregation`), `SessionSummary`,
+`SessionsResponse`, `ApiMessage`, `MessagesResponse` moved into the pure
+`src/api/types.ts` (its header + docs/api.md already promised this; only `Now*`
+lived there), server modules re-export so nothing downstream changes, and
+`SERIES_METRICS satisfies Record<SeriesMetricName, MetricDef>` pins
+registry↔union parity. `web/src/lib/api.ts` factors `apiGet` (same AuthError
+semantics) and gains `fetchSeries`/`fetchSessions`.
+
+**Structure:** pure `web/src/pages/bsocChart.ts` (option builder, window math,
+tooltip formatter — 33 unit pins) + thin `bsocChartView.ts` (the only ECharts
+runtime import; `createChart` returns null when the environment has no 2D
+canvas, so jsdom never inits — it prints the expected `getContext`
+not-implemented notice) + `Then.svelte` (skeleton / error+retry / keep-last-good
+/ shared 401 gate mirror Now; ResizeObserver → `resize()`; chart element swap
+disposes the old view). App shell test's fetch stub became route-aware
+(`/api/now` | `/api/series` | `/api/sessions`).
+
+Gate: `npm run check` green — **1054 passed / 2 skipped** (root) + web
+**55/55** (was 18), svelte-check 0/0, vite build OK. Built JS after ECharts:
+660 kB raw / 224 kB gz — step 9's load budget reviews this (modular imports
+already applied). Known follow-ups for step 9 device QA: touch pinch/drag feel,
+wheel scrub direction sign, legend/tooltip rendering on real screens.
 
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
