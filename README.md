@@ -619,6 +619,7 @@ One-shot and interactive CLI commands. Commands marked with ➡️ are one-shot 
 | `help [<command>]` | List the available commands, or one command's flags (`help config`) |
 | `status [--json]` | Show daemon, store, proxy, and config status — reads only, starts nothing (service lines reflect this process; proxies are probed on localhost) |
 | `sessions [--limit <n>] [--open]` | Show recent charging sessions from the store (default 10; `--open` lists only sessions still open) |
+| `api-token` ➡️ | Print the read API's shared bearer token — mints it on first use and prints the token alone on stdout (so it can be piped or copied). Used to authenticate `curl` calls against the daemon's HTTP API and to authorize the web app (paste it into the app's token panel on first load); the daemon's boot log prints the same token at startup. See [docs/api.md](./docs/api.md) for the API itself |
 | `daemon [--once] [--dry-run] [--debug]` ➡️ | Run the collect daemon in the foreground (battery/EV/weather samplers, session tracking, history); `--once` runs a single collection cycle and exits non-zero if any task failed; `--dry-run` evaluates and records auto-start decisions without actuating; `--debug` prints full stack traces for startup failures |
 | `daemon logs [--lines <n>] [--err] [--follow]` ➡️ | Show recent `daemon.log` lines and exit (default 50; `--err` also shows `daemon.err.log`; `--follow` streams with `tail -F`, Ctrl-C stops) |
 | `daemon stop` ➡️ | Stop the launchd daemon (bootout; the agent stays installed) |
@@ -676,8 +677,8 @@ accepts, with the following differences:
 - Stray positional arguments are rejected, so a typo like `sessions 5` is an
   error rather than a silently different command.
 
-➡️ commands (`start`, `daemon …`) cannot be run from inside the REPL — they
-are the one-shot surface the REPL is launched from.
+➡️ commands (`start`, `daemon …`, `api-token`) cannot be run from inside the
+REPL — they are the one-shot surface the REPL is launched from.
 
 ## How It Works
 
@@ -797,6 +798,12 @@ interface + repositories + pin lists to move together — any omission fails
   reboots; on headless/CI setups `ECC_DISABLE_KEYCHAIN` forces the file path)
 - OAuth tokens are automatically refreshed
 - No credentials are logged or exposed in error messages
+- The daemon's display-only HTTP API ([docs/api.md](./docs/api.md)) requires
+  `Authorization: Bearer <token>` on every route (401 otherwise). The shared
+  token lives in the credential store (keychain/encrypted file — never
+  config.json) and is shown by `ev-charge-coordinator api-token` or the
+  daemon's boot log line; it is bound to loopback and never leaves the machine
+  without the tunnel.
 
 ## Development
 
