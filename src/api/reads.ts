@@ -14,7 +14,14 @@ import * as sessionStore from '../store/SessionStore.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import { ApiError } from './ApiError.js';
 import { intParamOr } from './params.js';
-import type { NowResponse } from './types.js';
+import type {
+  MessagesResponse,
+  NowResponse,
+  SessionSummary,
+  SessionsResponse,
+} from './types.js';
+
+export type { ApiMessage, MessagesResponse, SessionSummary, SessionsResponse } from './types.js';
 
 export interface NowDeps {
   db: DatabaseSync;
@@ -72,36 +79,6 @@ export function readNow(deps: NowDeps): NowResponse {
             stopReason: sessionRow.stopReason,
           },
   };
-}
-
-export interface SessionSummary {
-  id: number;
-  /** Selector label: start date+time, local `YYYY-MM-DD HH:MM`. */
-  label: string;
-  plugTsMs: number;
-  unplugTsMs: number | null;
-  open: boolean;
-  targetPercent: number | null;
-  initialTargetPercent: number | null;
-  targetChangeReason: string | null;
-  stopReason: SessionStopReason | null;
-  energyKwh: number | null;
-  energyPercent: number | null;
-  efficiency: number | null;
-  /** First EV sample SoC at/after plug; null when the car left no samples. */
-  evSocStartPercent: number | null;
-  /** Last EV sample SoC at/before unplug; null while open or unsampled. */
-  evSocEndPercent: number | null;
-  batterySocStartPercent: number | null;
-  /** Null while open — an open session has no final value yet. */
-  batterySocEndPercent: number | null;
-}
-
-export interface SessionsResponse {
-  total: number;
-  limit: number;
-  offset: number;
-  sessions: SessionSummary[];
 }
 
 export const SESSIONS_DEFAULT_LIMIT = 50;
@@ -210,26 +187,6 @@ export function readSessions(
   });
 
   return { total: Number(totalRow.n), limit, offset, sessions };
-}
-
-/**
- * A future Messages-tab row (P2 step 7 lands the `notifications` table and
- * the notifier-fanout writes). Documented now so the app can bind to the
- * final shape; the list is empty until then.
- */
-export interface ApiMessage {
-  id: number;
-  tsMs: number;
-  /** NotificationEvent.type ('plug-in-detected', 'decision-made', …). */
-  type: string;
-  /** Human headline, e.g. "Charging started". */
-  title: string;
-  /** Rendered detail: reason, SoC, target — what ntfy/Slack would show. */
-  body: string;
-}
-
-export interface MessagesResponse {
-  messages: ApiMessage[];
 }
 
 /** Always empty until the notifications table lands (P2 step 7). */

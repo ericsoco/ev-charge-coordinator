@@ -13,9 +13,14 @@ import type { DatabaseSync } from 'node:sqlite';
 import { HOME_SITE, type SiteId } from '../store/types.js';
 import { ApiError } from './ApiError.js';
 import { intParam } from './params.js';
+import type {
+  SeriesAggregation,
+  SeriesMetricName,
+  SeriesResult,
+  SeriesUnit,
+} from './types.js';
 
-export type SeriesUnit = 'percent' | 'kwh';
-export type SeriesAggregation = 'avg' | 'integrate';
+export type { SeriesAggregation, SeriesMetricName, SeriesResult, SeriesUnit } from './types.js';
 
 export interface MetricDef {
   table: 'ev_samples' | 'home_battery_samples';
@@ -69,9 +74,7 @@ export const SERIES_METRICS = {
     aggregation: 'integrate',
     powerExpr: 'MAX(home_load_w, 0)',
   },
-} as const satisfies Record<string, MetricDef>;
-
-export type SeriesMetricName = keyof typeof SERIES_METRICS;
+} as const satisfies Record<SeriesMetricName, MetricDef>;
 
 /** Auto-bucket ladder (ms): 1m, 2m, 5m, 10m, 15m, 30m, 1h, 2h, 3h, 6h, 12h, 1d, 2d, 7d, 14d, 30d, 90d. */
 const BUCKET_LADDER_MS = [
@@ -105,7 +108,6 @@ export interface SeriesParams {
   toMs: number;
   bucketMs: number;
 }
-
 /** Validate ?metric&from&to&bucket; throws ApiError(400) with a fix-it message. */
 export function parseSeriesParams(query: Record<string, unknown>): SeriesParams {
   const metric = query.metric;
@@ -144,17 +146,6 @@ export function parseSeriesParams(query: Record<string, unknown>): SeriesParams 
     );
   }
   return { metric: metric as SeriesMetricName, fromMs, toMs, bucketMs };
-}
-
-export interface SeriesResult {
-  metric: SeriesMetricName;
-  unit: SeriesUnit;
-  aggregation: SeriesAggregation;
-  from: number;
-  to: number;
-  bucketMs: number;
-  /** [epochMs, value] pairs, oldest bucket first. */
-  points: Array<[number, number]>;
 }
 
 interface BucketRow {
