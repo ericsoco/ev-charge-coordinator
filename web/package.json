@@ -10,6 +10,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json && vitest run"
   },
   "dependencies": {
+    "echarts": "^6.1.0",
     "noph-ui": "^0.53.2",
     "svelte": "^5.57.3"
   },
