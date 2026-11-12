@@ -29,6 +29,10 @@ Authorization: Bearer <token>
 Missing/wrong token → `401` with `WWW-Authenticate: Bearer` and body
 `{"error":"unauthorized"}`. Comparison is constant-time (SHA-256 first).
 
+The response shapes are mirrored as TypeScript in
+[`src/api/types.ts`](../src/api/types.ts) — the single definition shared by
+the server handlers and the web app.
+
 The token is a **shared secret** (32 random bytes, hex = 64 chars):
 
 - **Stored** in the credential store (`api.token`, alongside the notifier

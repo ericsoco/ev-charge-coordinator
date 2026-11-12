@@ -1,45 +1,21 @@
 /**
- * Typed client for the daemon's read API (docs/api.md). Same-origin in both
- * environments: the Vite dev proxy folds /api to the daemon in development,
- * the daemon serves the built app in production. The bearer token is stored
- * per device (P2 decision) — localStorage under evcc.apiToken.
+ * Typed transport for the daemon's read API (docs/api.md). Same-origin in
+ * both environments: the Vite dev proxy folds /api to the daemon in
+ * development, the daemon serves the built app in production. The bearer
+ * token is stored per device (P2 decision) — localStorage under evcc.apiToken.
+ *
+ * Response shapes are NOT declared here: they live in src/api/types.ts, the
+ * single definition shared with the server, and are re-exported below so web
+ * code keeps one import site.
  */
+import type {
+  NowBattery,
+  NowResponse,
+  NowSession,
+  NowVehicle,
+} from '../../../src/api/types';
 
-/** Mirror of GET /api/now's vehicle block (docs/api.md). */
-export interface NowVehicle {
-  vehicleId: string;
-  socPercent: number | null;
-  chargingState: string | null;
-  chargeLimitSoc: number | null;
-  sampleTsMs: number;
-  ageMs: number;
-}
-
-/** Mirror of GET /api/now's battery block (docs/api.md). */
-export interface NowBattery {
-  socPercent: number | null;
-  powerW: number | null;
-  homeLoadW: number | null;
-  solarW: number | null;
-  gridW: number | null;
-  sampleTsMs: number;
-  ageMs: number;
-}
-
-export interface NowSession {
-  id: number;
-  plugTsMs: number;
-  targetPercent: number | null;
-  stopReason: 'target_reached' | 'battery_buffer' | null;
-}
-
-/** Mirror of GET /api/now (docs/api.md). */
-export interface NowResponse {
-  nowMs: number;
-  vehicle: NowVehicle | null;
-  battery: NowBattery | null;
-  session: NowSession | null;
-}
+export type { NowBattery, NowResponse, NowSession, NowVehicle };
 
 const TOKEN_KEY = 'evcc.apiToken';
 
