@@ -290,8 +290,18 @@ export function buildBsocOption(
       formatter: (params: unknown) =>
         formatBsocTooltip(params as TooltipParamLike[], data, nowMs),
     },
-    xAxis: { type: 'time', min: data.bounds.from, max: data.bounds.to },
-    yAxis: { type: 'value', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
+    xAxis: {
+      type: 'time',
+      min: data.bounds.from,
+      max: data.bounds.to
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      axisLabel: { formatter: '{value}%' },
+      interval: 25
+    },
     dataZoom: [
       {
         type: 'inside',
