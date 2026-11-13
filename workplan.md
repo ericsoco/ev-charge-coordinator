@@ -358,6 +358,12 @@ Gate: `npm run check` green — **1054 passed / 2 skipped** (root) + web
 already applied). Known follow-ups for step 9 device QA: touch pinch/drag feel,
 wheel scrub direction sign, legend/tooltip rendering on real screens.
 
+### 2026-11-11 — P2 step 4 follow-up: helper header comments
+
+Branch `p2/step4-bsoc-chart` — one-line `/** … */` headers on
+`windowToPercent`/`percentToWindow` naming their semantics (displayed window ↔
+dataZoom percent of the loaded `bounds`). Gate: web check green (55/55).
+
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
