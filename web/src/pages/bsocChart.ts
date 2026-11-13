@@ -3,8 +3,13 @@
  * 2026.Nov.07 §2b) — window math, the ECharts option, and the static readout
  * helpers. No DOM/ECharts runtime here (only a type-only import), so every
  * rule below is unit-testable: the 2 h–1 yr zoom clamp, wheel gesture
- * direction (vertical = zoom, horizontal = scrub), session markers, and the
- * readout formatting/lookup.
+ * direction (vertical = zoom, horizontal = scrub), session markers, EV gap
+ * lines, and the readout formatting/lookup.
+ *
+ * Window model: the DOMAIN (now − 1 yr .. now, fixed at page init) is the
+ * coordinate space — zoom/pan clamp into it, the time axis spans it, and the
+ * dataZoom percent maps over it. The loaded window (what GET /api/series
+ * returned) only gates lazy refetching via needsRefetch/fetchWindowFor.
  */
 import type { EChartsCoreOption } from 'echarts/core';
 import type { SeriesResult, SessionSummary } from '../../../src/api/types';
@@ -23,6 +28,14 @@ export const MAX_EVENT_ZOOM = 4;
 export const REFRESH_COARSENESS_RATIO = 16;
 /** Padding added to the visible window when (re)fetching. */
 export const FETCH_PAD_RATIO = 0.25;
+/**
+ * Refetch when a visible edge comes within this fraction of the visible span
+ * of a loaded edge (or exceeds it) — smaller than FETCH_PAD_RATIO so a refetch
+ * loads ahead of the view and cannot loop (the fresh bounds restore the gap).
+ */
+export const EDGE_BUFFER_RATIO = 0.1;
+/** EV samples further apart than this multiple of the bucket width are a gap. */
+export const EV_GAP_RATIO = 2.5;
 
 export const EV_SERIES_NAME = 'Vehicle BSoC';
 export const HOME_SERIES_NAME = 'Home battery BSoC';
@@ -45,8 +58,9 @@ const clamp = (value: number, min: number, max: number): number =>
 
 /**
  * Fit a window into bounds: span ≤ [MIN_SPAN_MS, MAX_SPAN_MS] (bounds win
- * when tighter), then shift into the bounds. Degenerate bounds (span < MIN)
- * collapse to the bounds themselves.
+ * when tighter), then shift into the bounds. Callers pass the DOMAIN as
+ * bounds, so the span clamps land exactly on [MIN_SPAN_MS, MAX_SPAN_MS] and
+ * the position clamps to the domain — never to the loaded window.
  */
 export function clampWindow(win: TimeWindow, bounds: TimeWindow): TimeWindow {
   const boundsSpan = spanOf(bounds);
@@ -60,8 +74,10 @@ export function clampWindow(win: TimeWindow, bounds: TimeWindow): TimeWindow {
 }
 
 /**
- * Zoom by `factor` (>1 zooms in) keeping the window anchored at `anchorTs`
- * (cursor position), clamped to [MIN_SPAN_MS, MAX_SPAN_MS] and the bounds.
+ * Zoom by `factor` (>1 zooms in — the span shrinks) keeping the window
+ * anchored at `anchorTs` (cursor position), clamped to [MIN_SPAN_MS,
+ * MAX_SPAN_MS] and the bounds. Matches zoomFactorFor: scroll up (deltaY
+ * negative) gives factor > 1 and zooms in.
  */
 export function zoomAt(
   win: TimeWindow,
@@ -70,7 +86,7 @@ export function zoomAt(
   factor: number
 ): TimeWindow {
   const span = spanOf(win);
-  let nextSpan = clamp(span * factor, MIN_SPAN_MS, MAX_SPAN_MS);
+  let nextSpan = clamp(span / factor, MIN_SPAN_MS, MAX_SPAN_MS);
   nextSpan = Math.min(nextSpan, spanOf(bounds));
   const frac = span > 0 ? clamp((anchorTs - win.from) / span, 0, 1) : 0.5;
   return clampWindow(
@@ -84,7 +100,7 @@ export function panBy(win: TimeWindow, bounds: TimeWindow, deltaMs: number): Tim
   return clampWindow({ from: win.from + deltaMs, to: win.to + deltaMs }, bounds);
 }
 
-/** Displayed window (`win`) → dataZoom start/end percent of the loaded `bounds`. */
+/** Displayed window (`win`) → dataZoom start/end percent of the DOMAIN. */
 export function windowToPercent(
   win: TimeWindow,
   bounds: TimeWindow
@@ -96,7 +112,7 @@ export function windowToPercent(
   };
 }
 
-/** dataZoom start/end percent of the loaded `bounds` → displayed window. */
+/** dataZoom start/end percent of the DOMAIN → displayed window. */
 export function percentToWindow(
   start: number,
   end: number,
@@ -137,19 +153,29 @@ export function panMsFor(deltaX: number, pxWidth: number, span: number): number 
   return pxWidth > 0 ? (deltaX / pxWidth) * span : 0;
 }
 
-/** Loaded window is stale for this view: outside bounds or far too coarse. */
-export function needsRefetch(visible: TimeWindow, bounds: TimeWindow): boolean {
-  if (visible.from < bounds.from - 1 || visible.to > bounds.to + 1) return true;
-  return spanOf(bounds) / Math.max(spanOf(visible), 1) > REFRESH_COARSENESS_RATIO;
+/**
+ * Loaded window is stale for this view: a visible edge is within the buffer of
+ * a loaded edge (or past it) while more of the domain can still load, or the
+ * loaded data is far too coarse for the view. `domain` edges are excluded from
+ * the buffer check — data can never load past them, so a view parked at an
+ * edge cannot loop refetches.
+ */
+export function needsRefetch(
+  visible: TimeWindow,
+  loaded: TimeWindow,
+  domain: TimeWindow
+): boolean {
+  if (spanOf(loaded) / Math.max(spanOf(visible), 1) > REFRESH_COARSENESS_RATIO) return true;
+  const buffer = spanOf(visible) * EDGE_BUFFER_RATIO;
+  const leftNeeds = loaded.from > domain.from && visible.from - loaded.from < buffer;
+  const rightNeeds = loaded.to < domain.to && loaded.to - visible.to < buffer;
+  return leftNeeds || rightNeeds;
 }
 
-/** Fetch window for a visible view: padded, clamped to [now − 1 yr, now]. */
-export function fetchWindowFor(visible: TimeWindow, nowMs: number): TimeWindow {
+/** Fetch window for a visible view: padded, clamped into the domain. */
+export function fetchWindowFor(visible: TimeWindow, domain: TimeWindow): TimeWindow {
   const pad = spanOf(visible) * FETCH_PAD_RATIO;
-  return clampWindow(
-    { from: visible.from - pad, to: visible.to + pad },
-    { from: nowMs - MAX_SPAN_MS, to: nowMs }
-  );
+  return clampWindow({ from: visible.from - pad, to: visible.to + pad }, domain);
 }
 
 /** Sessions overlapping a window (for markers). */
@@ -235,22 +261,77 @@ export interface BsocData {
   ev: SeriesResult;
   home: SeriesResult;
   sessions: SessionSummary[];
-  /** The fetched (loaded) window — the axis extent and zoom bounds. */
+  /** The fetched (loaded) window — gates refetching and session filtering. */
   bounds: TimeWindow;
 }
 
+/** `[epochMs, value]` sample, as served by GET /api/series. */
+export type BsocPoint = [number, number];
+/** Dashed segment endpoints (gap bridge or edge extension). */
+export type BsocSegment = [BsocPoint, BsocPoint];
+
+export interface EvGapLine {
+  /** EV series data: contiguous runs separated by `null` line breaks. */
+  solid: Array<BsocPoint | null>;
+  /** Dashed segments bridging gaps and extending to the chart edges. */
+  dashed: BsocSegment[];
+}
+
 /**
- * The full chart option: dual BSoC lines over one time axis, inside dataZoom
- * clamped to 2 h–1 yr, and session markers (faint start/end lines + tinted
- * band) for every session overlapping the loaded window. No tooltip/legend —
- * the page renders a static readout row below the chart instead.
+ * Split EV points (oldest first) into contiguous runs wherever consecutive
+ * samples are more than `gapThresholdMs` apart. Runs render solid (separated by
+ * `null` breaks so ECharts does not connect across gaps); each gap renders as a
+ * dashed bridge, and the space before the first / after the last sample renders
+ * as a dashed extension at that sample's value when the `edgeFrom`/`edgeTo`
+ * chart edge is itself more than one gap away ("as needed" — a stub shorter
+ * than a gap would just flicker at the edge of live data).
+ */
+export function evGapLine(
+  points: BsocPoint[],
+  gapThresholdMs: number,
+  edgeFrom: number,
+  edgeTo: number
+): EvGapLine {
+  const solid: Array<BsocPoint | null> = [];
+  const dashed: BsocSegment[] = [];
+  for (let i = 0; i < points.length; i++) {
+    if (i > 0 && points[i][0] - points[i - 1][0] > gapThresholdMs) {
+      dashed.push([points[i - 1], points[i]]);
+      solid.push(null);
+    }
+    solid.push(points[i]);
+  }
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (first !== undefined && first[0] - edgeFrom > gapThresholdMs) {
+    dashed.push([[edgeFrom, first[1]], first]);
+  }
+  if (last !== undefined && edgeTo - last[0] > gapThresholdMs) {
+    dashed.push([last, [edgeTo, last[1]]]);
+  }
+  return { solid, dashed };
+}
+
+/**
+ * The full chart option: dual BSoC lines over one time axis spanning the
+ * DOMAIN (the visible window rides the dataZoom), inside dataZoom clamped to
+ * 2 h–1 yr, session markers (faint start/end lines + tinted band) for every
+ * session overlapping the loaded window, and dashed EV gap segments. No
+ * tooltip/legend — the page renders a static readout row below the chart.
  */
 export function buildBsocOption(
   data: BsocData,
   visible: TimeWindow,
+  domain: TimeWindow,
   nowMs: number
 ): EChartsCoreOption {
-  const pct = windowToPercent(visible, data.bounds);
+  const pct = windowToPercent(visible, domain);
+  const evGaps = evGapLine(
+    data.ev.points,
+    EV_GAP_RATIO * data.ev.bucketMs,
+    domain.from,
+    domain.to
+  );
   const sessions = sessionsInWindow(data.sessions, data.bounds, nowMs);
   const markLineData = sessions.flatMap((s) => {
     const marks = [{ xAxis: s.plugTsMs }];
@@ -269,8 +350,10 @@ export function buildBsocOption(
     grid: { left: 8, right: 16, top: 16, bottom: 8, containLabel: true },
     xAxis: {
       type: 'time',
-      min: data.bounds.from,
-      max: data.bounds.to
+      // The DOMAIN, not the loaded bounds: the visible window must be able to
+      // ride past loaded data (lazy loading refetches it promptly).
+      min: domain.from,
+      max: domain.to
     },
     yAxis: {
       type: 'value',
@@ -299,9 +382,20 @@ export function buildBsocOption(
         name: EV_SERIES_NAME,
         type: 'line',
         showSymbol: false,
+        // Gaps between runs stay disconnected (null breaks); the dashed
+        // markLine below bridges them and extends to the chart edges.
         connectNulls: false,
         lineStyle: { width: 2 },
-        data: data.ev.points,
+        data: evGaps.solid,
+        markLine: {
+          silent: true,
+          symbol: ['none', 'none'],
+          animation: false,
+          lineStyle: { color: EV_COLOR, type: 'dashed', width: 2 },
+          label: { show: false },
+          // Point→point segments: each entry is a [from, to] marker-item pair.
+          data: evGaps.dashed.map(([from, to]) => [{ coord: from }, { coord: to }]),
+        },
       },
       {
         name: HOME_SERIES_NAME,

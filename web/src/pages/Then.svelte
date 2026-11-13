@@ -11,6 +11,7 @@
     fetchWindowFor,
     HOME_COLOR,
     INITIAL_SPAN_MS,
+    MAX_SPAN_MS,
     needsRefetch,
     newestSampleTs,
     panBy,
@@ -32,6 +33,13 @@
   const REFRESH_DEBOUNCE_MS = 300;
 
   const now0 = Date.now();
+  /**
+   * The DOMAIN: now − 1 yr .. now, frozen at page init (a moving "now" would
+   * make fetchWindowFor's right clamp outpace the loaded window and loop
+   * refetches). Zoom/pan clamp into the domain and the axis spans it; the
+   * loaded window only gates lazy refetching.
+   */
+  const domain: TimeWindow = { from: now0 - MAX_SPAN_MS, to: now0 };
   /** Window the next fetch loads — starts at the last 24 h. */
   let requested: TimeWindow = { from: now0 - INITIAL_SPAN_MS, to: now0 };
 
@@ -98,8 +106,8 @@
       refreshTimer = null;
       const current = loader.state.data;
       if (current === null || lastVisible === null) return;
-      if (!needsRefetch(lastVisible, current.bounds)) return;
-      requested = fetchWindowFor(lastVisible, Date.now());
+      if (!needsRefetch(lastVisible, current.bounds, domain)) return;
+      requested = fetchWindowFor(lastVisible, domain);
       void loader.refresh();
     }, REFRESH_DEBOUNCE_MS);
   }
@@ -114,21 +122,31 @@
     if (view === null || lastVisible === null || current === null) return;
     const gesture = classifyWheel(event.deltaX, event.deltaY);
     if (gesture.kind === 'none') return;
+    // Capture phase + stop: ECharts' dataZoom roam controller calls
+    // preventDefault/stopPropagation on every wheel over the grid even with
+    // wheel zoom disabled (its zrender listener sits on an inner div), so a
+    // bubble listener on the chart element never fires. Owning the wheel here
+    // keeps classifyWheel/zoomAt/panBy as the single wheel path.
     event.preventDefault();
+    event.stopPropagation();
     if (gesture.kind === 'zoom') {
-      const anchor = view.pixelToTs(event.offsetX) ?? (lastVisible.from + lastVisible.to) / 2;
-      view.applyWindow(zoomAt(lastVisible, current.bounds, anchor, zoomFactorFor(event.deltaY)));
+      // Wheel offsetX is relative to the event target (a canvas child of the
+      // chart element) — rebase it on the chart box for the pixel lookup.
+      const el = event.currentTarget as HTMLElement;
+      const px = event.clientX - el.getBoundingClientRect().left;
+      const anchor = view.pixelToTs(px) ?? (lastVisible.from + lastVisible.to) / 2;
+      view.applyWindow(zoomAt(lastVisible, domain, anchor, zoomFactorFor(event.deltaY)));
     } else {
       // classifyWheel gives direction = sign(deltaX), so deltaX is already
       // the signed scrub distance in pixels.
       const deltaMs = panMsFor(event.deltaX, view.width(), spanOf(lastVisible));
-      view.applyWindow(panBy(lastVisible, current.bounds, deltaMs));
+      view.applyWindow(panBy(lastVisible, domain, deltaMs));
     }
   }
 
   // Chart lifecycle: init once per chart element, then re-apply the option
   // whenever data (re)loads — preserving the user's window, clamped into the
-  // fresh bounds (also breaks the fetch loop if bounds tightened).
+  // domain (never back into the loaded bounds; lazy refetch fills the view).
   $effect(() => {
     const current = loader.state.data;
     const el = chartEl;
@@ -139,22 +157,21 @@
       }
       observer?.disconnect();
       observer = null;
-      boundEl?.removeEventListener('wheel', onWheel);
+      boundEl?.removeEventListener('wheel', onWheel, { capture: true });
       boundEl = el;
     }
     if (current === null || el === null) return;
     if (view === null) {
       view = createChart(el, handleZoomWindow);
       if (view === null) return;
-      el.addEventListener('wheel', onWheel, { passive: false });
+      el.addEventListener('wheel', onWheel, { passive: false, capture: true });
       observer = new ResizeObserver(() => view?.resize());
       observer.observe(el);
     }
-    lastVisible =
-      lastVisible === null ? current.bounds : clampWindow(lastVisible, current.bounds);
+    lastVisible = lastVisible === null ? current.bounds : clampWindow(lastVisible, domain);
     view.onDataZoom(handleZoomWindow);
     view.onPointerMove(handlePointerMove);
-    view.setOption(buildBsocOption(current, lastVisible, Date.now()), current.bounds);
+    view.setOption(buildBsocOption(current, lastVisible, domain, Date.now()), domain);
   });
 
   onMount(() => {
@@ -163,7 +180,7 @@
       stop();
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       observer?.disconnect();
-      boundEl?.removeEventListener('wheel', onWheel);
+      boundEl?.removeEventListener('wheel', onWheel, { capture: true });
       view?.dispose();
       view = null;
     };

@@ -6,6 +6,7 @@ import {
   clampWindow,
   EV_COLOR,
   EV_SERIES_NAME,
+  evGapLine,
   fetchWindowFor,
   formatBsocValue,
   formatReadoutTs,
@@ -105,28 +106,28 @@ describe('clampWindow', () => {
 });
 
 describe('zoomAt', () => {
-  it('keeps the anchor fraction under zoom-in', () => {
+  it('keeps the anchor fraction under zoom-in (factor > 1 shrinks the span)', () => {
     const anchor = T0 + 6 * HOUR; // 25% into the 24 h window
-    const win = zoomAt(BOUNDS, BOUNDS, anchor, 0.5);
+    const win = zoomAt(BOUNDS, BOUNDS, anchor, 2);
     expect(spanOf(win)).toBe(12 * HOUR);
     expect(win.from).toBe(T0 + 3 * HOUR);
     expect(win.to).toBe(T0 + 15 * HOUR);
   });
 
   it('never zooms past the 2 h floor', () => {
-    const win = zoomAt(BOUNDS, BOUNDS, T0 + 12 * HOUR, 1e-9);
+    const win = zoomAt(BOUNDS, BOUNDS, T0 + 12 * HOUR, 1e9);
     expect(spanOf(win)).toBe(MIN_SPAN_MS);
   });
 
   it('never zooms out past the 1 yr ceiling', () => {
     const bounds = { from: T0, to: T0 + 500 * DAY };
-    const win = zoomAt({ from: T0, to: T0 + 300 * DAY }, bounds, T0 + 150 * DAY, 100);
+    const win = zoomAt({ from: T0, to: T0 + 300 * DAY }, bounds, T0 + 150 * DAY, 0.01);
     expect(spanOf(win)).toBe(MAX_SPAN_MS);
   });
 
   it('clamps the anchored window into the bounds', () => {
     // Anchored at the right edge: zoom-out must not spill past bounds.to.
-    const win = zoomAt(BOUNDS, BOUNDS, T0 + DAY, 0.5);
+    const win = zoomAt(BOUNDS, BOUNDS, T0 + DAY, 2);
     expect(win.to).toBe(BOUNDS.to);
     expect(win.from).toBe(BOUNDS.to - 12 * HOUR);
   });
@@ -197,29 +198,60 @@ describe('zoomFactorFor / panMsFor', () => {
 });
 
 describe('needsRefetch / fetchWindowFor (lazy loading)', () => {
-  it('accepts a view inside adequately detailed bounds', () => {
-    expect(needsRefetch({ from: T0, to: T0 + 12 * HOUR }, BOUNDS)).toBe(false);
+  const DOMAIN: TimeWindow = { from: T0 - 100 * DAY, to: T0 + 2 * DAY };
+
+  it('accepts a view well inside adequately detailed bounds', () => {
+    const loaded = { from: T0 - 10 * HOUR, to: T0 + 10 * HOUR };
+    expect(needsRefetch({ from: T0, to: T0 + 6 * HOUR }, loaded, DOMAIN)).toBe(false);
   });
 
-  it('refetches when the view leaves the loaded bounds', () => {
-    expect(needsRefetch({ from: T0 - HOUR, to: T0 + HOUR }, BOUNDS)).toBe(true);
+  it('refetches when the view moves within the buffer of a loadable edge', () => {
+    const loaded = { from: T0, to: T0 + DAY };
+    // 18 h visible → 1.8 h buffer; 1 h of headroom on the left is inside it.
+    expect(needsRefetch({ from: T0 + 1 * HOUR, to: T0 + 19 * HOUR }, loaded, DOMAIN)).toBe(true);
+  });
+
+  it('refetches when the view exceeds the loaded bounds', () => {
+    const loaded = { from: T0, to: T0 + DAY };
+    expect(needsRefetch({ from: T0 - HOUR, to: T0 + 12 * HOUR }, loaded, DOMAIN)).toBe(true);
+  });
+
+  it('does not loop at the domain edge (nothing left to load there)', () => {
+    // Parked at the right edge: fetchWindowFor's clamp lands exactly on
+    // domain.to and the loaded edge can never move again.
+    const visible = { from: DOMAIN.to - 10 * DAY, to: DOMAIN.to };
+    const loaded = fetchWindowFor(visible, DOMAIN);
+    expect(loaded.to).toBe(DOMAIN.to);
+    expect(needsRefetch(visible, loaded, DOMAIN)).toBe(false);
+  });
+
+  it('still refetches away from the edge even when one side sits on the domain', () => {
+    const loaded = { from: DOMAIN.from, to: DOMAIN.from + 20 * HOUR };
+    const visible = { from: DOMAIN.from + 12 * HOUR, to: DOMAIN.from + 20 * HOUR };
+    expect(needsRefetch(visible, loaded, DOMAIN)).toBe(true);
   });
 
   it('refetches when the loaded data is too coarse for the view', () => {
-    const bounds = { from: T0, to: T0 + 40 * DAY };
-    expect(needsRefetch({ from: T0, to: T0 + DAY }, bounds)).toBe(true);
+    const loaded = { from: T0, to: T0 + 40 * DAY };
+    expect(needsRefetch({ from: T0, to: T0 + DAY }, loaded, DOMAIN)).toBe(true);
   });
 
-  it('pads the fetch window and clamps it to [now − 1 yr, now]', () => {
+  it('never loops: the fetch window it asks for satisfies it afterwards', () => {
     const visible = { from: T0 + 6 * HOUR, to: T0 + 18 * HOUR };
-    const win = fetchWindowFor(visible, T0 + DAY);
+    const loaded = fetchWindowFor(visible, DOMAIN);
+    expect(needsRefetch(visible, loaded, DOMAIN)).toBe(false);
+  });
+
+  it('pads the fetch window and clamps it into the domain', () => {
+    const visible = { from: T0 + 6 * HOUR, to: T0 + 18 * HOUR };
+    const win = fetchWindowFor(visible, DOMAIN);
     expect(win.from).toBe(T0 + 3 * HOUR); // −25% of the 12 h span
     expect(win.to).toBe(T0 + 21 * HOUR);
 
-    const old = { from: T0 - 400 * DAY, to: T0 - 390 * DAY };
-    const clamped = fetchWindowFor(old, T0);
-    expect(clamped.from).toBe(T0 - MAX_SPAN_MS);
-    expect(clamped.to).toBeLessThanOrEqual(T0);
+    const old = { from: DOMAIN.from + DAY, to: DOMAIN.from + 11 * DAY };
+    const clamped = fetchWindowFor(old, DOMAIN);
+    expect(clamped.from).toBe(DOMAIN.from);
+    expect(clamped.to).toBe(DOMAIN.from + 15 * DAY); // padded span shifts in, span preserved
   });
 });
 
@@ -321,9 +353,71 @@ describe('readoutAt', () => {
     expect(readout).toEqual({ tsMs: null, tsLabel: '—', homeLabel: '—', evLabel: '—' });
   });
 });
+describe('evGapLine (dashed EV gap segments)', () => {
+  const THRESHOLD = 12 * MINUTE; // 2.5 × a 5 min bucket in these fixtures
+  const pts = (...entries: Array<[number, number]>) => entries;
+
+  it('keeps close samples in one run and extends both edges past the threshold', () => {
+    const points = pts([T0 + 2 * HOUR, 50], [T0 + 2 * HOUR + 5 * MINUTE, 51]);
+    const line = evGapLine(points, THRESHOLD, T0, T0 + DAY);
+    expect(line.solid).toEqual(points);
+    expect(line.dashed).toEqual([
+      [[T0, 50], points[0]],
+      [points[1], [T0 + DAY, 51]],
+    ]);
+  });
+
+  it('bridges a gap with a dashed segment and breaks the solid run', () => {
+    const points = pts(
+      [T0 + HOUR, 50],
+      [T0 + HOUR + 5 * MINUTE, 51],
+      [T0 + 6 * HOUR, 60],
+      [T0 + 6 * HOUR + 5 * MINUTE, 61]
+    );
+    const line = evGapLine(points, THRESHOLD, T0, T0 + DAY);
+    expect(line.solid).toEqual([points[0], points[1], null, points[2], points[3]]);
+    // Bridge first (run order), then the two edge extensions.
+    expect(line.dashed).toEqual([
+      [points[1], points[2]],
+      [[T0, 50], points[0]],
+      [points[3], [T0 + DAY, 61]],
+    ]);
+  });
+
+  it('splits every sample into its own run when all gaps exceed the threshold', () => {
+    const points = pts([T0 + HOUR, 50], [T0 + 3 * HOUR, 55], [T0 + 5 * HOUR, 60]);
+    const line = evGapLine(points, THRESHOLD, T0, T0 + DAY);
+    expect(line.solid).toEqual([points[0], null, points[1], null, points[2]]);
+    expect(line.dashed).toHaveLength(2 + 2); // 2 bridges + 2 extensions
+  });
+
+  it('skips edge extensions shorter than a gap ("as needed")', () => {
+    const points = pts([T0 + 5 * MINUTE, 50], [T0 + 3 * HOUR, 60]);
+    const line = evGapLine(points, THRESHOLD, T0, T0 + 3 * HOUR + 5 * MINUTE);
+    expect(line.dashed).toEqual([[points[0], points[1]]]);
+  });
+
+  it('extends from a lone sample and renders no solid line', () => {
+    const points = pts([T0 + 12 * HOUR, 42]);
+    const line = evGapLine(points, THRESHOLD, T0, T0 + DAY);
+    expect(line.solid).toEqual(points);
+    expect(line.dashed).toEqual([
+      [[T0, 42], points[0]],
+      [points[0], [T0 + DAY, 42]],
+    ]);
+  });
+
+  it('returns nothing without samples', () => {
+    expect(evGapLine([], THRESHOLD, T0, T0 + DAY)).toEqual({ solid: [], dashed: [] });
+  });
+});
+
+
 
 describe('buildBsocOption (requirements 2b)', () => {
   const NOW = T0 + 20 * HOUR;
+  /** The DOMAIN — the axis extent and dataZoom percent base. */
+  const DOMAIN: TimeWindow = { from: T0, to: T0 + DAY };
   /** Structural view of the option — ECharts types are deliberately loose. */
   interface OptionShape {
     color?: string[];
@@ -342,14 +436,29 @@ describe('buildBsocOption (requirements 2b)', () => {
     }>;
     series?: Array<{
       name?: string;
-      data?: unknown;
-      markLine?: { data?: Array<{ xAxis?: number }> };
+      data?: Array<[number, number] | null>;
+      markLine?: {
+        data?: Array<
+          { xAxis?: number } | [{ coord: [number, number] }, { coord: [number, number] }]
+        >;
+      };
       markArea?: { data?: Array<Array<{ xAxis?: number }>> };
     }>;
   }
 
-  const option = (sessions: SessionSummary[], visible: TimeWindow = BOUNDS): OptionShape =>
-    buildBsocOption(data(sessions), visible, NOW) as unknown as OptionShape;
+  const option = (
+    sessions: SessionSummary[],
+    visible: TimeWindow = BOUNDS,
+    evPoints: Array<[number, number]> = [[T0 + HOUR, 54]]
+  ): OptionShape => {
+    const base = data(sessions);
+    return buildBsocOption(
+      { ...base, ev: { ...base.ev, points: evPoints } },
+      visible,
+      DOMAIN,
+      NOW
+    ) as unknown as OptionShape;
+  };
 
   it('plots both BSoC lines with the exported series colors and no legend/tooltip', () => {
     const opt = option([]);
@@ -359,10 +468,20 @@ describe('buildBsocOption (requirements 2b)', () => {
     ]);
     expect(opt.color).toEqual([EV_COLOR, HOME_COLOR]);
     expect(opt.yAxis).toMatchObject({ min: 0, max: 100 });
-    expect(opt.xAxis).toMatchObject({ type: 'time', min: BOUNDS.from, max: BOUNDS.to });
+    expect(opt.xAxis).toMatchObject({ type: 'time', min: DOMAIN.from, max: DOMAIN.to });
     // The static readout row below the chart replaces both.
     expect(opt.legend).toBeUndefined();
     expect(opt.tooltip).toBeUndefined();
+  });
+
+  it('spans the DOMAIN on the x axis even when the loaded bounds differ', () => {
+    const base = data([]);
+    const loadedElsewhere: BsocData = {
+      ...base,
+      bounds: { from: T0 + 2 * HOUR, to: T0 + 3 * HOUR },
+    };
+    const opt = buildBsocOption(loadedElsewhere, BOUNDS, DOMAIN, NOW) as unknown as OptionShape;
+    expect(opt.xAxis).toMatchObject({ min: DOMAIN.from, max: DOMAIN.to });
   });
 
   it('wires the inside dataZoom with the 2 h–1 yr clamps and no wheel zoom', () => {
@@ -377,18 +496,37 @@ describe('buildBsocOption (requirements 2b)', () => {
     });
   });
 
-  it('maps the initial visible window into dataZoom start/end percent', () => {
+  it('maps the visible window into dataZoom start/end percent of the DOMAIN', () => {
     const visible = { from: T0 + 12 * HOUR, to: T0 + 18 * HOUR };
     const zoom = option([], visible).dataZoom?.[0];
     expect(zoom?.start).toBe(50);
     expect(zoom?.end).toBe(75);
   });
 
+  it('renders EV gaps as solid runs plus a dashed markLine of segments', () => {
+    const evPoints: Array<[number, number]> = [
+      [T0 + 2 * HOUR, 50],
+      [T0 + 2 * HOUR + 5 * MINUTE, 51],
+      [T0 + 6 * HOUR, 60],
+    ];
+    const opt = option([], BOUNDS, evPoints);
+    const ev = opt.series?.[0];
+    expect(ev?.data).toEqual([evPoints[0], evPoints[1], null, evPoints[2]]);
+    expect(ev?.markLine?.data).toEqual([
+      [{ coord: evPoints[1] }, { coord: evPoints[2] }],
+      [{ coord: [T0, 50] }, { coord: evPoints[0] }],
+      [{ coord: evPoints[2] }, { coord: [T0 + DAY, 60] }],
+    ]);
+    // Home battery series is untouched (plain points, no gap decoration).
+    expect(opt.series?.[1].data).toEqual([[T0 + HOUR, 71]]);
+    expect(opt.series?.[1].markLine).toBeUndefined();
+  });
+
   it('draws two markLines for a closed session and one for an open session', () => {
     const open = session({ id: 2, plugTsMs: T0 + 19 * HOUR, unplugTsMs: null, open: true });
     const markers = option([session(), open]).series?.find((s) => s.name === 'Sessions');
     expect(
-      markers?.markLine?.data?.map((m) => m.xAxis)
+      markers?.markLine?.data?.map((m) => ('xAxis' in m ? m.xAxis : null))
     ).toEqual([
       T0 + 14 * HOUR,
       T0 + 17 * HOUR,
