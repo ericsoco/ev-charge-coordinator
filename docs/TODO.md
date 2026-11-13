@@ -78,7 +78,158 @@ TASKS / BUGS
         Very bloated now, can individual commands be moved out?
         How are REPL + one-shot / Commander kept in sync?
 
-MANUAL TESTS post-Phase 1c
+
+---------------------------------------------------------------------------------------------------
+
+# UX fixes (post-P2-step-4)
+try using cline kanban agent:
+Prepare a plan for the below fixes to the Web app functionality created so far.
+Use subagents + and run agents in parallel as helpful to complete the work.
+Ultimately, land all these fixes to a single branch, and push a PR from that branch.
+
+## Web app overall
+* Loading on mobile via LAN: often displays blank page for a while / until refresh? need clearer repro
+
+## Now tab
+* bsoc values should be rounded to nearest tenth of a percent
+
+## Then tab
+* legend
+    * color key is missing
+    * make legend labels dynamic to display tooltip content (see tooltip below)
+    * format legend like this: 🟧 🏠: x% | 🟦 🚗: y%, where:
+        * squares are not emoji, but are css-colored squares that match the colors used in the chart
+        * x and y are bsoc values for home battery and car battery, respectively
+        * bsoc values should be rounded to nearest tenth of a percent
+    * ts should be formatted as MMM DD HH:SS and displayed in a static location,
+      to left of legend
+* tooltip interaction
+    * should only display vehicle + home bsoc, not charging session info
+    * should be dependent only on x-axis location (not y-axis / chart marks hit area),
+      displaying all relevant values at that moment in time: ts, home bsoc, car bsoc
+* chart
+    * desktop:
+        * two-finger scrolling on trackpad does not zoom/scrub (don't have a mouse scroll wheel to test with)
+    * mobile:
+        * do not update tooltip (legend) values while pinching to zoom in/out
+        * // one-finger drag to scroll only works while over far left/right edges of chart
+            --> maybe this is an issue with windowing rather than interaction? it works better when zoomed in...
+
+
+
+
+---------------------------------------------------------------------------------------------------
+
+# MANUAL TESTS post-Phase 2/Step 2 (add APIs to daemon)
+2026-11-11 11:45 PST
+
+Here's a local manual test walkthrough, from safest/minimal to full end-to-end. All of this runs from the worktree; it never touches port 3001 (Franklin), 4443 (Tesla), or makes live API calls.
+
+## 0. Build once
+
+```bash
+cd /Users/ericsoco/Documents/lab/code/evcc-p2-2
+npm run build
+```
+
+## 1. Start just the API (safest — no daemon, no services, no lockfile)
+
+This starts the read API against your **existing store** (`~/.ev-charge-coordinator/data.sqlite`, real data) without stopping anything:
+
+```bash
+node --input-type=module -e "
+import { openStore } from './dist/store/database.js';
+import { credentialStore } from './dist/utils/credentials.js';
+import { startApiServer } from './dist/api/server.js';
+const s = await startApiServer({
+  db: openStore(),
+  token: await credentialStore.ensureApiToken(),
+  port: Number(process.env.ECC_API_PORT ?? 3002),
+});
+console.log('API on http://127.0.0.1:' + s.port);
+console.log('token:', await credentialStore.ensureApiToken());
+"
+```
+
+Leave it running; the token is printed on the first line of output. (`ECC_CONFIG_DIR=/tmp/ecc-scratch` prefixed on the command gives you a totally isolated fresh store instead — good for checking the "no data yet" null shapes.)
+
+## 2. Full end-to-end (API + samplers, as production runs it)
+
+The foreground daemon now hosts the API — but the launchd daemon holds the lockfile, so stop it first, and restart it after:
+
+```bash
+node dist/index.js daemon stop          # bootout (agent stays installed)
+node dist/index.js daemon               # prints: [api] read API on http://127.0.0.1:3002 — bearer token: <hex>
+# … test as below …
+node dist/index.js daemon restart       # put the launchd daemon back
+```
+
+Retrieve the token any time (mints on first use, stable):
+
+```bash
+node dist/index.js api-token            # prints hex only — pipeable
+```
+
+## 3. The curl battery
+
+```bash
+TOKEN=$(node dist/index.js api-token)
+
+# auth: 401 without / wrong token, 200 with
+curl -si http://127.0.0.1:3002/api/now | head -1                        # 401 + WWW-Authenticate
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3002/api/now | python3 -m json.tool
+
+# series — pick any of: ev_soc battery_soc grid_import grid_export solar home_load
+FROM=$(( ( $(date +%s) - 86400 ) * 1000 )); TO=$(( $(date +%s) * 1000 ))
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3002/api/series?metric=battery_soc&from=$FROM&to=$TO" | python3 -m json.tool
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3002/api/series?metric=grid_import&from=$FROM&to=$TO&bucket=900000" | python3 -m json.tool
+
+# sessions (pagination + tooltips), messages (empty envelope)
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:3002/api/sessions?limit=5" | python3 -m json.tool
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3002/api/messages
+
+# validation errors → 400, no control endpoints → JSON 404
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3002/api/series?metric=nope&from=1&to=2"           # 400
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3002/api/now                                          # 404
+
+# dev-origin CORS preflight (no token needed)
+curl -si -X OPTIONS -H "Origin: http://localhost:5173" \
+  -H "Access-Control-Request-Method: GET" http://127.0.0.1:3002/api/now | head -6   # 204 + ACAO
+
+# static: placeholder now; real app after a web build
+curl -s http://127.0.0.1:3002/ | head -5
+npm run build --workspace=evcc-web     # then restart the API → / serves the Svelte app
+```
+
+## 4. Through step 1's dev proxy (what the app will use)
+
+```bash
+npm run dev:web                        # Vite at http://localhost:5173, proxies /api → 127.0.0.1:3002
+curl -si -H "Authorization: Bearer $TOKEN" http://localhost:5173/api/now | head -1   # 200 via proxy
+```
+
+Also worth trying from the browser console on `localhost:5173` — this exercises the CORS path directly instead of via the proxy:
+
+```js
+fetch('http://127.0.0.1:3002/api/now', { headers: { Authorization: 'Bearer ' + '<token>' } }).then(r => r.json()).then(console.log)
+```
+
+## 5. The offline tests (fast, no server needed)
+
+```bash
+npx vitest run tests/api tests/daemon/api-wiring.test.ts    # 32 tests, ephemeral ports
+```
+
+**Things to eyeball:** `/api/now` `ageMs` ≈ sampler cadence (120 s default) when the daemon is running; session `label` in local time with SoC ends `null` for the open session; `grid_import` vs `grid_export` kWh over a sunny day; boot log token == `api-token` output.
+
+
+---------------------------------------------------------------------------------------------------
+
+# MANUAL TESTS post-Phase 1c
 **2026-11-06 22:41 PST**
 
 # What's next
