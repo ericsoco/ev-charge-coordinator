@@ -3,7 +3,7 @@
   import { Badge, Card } from 'noph-ui';
   import { fetchNow } from '../lib/api';
   import { createApiLoader } from '../lib/apiSession.svelte';
-  import { batteryCaption, formatAge, sessionLine, vehicleCaption } from './nowText';
+  import { batteryCaption, formatAge, formatSocPercent, sessionLine, vehicleCaption } from './nowText';
 
   /** Poll cadence (P2 decisions: polling, no SSE). Tests pass a short one. */
   let { pollMs = 10_000 }: { pollMs?: number } = $props();
@@ -70,11 +70,11 @@
       <Badge label="Sampling delayed — is the daemon running?" />
     {/if}
     <Card variant="elevated" headline="Vehicle">
-      <p class="big">{data.vehicle?.socPercent ?? '—'}<span class="unit">%</span></p>
+      <p class="big">{formatSocPercent(data.vehicle?.socPercent)}<span class="unit">%</span></p>
       <p class="caption">{vehicleText}</p>
     </Card>
     <Card variant="elevated" headline="Home battery">
-      <p class="big">{data.battery?.socPercent ?? '—'}<span class="unit">%</span></p>
+      <p class="big">{formatSocPercent(data.battery?.socPercent)}<span class="unit">%</span></p>
       <p class="caption">{batteryText}</p>
     </Card>
     <p class="session" role="status">{line}</p>
