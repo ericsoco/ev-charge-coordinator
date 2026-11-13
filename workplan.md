@@ -364,6 +364,19 @@ Branch `p2/step4-bsoc-chart` — one-line `/** … */` headers on
 `windowToPercent`/`percentToWindow` naming their semantics (displayed window ↔
 dataZoom percent of the loaded `bounds`). Gate: web check green (55/55).
 
+### 2026-11-12 — Now tab: BSoC rounded to one decimal digit
+
+Branch `fix/web-now-bsoc-rounding` — vehicle + home-battery big numbers rendered
+raw `socPercent` (54.263). New pure `formatSocPercent` in `nowText.ts`
+(`toFixed(1)`, null-safe "—") renders exactly one decimal (54.263 → 54.3,
+54 → 54.0); `Now.svelte` routes both big numbers through it. Copy scan: the
+captions/session line only show `chargeLimitSoc` and session `targetPercent` —
+integer limit values, left unchanged. Tests: pure cases (rounding up/down,
+54→54.0, 0/100, null/undefined) + a render-level case (54.263/54 → 54.3/54.0)
+in `web/tests/now.test.ts`; existing render assertions updated to the
+one-decimal form. Gate: `npm run check` green — 1053 passed / 3 skipped (root),
+web 57/57, svelte-check 0/0.
+
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
