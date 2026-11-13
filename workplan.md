@@ -364,6 +364,187 @@ Branch `p2/step4-bsoc-chart` — one-line `/** … */` headers on
 `windowToPercent`/`percentToWindow` naming their semantics (displayed window ↔
 dataZoom percent of the loaded `bounds`). Gate: web check green (55/55).
 
+### 2026-11-12 — Then tab: static readout row replaces the hover tooltip + legend
+
+Branch `fix/web-then-legend-readout` — docs/TODO.md "Then tab" legend +
+tooltip-interaction items:
+- The hover tooltip and the in-chart ECharts legend are both gone
+  (`TooltipComponent`/`LegendComponent` unregistered). The page renders one
+  static row below the chart:
+  `Nov 12 09:35   [🟧] 🏠: 71.3% | [🟦] 🚗: 54.0%` — CSS squares colored with
+  the `HOME_COLOR`/`EV_COLOR` exports (the missing color key), emoji glyphs in
+  the labels, values rounded to the nearest tenth with exactly one decimal
+  (em-dash when a series has no sample at or before the ts).
+- X-only interaction: `ChartHandle.onPointerMove` (zrender `mousemove`/
+  `globalout` → `convertFromPixel` on x) drives the readout, so session
+  markLine/markArea hit areas cannot capture or affect it. On load and after
+  pointer leave the row shows the newest loaded sample. Touch/pinch never
+  emits mousemove, so values don't update mid-pinch (the TODO's mobile item).
+- Pure logic lives in `bsocChart.ts` (`formatReadoutTs`, `formatBsocValue`,
+  `sampleAtOrBefore`, `newestSampleTs`, `readoutAt`); deleted the tooltip
+  formatter + helpers (`formatBsocTooltip`, `sessionAt`, `socSpan`,
+  `sessionEndLabel`, `paramValue`, `TooltipParamLike`, `formatDateTime`).
+- **Assumption:** the spec's ts format `MMM DD HH:SS` was read as a typo for
+  `MMM DD HH:MM` and implemented as HH:MM.
+- Gate: `npm run check` green — root **1053 passed / 3 skipped**, web **63/63**,
+  svelte-check 0/0.
+
+### 2026-11-13 — Then tab: chart interaction + lazy loading + dashed EV gaps
+
+Branch `fix/web-then-chart-interaction` — the Then-tab chart interaction items
+(follows the readout rework above):
+- **Wheel dead at the chart**: zrender's dataZoom roam controller calls
+  `eventTool.stop()` on every wheel over the grid (its per-dataZoom
+  `zoomOnMouseWheel: false` filter runs *after* the stop, at another layer) on
+  `painter.getViewportRoot()` — an inner div — so the bubble listener on the
+  chart element never fired (root cause confirmed in-browser). The wheel path is
+  now a capture-phase listener that owns the event (`preventDefault` +
+  `stopPropagation`); zoom/scrub stay on `classifyWheel`/`zoomAt`/`panBy`.
+- **Cursor-anchored zoom + hover readout were silently broken**: in ECharts 6
+  `convertFromPixel({xAxisIndex: 0}, [px, 0])` returns NaN (the axis finder
+  wants a scalar px), so `tsAtX` always returned null — the zoom anchor fell
+  back to the window center and the readout to the newest sample. Fixed to the
+  scalar form.
+- **Zoom direction inverted**: `zoomAt` multiplied the span by its factor while
+  its contract (and `ZOOM_PER_NOTCH`'s "×1.25 in") say factor > 1 zooms in —
+  now divides; tests updated to the contract.
+- **Lazy loading never fired**: the visible window was clamped into the loaded
+  bounds, so `needsRefetch` could never see out of bounds and zoom-out stopped
+  at the initial 24 h. Split the DOMAIN (now − 1 yr .. now, fixed at page init)
+  from the loaded window: zoom/pan clamp into the domain, refetch
+  (`fetchWindowFor(visible)`, 25 % pad) triggers when a visible edge enters a
+  10 % buffer of a loadable loaded edge (or exceeds it) or on coarseness
+  (unchanged); domain edges are excluded so a view parked at now cannot loop
+  refetches. xAxis min/max follow the domain. Zoom-out past 24 h verified end
+  to end in the browser.
+- **Pinch freeze** (correcting the assumption in the entry above — zrender *does*
+  synthesize `mousemove` from touch): the readout freezes while touches are down
+  (capture-phase touch counting; fingers land one touchstart at a time) and
+  resets to the newest-sample default when the last finger lifts.
+- **Dashed EV gap lines**: pure `evGapLine` splits EV samples into runs at gaps
+  > 2.5 × bucket width — solid runs with null breaks, dashed gap bridges, and
+  dashed extensions from the first/last sample to the chart edges when the edge
+  is more than a gap away; rendered as `[from, to]` coord-pair markLine items on
+  the EV series (ECharts 6 has no `{coords}` item form — it logs "Invalid
+  markLine data" and half-parses). Home series + session markers untouched.
+- Window/refetch/gap math pinned in `web/tests/bsoc.test.ts`; canvas behavior
+  verified in headless Chrome with mocked `/api` (18/18 checks: wheel root-cause
+  probe, zoom/scrub, cursor anchor, zoom-out > 24 h, lazy-refetch coverage +
+  loop-freedom, coarseness refetch, dashed segments over a planted 3 h EV hole,
+  pinch freeze + resume).
+
+### 2026-11-12 — Now tab: BSoC rounded to one decimal digit
+
+Branch `fix/web-now-bsoc-rounding` — vehicle + home-battery big numbers rendered
+raw `socPercent` (54.263). New pure `formatSocPercent` in `nowText.ts`
+(`toFixed(1)`, null-safe "—") renders exactly one decimal (54.263 → 54.3,
+54 → 54.0); `Now.svelte` routes both big numbers through it. Copy scan: the
+captions/session line only show `chargeLimitSoc` and session `targetPercent` —
+integer limit values, left unchanged. Tests: pure cases (rounding up/down,
+54→54.0, 0/100, null/undefined) + a render-level case (54.263/54 → 54.3/54.0)
+in `web/tests/now.test.ts`; existing render assertions updated to the
+one-decimal form. Gate: `npm run check` green — 1053 passed / 3 skipped (root),
+web 57/57, svelte-check 0/0.
+
+### 2026-11-13 — Now tab BSoC rounding follow-up: trailing zero suppressed
+
+Same branch `fix/web-now-bsoc-rounding`. Whole-number BSoC now renders `54%`,
+not `54.0%`: `formatSocPercent` strips a trailing `.0` after `toFixed(1)`
+(fractional values keep one decimal, `54.3`). Pure + render tests updated to
+pin both forms. Gate: `npm run check` green — 1053 passed / 3 skipped (root),
+web 57/57, svelte-check 0/0.
+
+### 2026-11-12 — Then-tab session displays investigated: modeling, not rendering
+
+Branch `fix/web-then-sessions-analysis` — read-only investigation, no code change.
+Report (Nov 12, local): on the Then-tab BSoC chart, (a) a session ~09:30–15:40 with
+EV BSoC flat the whole time while home battery BSoC rose significantly, and (b) a
+session ~16:55 → still open at ~23:00 with EV BSoC rising until ~18:00 then flat.
+Live store (`~/.ev-charge-coordinator/data.sqlite`) queried **read-only** and
+compared against `ev_samples` / `home_battery_samples` / `events` / `decisions` in
+those windows.
+
+**1. What a session means today.** A session is one physical plug-in: opened on the
+`plug_in` transition (Disconnected → anything) and closed on `unplug` (→
+Disconnected) in `src/daemon/EvPoller.ts` (transition loop + `reconcileInitPlugIn`
+for daemon-off plug-ins), persisted as `sessions.plug_ts_ms`/`unplug_ts_ms` by
+`src/store/SessionStore.ts`, with closing aggregates computed over the full
+plug→unplug span (`src/daemon/sessionAggregates.ts`). It **includes
+plugged-in-but-not-charging (idle) stretches** — charging activity appears only as
+`charging_start`/`charging_stop` rows in `events` *inside* the session, never as
+its boundaries.
+
+**2. What produced the two Nov 12 spans** (plug/unplug timestamps plausible in
+both cases — observed live, precise to the second; `ev_samples` coverage is sparse
+where the car slept, by design):
+- **Session 35 — 09:32:14 → 15:38:15 (closed; 0.0 kWh / 0.0%):** `plug_in` at
+  09:32:14 (Disconnected→Stopped). The decision engine declined to charge —
+  `below_buffer`: "home battery 23.158% is at or below the 30% buffer". The car sat
+  plugged in, `Stopped`, EV BSoC flat at 36% the entire window (no
+  `charging_start` ever fired). Home battery BSoC rose 23.6%→80.9% on solar
+  (~2.0–3.3 kW PV charging the battery). "Flat EV BSoC + rising home battery" is
+  one real plug-in session with **zero charging activity** — the designed
+  below-buffer behavior, folded into one tinted band.
+- **Session 36 — 16:51:20 → open (~23:40):** `plug_in` 16:51:20, decision
+  `started`, `charging_start` 16:53:17 — charged 32%→42% at ~22.8 kW (+6.3 kWh)
+  until `charging_stop` 18:01:21 (`stop_reason: target_reached`, session target
+  42%). The car then stayed plugged in (`Stopped`, SoC flat ~42→41%) with no unplug
+  observed, so the session is still open and its band runs plug→now. "Rising until
+  ~18:00 then flat" is charge-then-idle inside one plug-in session.
+(Session 34 — Nov 10 19:27 → Nov 11 16:54, 14.98 kWh — has the same shape:
+overnight idle after charging completes is folded into the session.)
+
+**3. Does the chart render the rows correctly?** Yes. `web/src/pages/bsocChart.ts`
+draws `markArea [plugTsMs, unplugTsMs ?? now]` + dashed `markLine` at plugTsMs
+(+ unplugTsMs when closed), filtered by overlap with the loaded bounds
+(`sessionsInWindow`); tooltip membership (`sessionAt`) matches the band bounds
+exactly; `src/api/reads.ts` passes `plug_ts_ms`/`unplug_ts_ms` through unchanged;
+`Then.svelte` pages sessions until they cover the fetch window. Bands cannot be
+misplaced or mislabelled relative to the session rows — the chart faithfully
+renders what the rows record. The mismatch is between what a tinted
+"Charging session" band *implies* and what a plug→unplug row *means*.
+
+**4. Root cause + options (NOT implemented — plan only).** Root cause is
+data-modeling/semantics: "session" = plugged-in time, but users read the band as
+"charging". Options for a future change:
+- **A. Charge-scoped sessions** — session = `charging_start`→`charging_stop`
+  (possibly several per plug-in). Fixes the reading directly but changes the
+  semantics the decision engine and closing aggregates (energy/efficiency over
+  plug→unplug) and the CLI `sessions` view are built on; would need a separate
+  plug/visit concept.
+- **B. Charging spans inside the band (recommended lean)** — keep session semantics
+  (decisions/aggregates untouched); derive charging intervals from `events`
+  (already records `charging_start`/`charging_stop`) or `ev_samples` charge-rate
+  columns, expose them on `/api/sessions`, and render them as the tinted band with
+  the plug→unplug span as a lighter outer band. Tooltip gains "charging
+  16:53–18:01 (+6.3 kWh)" vs "plugged in 09:32–15:38 (0 kWh)".
+- **C. Label/affordance only** — rename the band "Plugged in", dim/hatch idle
+  portions, tooltip carries charging time + energy. Cheap, but flat lines inside
+  bands still read as missing data.
+- **D. Sample-derived spans** — as B, but charging spans computed at chart/API time
+  from `ev_samples` charge-rate/SoC deltas; no event dependency, noisier across
+  sleep gaps.
+
+Recommendation: **B** (optionally +C): the `events` data already exists, session
+semantics stay stable for the decision engine/aggregates, and the chart gains an
+honest charging-vs-idle-plugged distinction. Also decide whether a zero-charge
+plug-in like session 35 should tint at all.
+
+Gate: `npm run check` green (no code change; verified before commit). Live-store
+access strictly read-only (`sqlite3 …?mode=ro`); no data mutated.
+
+### 2026-11-13 — Integration: web fixes merged onto one branch + PR
+
+Branch `fix/web-now-then-fixes` merges `fix/web-then-chart-interaction` (which
+itself carries `fix/web-then-legend-readout`), `fix/web-now-bsoc-rounding`, and
+`fix/web-then-sessions-analysis`. The only conflict was workplan.md Log entries
+added in parallel (both kept verbatim). Coherence pass over the merged chart code
+confirmed one legend/readout implementation (the static readout row), no leftover
+tooltip option or `TooltipComponent`/`LegendComponent` registration, and tests
+against current exports. Gate: `npm run check` green — root 1053 passed / 3
+skipped, web 77/77, svelte-check 0/0. PR opened for human review (not merged);
+legend ts format `MMM DD HH:MM` flagged in the PR body for confirmation (the
+spec's `HH:SS` was read as a typo).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 

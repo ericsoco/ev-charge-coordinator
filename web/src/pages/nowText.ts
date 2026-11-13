@@ -31,6 +31,16 @@ export function formatKw(watts: number | null): string {
   return `${(Math.abs(watts) / 1000).toFixed(2)} kW`;
 }
 
+/**
+ * BSoC → rounded to one decimal digit, trailing zero suppressed ("54.3",
+ * "54"), null-safe ("—"). The % unit is rendered separately (styled span),
+ * so only the digits are returned.
+ */
+export function formatSocPercent(socPercent: number | null | undefined): string {
+  if (socPercent === null || socPercent === undefined) return '—';
+  return socPercent.toFixed(1).replace(/\.0$/, '');
+}
+
 /** Vehicle card caption: charging state + charge limit. */
 export function vehicleCaption(vehicle: NowVehicle | null): string {
   if (vehicle === null) return '—';
