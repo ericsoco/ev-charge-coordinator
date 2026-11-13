@@ -364,6 +364,31 @@ Branch `p2/step4-bsoc-chart` — one-line `/** … */` headers on
 `windowToPercent`/`percentToWindow` naming their semantics (displayed window ↔
 dataZoom percent of the loaded `bounds`). Gate: web check green (55/55).
 
+### 2026-11-12 — Then tab: static readout row replaces the hover tooltip + legend
+
+Branch `fix/web-then-legend-readout` — docs/TODO.md "Then tab" legend +
+tooltip-interaction items:
+- The hover tooltip and the in-chart ECharts legend are both gone
+  (`TooltipComponent`/`LegendComponent` unregistered). The page renders one
+  static row below the chart:
+  `Nov 12 09:35   [🟧] 🏠: 71.3% | [🟦] 🚗: 54.0%` — CSS squares colored with
+  the `HOME_COLOR`/`EV_COLOR` exports (the missing color key), emoji glyphs in
+  the labels, values rounded to the nearest tenth with exactly one decimal
+  (em-dash when a series has no sample at or before the ts).
+- X-only interaction: `ChartHandle.onPointerMove` (zrender `mousemove`/
+  `globalout` → `convertFromPixel` on x) drives the readout, so session
+  markLine/markArea hit areas cannot capture or affect it. On load and after
+  pointer leave the row shows the newest loaded sample. Touch/pinch never
+  emits mousemove, so values don't update mid-pinch (the TODO's mobile item).
+- Pure logic lives in `bsocChart.ts` (`formatReadoutTs`, `formatBsocValue`,
+  `sampleAtOrBefore`, `newestSampleTs`, `readoutAt`); deleted the tooltip
+  formatter + helpers (`formatBsocTooltip`, `sessionAt`, `socSpan`,
+  `sessionEndLabel`, `paramValue`, `TooltipParamLike`, `formatDateTime`).
+- **Assumption:** the spec's ts format `MMM DD HH:SS` was read as a typo for
+  `MMM DD HH:MM` and implemented as HH:MM.
+- Gate: `npm run check` green — root **1053 passed / 3 skipped**, web **63/63**,
+  svelte-check 0/0.
+
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
