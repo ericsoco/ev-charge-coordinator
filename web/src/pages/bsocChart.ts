@@ -84,6 +84,7 @@ export function panBy(win: TimeWindow, bounds: TimeWindow, deltaMs: number): Tim
   return clampWindow({ from: win.from + deltaMs, to: win.to + deltaMs }, bounds);
 }
 
+/** Displayed window (`win`) → dataZoom start/end percent of the loaded `bounds`. */
 export function windowToPercent(
   win: TimeWindow,
   bounds: TimeWindow
@@ -95,6 +96,7 @@ export function windowToPercent(
   };
 }
 
+/** dataZoom start/end percent of the loaded `bounds` → displayed window. */
 export function percentToWindow(
   start: number,
   end: number,
