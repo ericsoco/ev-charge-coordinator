@@ -454,6 +454,84 @@ not `54.0%`: `formatSocPercent` strips a trailing `.0` after `toFixed(1)`
 pin both forms. Gate: `npm run check` green — 1053 passed / 3 skipped (root),
 web 57/57, svelte-check 0/0.
 
+### 2026-11-12 — Then-tab session displays investigated: modeling, not rendering
+
+Branch `fix/web-then-sessions-analysis` — read-only investigation, no code change.
+Report (Nov 12, local): on the Then-tab BSoC chart, (a) a session ~09:30–15:40 with
+EV BSoC flat the whole time while home battery BSoC rose significantly, and (b) a
+session ~16:55 → still open at ~23:00 with EV BSoC rising until ~18:00 then flat.
+Live store (`~/.ev-charge-coordinator/data.sqlite`) queried **read-only** and
+compared against `ev_samples` / `home_battery_samples` / `events` / `decisions` in
+those windows.
+
+**1. What a session means today.** A session is one physical plug-in: opened on the
+`plug_in` transition (Disconnected → anything) and closed on `unplug` (→
+Disconnected) in `src/daemon/EvPoller.ts` (transition loop + `reconcileInitPlugIn`
+for daemon-off plug-ins), persisted as `sessions.plug_ts_ms`/`unplug_ts_ms` by
+`src/store/SessionStore.ts`, with closing aggregates computed over the full
+plug→unplug span (`src/daemon/sessionAggregates.ts`). It **includes
+plugged-in-but-not-charging (idle) stretches** — charging activity appears only as
+`charging_start`/`charging_stop` rows in `events` *inside* the session, never as
+its boundaries.
+
+**2. What produced the two Nov 12 spans** (plug/unplug timestamps plausible in
+both cases — observed live, precise to the second; `ev_samples` coverage is sparse
+where the car slept, by design):
+- **Session 35 — 09:32:14 → 15:38:15 (closed; 0.0 kWh / 0.0%):** `plug_in` at
+  09:32:14 (Disconnected→Stopped). The decision engine declined to charge —
+  `below_buffer`: "home battery 23.158% is at or below the 30% buffer". The car sat
+  plugged in, `Stopped`, EV BSoC flat at 36% the entire window (no
+  `charging_start` ever fired). Home battery BSoC rose 23.6%→80.9% on solar
+  (~2.0–3.3 kW PV charging the battery). "Flat EV BSoC + rising home battery" is
+  one real plug-in session with **zero charging activity** — the designed
+  below-buffer behavior, folded into one tinted band.
+- **Session 36 — 16:51:20 → open (~23:40):** `plug_in` 16:51:20, decision
+  `started`, `charging_start` 16:53:17 — charged 32%→42% at ~22.8 kW (+6.3 kWh)
+  until `charging_stop` 18:01:21 (`stop_reason: target_reached`, session target
+  42%). The car then stayed plugged in (`Stopped`, SoC flat ~42→41%) with no unplug
+  observed, so the session is still open and its band runs plug→now. "Rising until
+  ~18:00 then flat" is charge-then-idle inside one plug-in session.
+(Session 34 — Nov 10 19:27 → Nov 11 16:54, 14.98 kWh — has the same shape:
+overnight idle after charging completes is folded into the session.)
+
+**3. Does the chart render the rows correctly?** Yes. `web/src/pages/bsocChart.ts`
+draws `markArea [plugTsMs, unplugTsMs ?? now]` + dashed `markLine` at plugTsMs
+(+ unplugTsMs when closed), filtered by overlap with the loaded bounds
+(`sessionsInWindow`); tooltip membership (`sessionAt`) matches the band bounds
+exactly; `src/api/reads.ts` passes `plug_ts_ms`/`unplug_ts_ms` through unchanged;
+`Then.svelte` pages sessions until they cover the fetch window. Bands cannot be
+misplaced or mislabelled relative to the session rows — the chart faithfully
+renders what the rows record. The mismatch is between what a tinted
+"Charging session" band *implies* and what a plug→unplug row *means*.
+
+**4. Root cause + options (NOT implemented — plan only).** Root cause is
+data-modeling/semantics: "session" = plugged-in time, but users read the band as
+"charging". Options for a future change:
+- **A. Charge-scoped sessions** — session = `charging_start`→`charging_stop`
+  (possibly several per plug-in). Fixes the reading directly but changes the
+  semantics the decision engine and closing aggregates (energy/efficiency over
+  plug→unplug) and the CLI `sessions` view are built on; would need a separate
+  plug/visit concept.
+- **B. Charging spans inside the band (recommended lean)** — keep session semantics
+  (decisions/aggregates untouched); derive charging intervals from `events`
+  (already records `charging_start`/`charging_stop`) or `ev_samples` charge-rate
+  columns, expose them on `/api/sessions`, and render them as the tinted band with
+  the plug→unplug span as a lighter outer band. Tooltip gains "charging
+  16:53–18:01 (+6.3 kWh)" vs "plugged in 09:32–15:38 (0 kWh)".
+- **C. Label/affordance only** — rename the band "Plugged in", dim/hatch idle
+  portions, tooltip carries charging time + energy. Cheap, but flat lines inside
+  bands still read as missing data.
+- **D. Sample-derived spans** — as B, but charging spans computed at chart/API time
+  from `ev_samples` charge-rate/SoC deltas; no event dependency, noisier across
+  sleep gaps.
+
+Recommendation: **B** (optionally +C): the `events` data already exists, session
+semantics stay stable for the decision engine/aggregates, and the chart gains an
+honest charging-vs-idle-plugged distinction. Also decide whether a zero-charge
+plug-in like session 35 should tint at all.
+
+Gate: `npm run check` green (no code change; verified before commit). Live-store
+access strictly read-only (`sqlite3 …?mode=ro`); no data mutated.
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
