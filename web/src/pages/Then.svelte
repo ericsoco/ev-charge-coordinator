@@ -7,11 +7,15 @@
     buildBsocOption,
     classifyWheel,
     clampWindow,
+    EV_COLOR,
     fetchWindowFor,
+    HOME_COLOR,
     INITIAL_SPAN_MS,
     needsRefetch,
+    newestSampleTs,
     panBy,
     panMsFor,
+    readoutAt,
     spanOf,
     zoomAt,
     zoomFactorFor,
@@ -76,6 +80,18 @@
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let observer: ResizeObserver | null = null;
 
+  /** Timestamp under the pointer; null (initial / after leave) = newest sample. */
+  let hoverTs = $state<number | null>(null);
+  const readout = $derived.by(() => {
+    const current = data;
+    if (current === null) return null;
+    return readoutAt(current.ev, current.home, hoverTs ?? newestSampleTs(current.ev, current.home));
+  });
+
+  function handlePointerMove(tsMs: number | null): void {
+    hoverTs = tsMs;
+  }
+
   function scheduleRefresh(): void {
     if (refreshTimer !== null) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
@@ -137,6 +153,7 @@
     lastVisible =
       lastVisible === null ? current.bounds : clampWindow(lastVisible, current.bounds);
     view.onDataZoom(handleZoomWindow);
+    view.onPointerMove(handlePointerMove);
     view.setOption(buildBsocOption(current, lastVisible, Date.now()), current.bounds);
   });
 
@@ -176,6 +193,20 @@
         role="img"
         aria-label="Vehicle and home battery state of charge over time, charging sessions marked"
       ></div>
+      {#if readout !== null}
+        <div class="readout">
+          <span class="readout-ts">{readout.tsLabel}</span>
+          <span class="readout-item">
+            <span class="swatch" style:background-color={HOME_COLOR}></span>
+            <span>🏠: {readout.homeLabel}</span>
+          </span>
+          <span class="readout-sep" aria-hidden="true">|</span>
+          <span class="readout-item">
+            <span class="swatch" style:background-color={EV_COLOR}></span>
+            <span>🚗: {readout.evLabel}</span>
+          </span>
+        </div>
+      {/if}
     {/if}
     {#if loader.state.error !== null}
       <p class="warn" role="alert">
@@ -228,6 +259,38 @@
   .chart {
     width: 100%;
     height: clamp(200px, 40vh, 360px);
+  }
+
+  /* Static readout row (the chart's legend + tooltip replacement). */
+  .readout {
+    display: flex;
+    align-items: center;
+    gap: var(--evcc-space-3, 16px);
+    font-size: 0.95rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .readout-ts {
+    opacity: 0.75;
+  }
+
+  .readout-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .readout-sep {
+    opacity: 0.4;
+  }
+
+  /* Color key: matches the series colors exported from bsocChart.ts. */
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: none;
   }
 
   .skeleton {
