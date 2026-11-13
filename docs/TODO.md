@@ -88,7 +88,7 @@ Use subagents + and run agents in parallel as helpful to complete the work.
 Ultimately, land all these fixes to a single branch, and push a PR from that branch.
 
 ## Web app overall
-* Loading on mobile via LAN: often displays blank page for a while / until refresh? need clearer repro
+// * Loading on mobile via LAN: often displays blank page for a while / until refresh? need clearer repro
 
 ## Now tab
 * bsoc values should be rounded to nearest tenth of a percent
@@ -107,13 +107,32 @@ Ultimately, land all these fixes to a single branch, and push a PR from that bra
     * should only display vehicle + home bsoc, not charging session info
     * should be dependent only on x-axis location (not y-axis / chart marks hit area),
       displaying all relevant values at that moment in time: ts, home bsoc, car bsoc
+    * displayed content is integrated into the chart legend, in a static location (see legend above).
+      if this means we can eliminate the TooltipComponent usage, go ahead and remove it.
 * chart
     * desktop:
-        * two-finger scrolling on trackpad does not zoom/scrub (don't have a mouse scroll wheel to test with)
+        * i can't zoom or scrub, neither using two-finger scrolling nor pinch-zoom on trackpad.
+          (note: i don't have a mouse scroll wheel to test with)
     * mobile:
         * do not update tooltip (legend) values while pinching to zoom in/out
-        * // one-finger drag to scroll only works while over far left/right edges of chart
+        // * one-finger drag to scroll only works while over far left/right edges of chart
             --> maybe this is an issue with windowing rather than interaction? it works better when zoomed in...
+    * both:
+        * i left pagination / lazy-loading to you, but i don't see it working
+          (despite refetch logic in bsocChart.js). i have not been able to trigger
+          a pagination / refetch at all.
+          zoom/pan should automatically fetch more time series data as needed when chart bounds
+          are wider than currently loaded data (minus a buffer to prevent displaying empty space).
+          this may end up necessitating changes to data time-bucketing,
+          but let's try to avoid that in this pass.
+        * i can't zoom out more than a 24h window -- i believe because nothing is loading when i zoom out.
+        * connect gaps in EV bsoc samples with a dashed line. extend this line forward/backward in time
+          from latest/earliest bsoc sample to left/right edge of chart as needed.
+        * sessions don't seem to be displaying properly, but I think this is likely more a
+          data modeling issue than a charting issue. I see one session on nov 12
+          from ~approx. ~09:30 to ~15:40 in which EV BSoC stayed flat (while home battery increased significantly),
+          and another from ~16:55 to the latest timestep (~23:00 at the time of writing) that is still open,
+          with EV BSoC increasing until ~18:00 then staying flat.
 
 
 
