@@ -377,6 +377,14 @@ in `web/tests/now.test.ts`; existing render assertions updated to the
 one-decimal form. Gate: `npm run check` green — 1053 passed / 3 skipped (root),
 web 57/57, svelte-check 0/0.
 
+### 2026-11-13 — Now tab BSoC rounding follow-up: trailing zero suppressed
+
+Same branch `fix/web-now-bsoc-rounding`. Whole-number BSoC now renders `54%`,
+not `54.0%`: `formatSocPercent` strips a trailing `.0` after `toFixed(1)`
+(fractional values keep one decimal, `54.3`). Pure + render tests updated to
+pin both forms. Gate: `npm run check` green — 1053 passed / 3 skipped (root),
+web 57/57, svelte-check 0/0.
+
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
