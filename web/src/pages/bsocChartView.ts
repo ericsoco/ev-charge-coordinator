@@ -10,10 +10,8 @@ import { LineChart } from 'echarts/charts';
 import {
   DataZoomComponent,
   GridComponent,
-  LegendComponent,
   MarkAreaComponent,
   MarkLineComponent,
-  TooltipComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsCoreOption, EChartsType } from 'echarts/core';
@@ -22,8 +20,6 @@ import { percentToWindow, windowToPercent, type TimeWindow } from './bsocChart';
 echarts.use([
   LineChart,
   GridComponent,
-  TooltipComponent,
-  LegendComponent,
   DataZoomComponent,
   MarkLineComponent,
   MarkAreaComponent,
@@ -51,6 +47,11 @@ export interface ChartHandle {
   applyWindow(win: TimeWindow): void;
   /** Replace the window-change sink (the page rebinds across effect runs). */
   onDataZoom(handler: (win: TimeWindow) => void): void;
+  /**
+   * Replace the pointer sink: the x-axis timestamp under the cursor, or null
+   * when the cursor leaves the chart (page shows the newest sample then).
+   */
+  onPointerMove(handler: (tsMs: number | null) => void): void;
   /** Chart x pixel → axis timestamp (for cursor-anchored wheel zoom). */
   pixelToTs(px: number): number | null;
   width(): number;
@@ -75,6 +76,26 @@ export function createChart(
   const chart: EChartsType = echarts.init(el, undefined, { renderer: 'canvas' });
   let bounds: TimeWindow | null = null;
   let sink = onDataZoom;
+  let pointerSink: (tsMs: number | null) => void = () => {};
+
+  const tsAtX = (px: number): number | null => {
+    const value = chart.convertFromPixel({ xAxisIndex: 0 }, [px, 0]);
+    if (Array.isArray(value) && typeof value[0] === 'number' && Number.isFinite(value[0])) {
+      return value[0];
+    }
+    return null;
+  };
+
+  // zrender-level listeners fire over the whole canvas regardless of which
+  // mark the cursor hits, and only x is read — so the readout depends on the
+  // x-axis location alone (session markLine/markArea cannot capture it).
+  const zr = chart.getZr();
+  const pointerListener = (event: { offsetX: number }): void => {
+    pointerSink(tsAtX(event.offsetX));
+  };
+  const pointerLeaveListener = (): void => pointerSink(null);
+  zr.on('mousemove', pointerListener);
+  zr.on('globalout', pointerLeaveListener);
 
   const listener = (payload: unknown): void => {
     if (bounds === null) return;
@@ -107,10 +128,11 @@ export function createChart(
     onDataZoom(handler) {
       sink = handler;
     },
+    onPointerMove(handler) {
+      pointerSink = handler;
+    },
     pixelToTs(px) {
-      const value = chart.convertFromPixel({ xAxisIndex: 0 }, [px, 0]);
-      if (Array.isArray(value) && typeof value[0] === 'number') return value[0];
-      return null;
+      return tsAtX(px);
     },
     width() {
       return chart.getWidth();
@@ -120,6 +142,8 @@ export function createChart(
     },
     dispose() {
       chart.off('datazoom', listener);
+      zr.off('mousemove', pointerListener);
+      zr.off('globalout', pointerLeaveListener);
       chart.dispose();
     },
   };
