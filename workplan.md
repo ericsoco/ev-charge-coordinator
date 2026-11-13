@@ -533,6 +533,19 @@ plug-in like session 35 should tint at all.
 Gate: `npm run check` green (no code change; verified before commit). Live-store
 access strictly read-only (`sqlite3 …?mode=ro`); no data mutated.
 
+### 2026-11-13 — Integration: web fixes merged onto one branch + PR
+
+Branch `fix/web-now-then-fixes` merges `fix/web-then-chart-interaction` (which
+itself carries `fix/web-then-legend-readout`), `fix/web-now-bsoc-rounding`, and
+`fix/web-then-sessions-analysis`. The only conflict was workplan.md Log entries
+added in parallel (both kept verbatim). Coherence pass over the merged chart code
+confirmed one legend/readout implementation (the static readout row), no leftover
+tooltip option or `TooltipComponent`/`LegendComponent` registration, and tests
+against current exports. Gate: `npm run check` green — root 1053 passed / 3
+skipped, web 77/77, svelte-check 0/0. PR opened for human review (not merged);
+legend ts format `MMM DD HH:MM` flagged in the PR body for confirmation (the
+spec's `HH:SS` was read as a typo).
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"
