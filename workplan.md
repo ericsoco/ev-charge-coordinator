@@ -542,9 +542,12 @@ added in parallel (both kept verbatim). Coherence pass over the merged chart cod
 confirmed one legend/readout implementation (the static readout row), no leftover
 tooltip option or `TooltipComponent`/`LegendComponent` registration, and tests
 against current exports. Gate: `npm run check` green — root 1053 passed / 3
-skipped, web 77/77, svelte-check 0/0. PR opened for human review (not merged);
+skipped, web 77/77, svelte-check 0/0. PR opened for human review;
 legend ts format `MMM DD HH:MM` flagged in the PR body for confirmation (the
-spec's `HH:SS` was read as a typo).
+spec's `HH:SS` was read as a typo). **Landed** 2026-11-13: GitHub's mergeability
+UI stayed flaky on the merge-commit PR (transient conflict claims with base
+`main` an ancestor of the head), so it was landed manually via git CLI as merge
+commit `bcde073`; GitHub auto-marked PR #78 MERGED, CI green on Node 24.x + 26.x.
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
