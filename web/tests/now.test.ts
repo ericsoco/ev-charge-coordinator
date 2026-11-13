@@ -5,6 +5,7 @@ import { session } from '../src/lib/apiSession.svelte';
 import {
   formatAge,
   formatKw,
+  formatSocPercent,
   formatTime,
   sessionLine,
   vehicleCaption,
@@ -73,6 +74,21 @@ describe('Now tab — live data', () => {
     // Captions: state + limit + freshness, solar/load.
     expect(screen.getByText(/Charging · limit 80% · updated 1m ago/)).toBeDefined();
     expect(screen.getByText(/solar 0.20 kW · load 5.10 kW · updated 20s ago/)).toBeDefined();
+  });
+
+  it('rounds displayed BSoC to one decimal digit, trailing zero suppressed', async () => {
+    const base = fixture();
+    fetchMock.mockResolvedValue(
+      ok({
+        ...base,
+        vehicle: { ...base.vehicle!, socPercent: 54.263 },
+        battery: { ...base.battery!, socPercent: 54 },
+      })
+    );
+    render(Now);
+
+    await screen.findByText('54.3');
+    expect(screen.getByText('54')).toBeDefined();
   });
 
   it('shows a friendly empty state for an empty store (no crash)', async () => {
@@ -170,6 +186,18 @@ describe('Now text formatting (pure)', () => {
     expect(formatKw(5117)).toBe('5.12 kW');
     expect(vehicleCaption(null)).toBe('—');
     expect(vehicleCaption(fixture().vehicle)).toBe('Charging · limit 80%');
+  });
+
+  it('formatSocPercent: rounds BSoC to one decimal digit, trailing zero suppressed', () => {
+    expect(formatSocPercent(54.263)).toBe('54.3');
+    expect(formatSocPercent(54)).toBe('54');
+    expect(formatSocPercent(100)).toBe('100');
+    expect(formatSocPercent(0)).toBe('0');
+    expect(formatSocPercent(62.44)).toBe('62.4');
+    expect(formatSocPercent(62.46)).toBe('62.5');
+    expect(formatSocPercent(100.0)).toBe('100');
+    expect(formatSocPercent(null)).toBe('—');
+    expect(formatSocPercent(undefined)).toBe('—');
   });
 });
 
