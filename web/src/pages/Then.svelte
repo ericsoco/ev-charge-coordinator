@@ -227,7 +227,7 @@
   /* ECharts needs an explicit box; width is the full container. */
   .chart {
     width: 100%;
-    height: clamp(280px, 55vh, 460px);
+    height: clamp(200px, 40vh, 360px);
   }
 
   .skeleton {
@@ -237,7 +237,7 @@
   }
 
   .chart-skeleton {
-    height: clamp(280px, 55vh, 460px);
+    height: clamp(200px, 40vh, 360px);
   }
 
   @keyframes pulse {
