@@ -103,7 +103,8 @@
 
 ## P2 — graphical UX (active plan)
 
-> Status: **steps 1–4 complete (2026-11-11); step 5 (sessions selector) next.**
+> Status: **steps 1–4 complete (2026-11-11); step 5 (sessions selector) next;
+> step 5b (session charging spans, decided 2026-11-13) queued after it.**
 > Design basis:
 > [requirements.md](./docs/requirements.md) 2026.Nov.07 entry, [design.md](./docs/design.md)
 > §3.9/§7 seams + §8, [charts-research.md](./docs/charts-research.md). Same discipline as
@@ -142,6 +143,10 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 - **Actuation: display-only v1**; **start/stop and a manual-refresh UI are
   fast-follows**.
 - **Scope = exactly the 2026.Nov.07 requirements**; Messages icon 💬.
+- **Session-band semantics (user, 2026-11-13): Option B — charging spans inside
+  the band** (decided from the 2026-11-12 sessions investigation in the Log
+  below). Zero-charge plug-ins render like other sessions (edges + lighter
+  outer band). Plan in step 5b below.
 
 ### Steps
 
@@ -163,6 +168,35 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
    *(Branch `p2/step4-bsoc-chart` — **complete 2026-11-11**; details in the Log.)*
 5. **Sessions selector** — lazy/paginated dropdown (start date + time labels);
    select → 1 s eased `dataZoom` focus on the session.
+5b. **Session charging spans inside the band (decided Option B)** — *decision
+   (user, 2026-11-13; from the 2026-11-12 sessions investigation in the Log):*
+   keep session semantics unchanged (plug→unplug rows; decision engine and
+   closing aggregates untouched) and render **charging intervals inside the
+   band**: derive `charging_start`→`charging_stop` intervals from `events`,
+   expose them on `GET /api/sessions`, and draw the plug→unplug span as a
+   lighter outer band with a stronger tint over each charging interval.
+   - **Zero-charge plug-ins render like other sessions** (user, 2026-11-13):
+     plug/unplug edge `markLine`s as usual, lighter outer-band shading across
+     the whole plug→unplug span (no inner charging tint) — reads as "plugged
+     in, not charging", not "missing data". (Answers the investigation's open
+     question: yes, zero-charge plug-ins still tint.)
+   - API: `sessions[].charging` intervals (`startTsMs`, `endTsMs`, optional
+     `energyKwh`); plug/unplug fields pass through unchanged
+     (`src/api/reads.ts`).
+   - Chart: nested `markArea`s in `bsocChart.ts` (lighter outer + stronger
+     inner); session `markLine`s and `sessionsInWindow` unchanged.
+   - Copy: charging-vs-plugged-in distinction on whatever surface step 5's
+     selector/readout provides (the hover tooltip is gone — readout row is
+     sample-value only; refine at implementation).
+   - Open micro-decisions at implementation: per-interval energy source
+     (`ev_samples` SoC delta × pack kWh vs extended aggregates); how an
+     unclosed charging interval clamps (unplug / now).
+   - Not adopted: Option C's rename/hatch affordances as its own workstream
+     (cheap add-on later if the tint alone under-delivers).
+   - Ordering: depends only on step 2 (API) + step 4 (chart) + the landed
+     Then-tab readout/interaction work — independent of steps 6–8, slotted
+     after the session-UX step 5 and targeted before step 9 so live QA covers
+     it. (Numbered 5b so the Log's historical step references stay valid.)
 6. **System monitor + weather bar** — ±kWh area charts around a centered zero line
    (grid export ↑, grid import ↓, solar ↑, home/vehicle use ↓; kWh buckets
    integrated server-side from the sampled W columns); weather bar overlaid
@@ -548,6 +582,21 @@ spec's `HH:SS` was read as a typo). **Landed** 2026-11-13: GitHub's mergeability
 UI stayed flaky on the merge-commit PR (transient conflict claims with base
 `main` an ancestor of the head), so it was landed manually via git CLI as merge
 commit `bcde073`; GitHub auto-marked PR #78 MERGED, CI green on Node 24.x + 26.x.
+
+### 2026-11-13 — Session-band semantics decided: Option B (P2 step 5b planned)
+
+Branch `docs/p2-charging-spans-plan` — the 2026-11-12 investigation's options
+resolved with the user: **Option B, charging spans inside the band** — session
+semantics unchanged (plug→unplug; decision engine + closing aggregates
+untouched); charging intervals derived from `events`, exposed on
+`GET /api/sessions`, rendered as a stronger tint inside the lighter plug→unplug
+outer band. **Zero-charge plug-ins render like other sessions** (user): edge
+`markLine`s + lighter outer band across the whole span — "plugged in, not
+charging", answering the investigation's open question (yes, they tint). Option
+C's rename/hatch affordances not adopted as a workstream. Written up as **P2
+step 5b** (after step 5, targeted before step 9; numbered 5b so historical step
+references stay valid) — see the plan section. Gate: `npm run check` green
+(docs only).
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
