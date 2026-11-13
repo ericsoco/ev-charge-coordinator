@@ -4,19 +4,23 @@ import {
   buildBsocOption,
   classifyWheel,
   clampWindow,
+  EV_COLOR,
   EV_SERIES_NAME,
   fetchWindowFor,
-  formatBsocTooltip,
-  formatDateTime,
+  formatBsocValue,
+  formatReadoutTs,
+  HOME_COLOR,
   HOME_SERIES_NAME,
   MAX_EVENT_ZOOM,
   MAX_SPAN_MS,
   MIN_SPAN_MS,
   needsRefetch,
+  newestSampleTs,
   panBy,
   panMsFor,
   percentToWindow,
-  sessionAt,
+  readoutAt,
+  sampleAtOrBefore,
   sessionsInWindow,
   spanOf,
   windowToPercent,
@@ -219,15 +223,7 @@ describe('needsRefetch / fetchWindowFor (lazy loading)', () => {
   });
 });
 
-describe('session lookup', () => {
-  it('finds the session under a timestamp, including open sessions via now', () => {
-    const closed = session();
-    const open = session({ id: 2, unplugTsMs: null, open: true });
-    expect(sessionAt(T0 + 15 * HOUR, [closed, open], T0 + DAY)?.id).toBe(1);
-    expect(sessionAt(T0 + 20 * HOUR, [closed, open], T0 + DAY)?.id).toBe(2);
-    expect(sessionAt(T0 + HOUR, [closed, open], T0 + DAY)).toBeNull();
-  });
-
+describe('sessionsInWindow', () => {
   it('filters sessions to those overlapping the window', () => {
     const inside = session();
     const before = session({ id: 2, plugTsMs: T0 - 3 * DAY, unplugTsMs: T0 - 2 * DAY });
@@ -237,39 +233,92 @@ describe('session lookup', () => {
   });
 });
 
-describe('formatBsocTooltip', () => {
-  const NOW = T0 + 20 * HOUR;
-  const params = [
-    { axisValue: T0 + 15 * HOUR, seriesName: EV_SERIES_NAME, value: [T0 + 15 * HOUR, 60.4] },
-    { axisValue: T0 + 15 * HOUR, seriesName: HOME_SERIES_NAME, value: [T0 + 15 * HOUR, 71] },
+describe('formatReadoutTs', () => {
+  it('formats MMM DD HH:MM local time with zero padding', () => {
+    expect(formatReadoutTs(new Date(2026, 10, 12, 9, 35).getTime())).toBe('Nov 12 09:35');
+    expect(formatReadoutTs(new Date(2026, 10, 2, 9, 5).getTime())).toBe('Nov 02 09:05');
+    expect(formatReadoutTs(new Date(2026, 11, 31, 23, 59).getTime())).toBe('Dec 31 23:59');
+  });
+});
+
+describe('formatBsocValue', () => {
+  it('rounds to the nearest tenth and renders exactly one decimal', () => {
+    expect(formatBsocValue(71.34)).toBe('71.3%');
+    expect(formatBsocValue(71.36)).toBe('71.4%');
+    expect(formatBsocValue(54)).toBe('54.0%');
+    expect(formatBsocValue(9.99)).toBe('10.0%');
+  });
+
+  it('renders an em-dash when the sample is absent', () => {
+    expect(formatBsocValue(null)).toBe('—');
+  });
+});
+
+describe('sampleAtOrBefore', () => {
+  const points: Array<[number, number]> = [
+    [100, 10],
+    [200, 20],
+    [300, 30],
   ];
 
-  it('shows the session metadata inside a band (start/end, EV and home %)', () => {
-    const html = formatBsocTooltip(params, data([session()]), NOW);
-    expect(html).toContain('Charging session');
-    expect(html).toContain(`Start: ${formatDateTime(T0 + 14 * HOUR)}`);
-    expect(html).toContain(`End: ${formatDateTime(T0 + 17 * HOUR)}`);
-    expect(html).toContain('Vehicle: 54% → 62%');
-    expect(html).toContain('Home battery: 71% → 58%');
-    expect(html).toContain(`${EV_SERIES_NAME}: 60.4%`);
-    expect(html).toContain(`${HOME_SERIES_NAME}: 71%`);
+  it('returns the sample at the exact timestamp', () => {
+    expect(sampleAtOrBefore(points, 200)).toBe(20);
   });
 
-  it('labels an open session as in progress with start → now', () => {
-    const open = session({ unplugTsMs: null, open: true, evSocEndPercent: null, batterySocEndPercent: null });
-    const html = formatBsocTooltip(params, data([open]), NOW);
-    expect(html).toContain(`End: ${formatDateTime(NOW)} (in progress)`);
-    expect(html).toContain('Vehicle: 54% → now');
-    expect(html).toContain('Home battery: 71% → now');
+  it('returns the previous sample between timestamps', () => {
+    expect(sampleAtOrBefore(points, 250)).toBe(20);
+    expect(sampleAtOrBefore(points, 299)).toBe(20);
   });
 
-  it('omits the session block outside any band', () => {
-    const outside = [
-      { axisValue: T0 + HOUR, seriesName: EV_SERIES_NAME, value: [T0 + HOUR, 50] },
-    ];
-    const html = formatBsocTooltip(outside, data([session()]), NOW);
-    expect(html).not.toContain('Charging session');
-    expect(html).toContain(`${EV_SERIES_NAME}: 50%`);
+  it('returns the newest sample past the end', () => {
+    expect(sampleAtOrBefore(points, 999)).toBe(30);
+  });
+
+  it('returns null before the first sample or with no samples', () => {
+    expect(sampleAtOrBefore(points, 99)).toBeNull();
+    expect(sampleAtOrBefore([], 150)).toBeNull();
+  });
+});
+
+describe('newestSampleTs', () => {
+  it('returns the newest sample across both series', () => {
+    expect(newestSampleTs(series([[100, 1]]), series([[200, 2]]))).toBe(200);
+    expect(newestSampleTs(series([[300, 1]]), series([[200, 2]]))).toBe(300);
+    expect(newestSampleTs(series([]), series([[200, 2]]))).toBe(200);
+  });
+
+  it('returns null when neither series has samples', () => {
+    expect(newestSampleTs(series([]), series([]))).toBeNull();
+  });
+});
+
+describe('readoutAt', () => {
+  const ts = new Date(2026, 10, 12, 9, 35).getTime();
+
+  it('shows the ts and both series values at or before it', () => {
+    const ev = series([[ts - 30 * MINUTE, 53.96]]);
+    const home = series([[ts - MINUTE, 71.34]]);
+    expect(readoutAt(ev, home, ts)).toEqual({
+      tsMs: ts,
+      tsLabel: 'Nov 12 09:35',
+      homeLabel: '71.3%',
+      evLabel: '54.0%',
+    });
+  });
+
+  it('shows an em-dash for a series without a sample at or before the ts', () => {
+    const ev = series([[ts + MINUTE, 55]]);
+    const home = series([[ts - MINUTE, 71]]);
+    const readout = readoutAt(ev, home, ts);
+    expect(readout.evLabel).toBe('—');
+    expect(readout.homeLabel).toBe('71.0%');
+  });
+
+  it('shows em-dashes when there is no timestamp at all', () => {
+    const emptyEv = series([]);
+    const emptyHome = series([]);
+    const readout = readoutAt(emptyEv, emptyHome, newestSampleTs(emptyEv, emptyHome));
+    expect(readout).toEqual({ tsMs: null, tsLabel: '—', homeLabel: '—', evLabel: '—' });
   });
 });
 
@@ -277,8 +326,10 @@ describe('buildBsocOption (requirements 2b)', () => {
   const NOW = T0 + 20 * HOUR;
   /** Structural view of the option — ECharts types are deliberately loose. */
   interface OptionShape {
-    legend?: { bottom?: number | string; data?: string[] };
-    tooltip?: { trigger?: string };
+    color?: string[];
+    /** Pinned absent: the readout row below the chart replaces both. */
+    legend?: unknown;
+    tooltip?: unknown;
     xAxis?: { type?: string; min?: number; max?: number };
     yAxis?: { min?: number; max?: number };
     dataZoom?: Array<{
@@ -300,17 +351,18 @@ describe('buildBsocOption (requirements 2b)', () => {
   const option = (sessions: SessionSummary[], visible: TimeWindow = BOUNDS): OptionShape =>
     buildBsocOption(data(sessions), visible, NOW) as unknown as OptionShape;
 
-  it('plots both BSoC lines with the legend below', () => {
+  it('plots both BSoC lines with the exported series colors and no legend/tooltip', () => {
     const opt = option([]);
     expect(opt.series?.slice(0, 2).map((s) => s.name)).toEqual([
       EV_SERIES_NAME,
       HOME_SERIES_NAME,
     ]);
-    expect(opt.legend?.data).toEqual([EV_SERIES_NAME, HOME_SERIES_NAME]);
-    expect(opt.legend?.bottom).toBe(0);
+    expect(opt.color).toEqual([EV_COLOR, HOME_COLOR]);
     expect(opt.yAxis).toMatchObject({ min: 0, max: 100 });
     expect(opt.xAxis).toMatchObject({ type: 'time', min: BOUNDS.from, max: BOUNDS.to });
-    expect(opt.tooltip?.trigger).toBe('axis');
+    // The static readout row below the chart replaces both.
+    expect(opt.legend).toBeUndefined();
+    expect(opt.tooltip).toBeUndefined();
   });
 
   it('wires the inside dataZoom with the 2 h–1 yr clamps and no wheel zoom', () => {
