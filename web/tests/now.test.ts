@@ -64,8 +64,8 @@ describe('Now tab — live data', () => {
     fetchMock.mockResolvedValue(ok(fixture()));
     render(Now);
 
-    await screen.findByText('62.0');
-    expect(screen.getByText('71.0')).toBeDefined();
+    await screen.findByText('62');
+    expect(screen.getByText('71')).toBeDefined();
     expect(screen.getByText('Vehicle')).toBeDefined();
     expect(screen.getByText('Home battery')).toBeDefined();
 
@@ -76,7 +76,7 @@ describe('Now tab — live data', () => {
     expect(screen.getByText(/solar 0.20 kW · load 5.10 kW · updated 20s ago/)).toBeDefined();
   });
 
-  it('rounds displayed BSoC to one decimal digit', async () => {
+  it('rounds displayed BSoC to one decimal digit, trailing zero suppressed', async () => {
     const base = fixture();
     fetchMock.mockResolvedValue(
       ok({
@@ -88,7 +88,7 @@ describe('Now tab — live data', () => {
     render(Now);
 
     await screen.findByText('54.3');
-    expect(screen.getByText('54.0')).toBeDefined();
+    expect(screen.getByText('54')).toBeDefined();
   });
 
   it('shows a friendly empty state for an empty store (no crash)', async () => {
@@ -120,7 +120,7 @@ describe('Now tab — auth, stale, polling, errors', () => {
     render(Now);
 
     await screen.findByText(/Sampling delayed/);
-    expect(screen.getByText('62.0')).toBeDefined();
+    expect(screen.getByText('62')).toBeDefined();
   });
 
   it('keeps the last good data and warns when a refresh fails', async () => {
@@ -130,17 +130,17 @@ describe('Now tab — auth, stale, polling, errors', () => {
       .mockResolvedValue(ok(fixture()));
     render(Now);
 
-    await screen.findByText('62.0');
+    await screen.findByText('62');
     document.dispatchEvent(new Event('visibilitychange'));
     await screen.findByText(/Refresh failed: connection lost/);
-    expect(screen.getByText('62.0')).toBeDefined(); // stale-but-shown data
+    expect(screen.getByText('62')).toBeDefined(); // stale-but-shown data
   });
 
   it('polls on its interval and again when the tab becomes visible', async () => {
     fetchMock.mockResolvedValue(ok(fixture()));
     render(Now, { props: { pollMs: 25 } });
 
-    await screen.findByText('62.0');
+    await screen.findByText('62');
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     const before = fetchMock.mock.calls.length;
     document.dispatchEvent(new Event('visibilitychange'));
@@ -155,7 +155,7 @@ describe('Now tab — auth, stale, polling, errors', () => {
 
     await screen.findByText("Can't reach the read API");
     await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await screen.findByText('62.0');
+    await screen.findByText('62');
   });
 });
 
@@ -188,13 +188,14 @@ describe('Now text formatting (pure)', () => {
     expect(vehicleCaption(fixture().vehicle)).toBe('Charging · limit 80%');
   });
 
-  it('formatSocPercent: rounds BSoC to one decimal digit, null-safe', () => {
+  it('formatSocPercent: rounds BSoC to one decimal digit, trailing zero suppressed', () => {
     expect(formatSocPercent(54.263)).toBe('54.3');
-    expect(formatSocPercent(54)).toBe('54.0');
-    expect(formatSocPercent(100)).toBe('100.0');
-    expect(formatSocPercent(0)).toBe('0.0');
+    expect(formatSocPercent(54)).toBe('54');
+    expect(formatSocPercent(100)).toBe('100');
+    expect(formatSocPercent(0)).toBe('0');
     expect(formatSocPercent(62.44)).toBe('62.4');
     expect(formatSocPercent(62.46)).toBe('62.5');
+    expect(formatSocPercent(100.0)).toBe('100');
     expect(formatSocPercent(null)).toBe('—');
     expect(formatSocPercent(undefined)).toBe('—');
   });
