@@ -364,6 +364,76 @@ Branch `p2/step4-bsoc-chart` — one-line `/** … */` headers on
 `windowToPercent`/`percentToWindow` naming their semantics (displayed window ↔
 dataZoom percent of the loaded `bounds`). Gate: web check green (55/55).
 
+### 2026-11-12 — Then tab: static readout row replaces the hover tooltip + legend
+
+Branch `fix/web-then-legend-readout` — docs/TODO.md "Then tab" legend +
+tooltip-interaction items:
+- The hover tooltip and the in-chart ECharts legend are both gone
+  (`TooltipComponent`/`LegendComponent` unregistered). The page renders one
+  static row below the chart:
+  `Nov 12 09:35   [🟧] 🏠: 71.3% | [🟦] 🚗: 54.0%` — CSS squares colored with
+  the `HOME_COLOR`/`EV_COLOR` exports (the missing color key), emoji glyphs in
+  the labels, values rounded to the nearest tenth with exactly one decimal
+  (em-dash when a series has no sample at or before the ts).
+- X-only interaction: `ChartHandle.onPointerMove` (zrender `mousemove`/
+  `globalout` → `convertFromPixel` on x) drives the readout, so session
+  markLine/markArea hit areas cannot capture or affect it. On load and after
+  pointer leave the row shows the newest loaded sample. Touch/pinch never
+  emits mousemove, so values don't update mid-pinch (the TODO's mobile item).
+- Pure logic lives in `bsocChart.ts` (`formatReadoutTs`, `formatBsocValue`,
+  `sampleAtOrBefore`, `newestSampleTs`, `readoutAt`); deleted the tooltip
+  formatter + helpers (`formatBsocTooltip`, `sessionAt`, `socSpan`,
+  `sessionEndLabel`, `paramValue`, `TooltipParamLike`, `formatDateTime`).
+- **Assumption:** the spec's ts format `MMM DD HH:SS` was read as a typo for
+  `MMM DD HH:MM` and implemented as HH:MM.
+- Gate: `npm run check` green — root **1053 passed / 3 skipped**, web **63/63**,
+  svelte-check 0/0.
+### 2026-11-13 — Then tab: chart interaction + lazy loading + dashed EV gaps
+
+Branch `fix/web-then-chart-interaction` — the Then-tab chart interaction items
+(follows the readout rework above):
+- **Wheel dead at the chart**: zrender's dataZoom roam controller calls
+  `eventTool.stop()` on every wheel over the grid (its per-dataZoom
+  `zoomOnMouseWheel: false` filter runs *after* the stop, at another layer) on
+  `painter.getViewportRoot()` — an inner div — so the bubble listener on the
+  chart element never fired (root cause confirmed in-browser). The wheel path is
+  now a capture-phase listener that owns the event (`preventDefault` +
+  `stopPropagation`); zoom/scrub stay on `classifyWheel`/`zoomAt`/`panBy`.
+- **Cursor-anchored zoom + hover readout were silently broken**: in ECharts 6
+  `convertFromPixel({xAxisIndex: 0}, [px, 0])` returns NaN (the axis finder
+  wants a scalar px), so `tsAtX` always returned null — the zoom anchor fell
+  back to the window center and the readout to the newest sample. Fixed to the
+  scalar form.
+- **Zoom direction inverted**: `zoomAt` multiplied the span by its factor while
+  its contract (and `ZOOM_PER_NOTCH`'s "×1.25 in") say factor > 1 zooms in —
+  now divides; tests updated to the contract.
+- **Lazy loading never fired**: the visible window was clamped into the loaded
+  bounds, so `needsRefetch` could never see out of bounds and zoom-out stopped
+  at the initial 24 h. Split the DOMAIN (now − 1 yr .. now, fixed at page init)
+  from the loaded window: zoom/pan clamp into the domain, refetch
+  (`fetchWindowFor(visible)`, 25 % pad) triggers when a visible edge enters a
+  10 % buffer of a loadable loaded edge (or exceeds it) or on coarseness
+  (unchanged); domain edges are excluded so a view parked at now cannot loop
+  refetches. xAxis min/max follow the domain. Zoom-out past 24 h verified end
+  to end in the browser.
+- **Pinch freeze** (correcting the assumption in the entry above — zrender *does*
+  synthesize `mousemove` from touch): the readout freezes while touches are down
+  (capture-phase touch counting; fingers land one touchstart at a time) and
+  resets to the newest-sample default when the last finger lifts.
+- **Dashed EV gap lines**: pure `evGapLine` splits EV samples into runs at gaps
+  > 2.5 × bucket width — solid runs with null breaks, dashed gap bridges, and
+  dashed extensions from the first/last sample to the chart edges when the edge
+  is more than a gap away; rendered as `[from, to]` coord-pair markLine items on
+  the EV series (ECharts 6 has no `{coords}` item form — it logs "Invalid
+  markLine data" and half-parses). Home series + session markers untouched.
+- Window/refetch/gap math pinned in `web/tests/bsoc.test.ts`; canvas behavior
+  verified in headless Chrome with mocked `/api` (18/18 checks: wheel root-cause
+  probe, zoom/scrub, cursor anchor, zoom-out > 24 h, lazy-refetch coverage +
+  loop-freedom, coarseness refetch, dashed segments over a planted 3 h EV hole,
+  pinch freeze + resume).
+
+
+
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
