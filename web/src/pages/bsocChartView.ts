@@ -15,7 +15,7 @@ import {
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsCoreOption, EChartsType } from 'echarts/core';
-import { percentToWindow, windowToPercent, type TimeWindow } from './bsocChart';
+import { percentToWindow, touchReadout, windowToPercent, type TimeWindow, type TouchPhase } from './bsocChart';
 
 echarts.use([
   LineChart,
@@ -89,28 +89,49 @@ export function createChart(
   // zrender-level listeners fire over the whole canvas regardless of which
   // mark the cursor hits, and only x is read — so the readout depends on the
   // x-axis location alone (session markLine/markArea cannot capture it).
-  // Freeze the readout while touches are down: zrender synthesizes 'mousemove'
-  // from touch events and would otherwise drag the readout along mid-gesture —
-  // most jarring during a pinch (the values churn while the scale moves). The
-  // whole touch interaction freezes, not just two-finger moves: fingers land
-  // one event at a time and the first touchstart would already leak. When the
-  // last finger lifts the sink resets to the newest-sample default (resume).
+  // Touch is read directly here: zrender drops touch moves on the pointer-
+  // events path and its synthesized ones carry no offsetX, so without this
+  // the static row could only ever show the newest sample on touch devices.
+  // Single finger pins (tap/drag → tooltip-like values); a second finger
+  // freezes mid-pinch and resets to the newest sample on full lift (the
+  // pre-pinch position is stale once the scale has moved). Capture phase:
+  // zrender's own touch listeners run first on their inner element during
+  // the bubble phase.
   const zr = chart.getZr();
-  let touchCount = 0;
-  const trackTouches = (event: TouchEvent): void => {
-    touchCount = event.touches.length;
-    if (touchCount === 0) pointerSink(null);
-  };
-  // Capture phase: zrender's own touch listeners run first on their inner
-  // element during the bubble phase, so bubble tracking would freeze one
-  // synthesized mousemove too late.
-  el.addEventListener('touchstart', trackTouches, { passive: true, capture: true });
-  el.addEventListener('touchmove', trackTouches, { passive: true, capture: true });
-  el.addEventListener('touchend', trackTouches, { passive: true, capture: true });
-  el.addEventListener('touchcancel', trackTouches, { passive: true, capture: true });
-  const pointerListener = (event: { offsetX: number }): void => {
-    if (touchCount > 0) return;
-    pointerSink(tsAtX(event.offsetX));
+  let touchPhase: TouchPhase = { fingers: 0, multi: false };
+  const touchHandler =
+    (kind: 'start' | 'move' | 'end') =>
+    (event: TouchEvent): void => {
+      const next = touchReadout(touchPhase, kind, event.touches.length);
+      touchPhase = next.phase;
+      if (next.action === 'freeze' || next.action === 'keep') return;
+      if (next.action === 'reset') {
+        pointerSink(null);
+        return;
+      }
+      const finger = event.touches[0] ?? event.changedTouches[0];
+      if (finger === undefined) return;
+      const ts = tsAtX(finger.clientX - el.getBoundingClientRect().left);
+      if (ts !== null) pointerSink(ts);
+    };
+  const onTouchStart = touchHandler('start');
+  const onTouchMove = touchHandler('move');
+  const onTouchEnd = touchHandler('end');
+  el.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
+  el.addEventListener('touchmove', onTouchMove, { passive: true, capture: true });
+  el.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
+  el.addEventListener('touchcancel', onTouchEnd, { passive: true, capture: true });
+  const pointerListener = (event: { offsetX?: number; clientX?: number }): void => {
+    if (touchPhase.fingers > 0) return;
+    const rect = el.getBoundingClientRect();
+    const px =
+      typeof event.offsetX === 'number' && Number.isFinite(event.offsetX)
+        ? event.offsetX
+        : typeof event.clientX === 'number'
+          ? event.clientX - rect.left
+          : Number.NaN;
+    const ts = Number.isFinite(px) ? tsAtX(px) : null;
+    pointerSink(ts);
   };
   const pointerLeaveListener = (): void => pointerSink(null);
   zr.on('mousemove', pointerListener);
@@ -163,10 +184,10 @@ export function createChart(
       chart.off('datazoom', listener);
       zr.off('mousemove', pointerListener);
       zr.off('globalout', pointerLeaveListener);
-      el.removeEventListener('touchstart', trackTouches, { capture: true });
-      el.removeEventListener('touchmove', trackTouches, { capture: true });
-      el.removeEventListener('touchend', trackTouches, { capture: true });
-      el.removeEventListener('touchcancel', trackTouches, { capture: true });
+      el.removeEventListener('touchstart', onTouchStart, { capture: true });
+      el.removeEventListener('touchmove', onTouchMove, { capture: true });
+      el.removeEventListener('touchend', onTouchEnd, { capture: true });
+      el.removeEventListener('touchcancel', onTouchEnd, { capture: true });
       chart.dispose();
     },
   };

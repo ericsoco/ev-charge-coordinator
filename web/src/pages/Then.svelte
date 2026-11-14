@@ -88,7 +88,7 @@
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let observer: ResizeObserver | null = null;
 
-  /** Timestamp under the pointer; null (initial / after leave) = newest sample. */
+  /** Timestamp under the pointer; null (initial / pointer leave / post-pinch) = newest sample. */
   let hoverTs = $state<number | null>(null);
   const readout = $derived.by(() => {
     const current = data;
