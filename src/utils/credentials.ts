@@ -87,6 +87,15 @@ interface StoredCredentials {
   api?: {
     token?: string;
   };
+  /**
+   * Web Push VAPID keypair (P2 step 7): minted on first use, stored like the
+   * API token so the daemon's sends and GET /api/push/public-key agree
+   * across restarts. Partial updates merge, like api.
+   */
+  push?: {
+    publicKey?: string;
+    privateKey?: string;
+  };
 }
 
 /** The only keychain operations this module needs, backed by @napi-rs/keyring. */
@@ -420,6 +429,31 @@ export class CredentialStore {
     this.credentials.api = { ...this.credentials.api, token };
     await this.save();
     return token;
+  }
+
+  /**
+   * The Web Push VAPID keypair (P2 step 7): minted on first use
+   * (web-push's generateVAPIDKeys — URL-safe base64, 87-char public /
+   * 43-char private) and returned as-is thereafter. The daemon's push
+   * sends and GET /api/push/public-key must agree across restarts.
+   * Lazy-imported so CLI paths that never touch push never load web-push.
+   */
+  async ensureVapidKeys(): Promise<{ publicKey: string; privateKey: string }> {
+    await this.initialize();
+    const existing = this.credentials.push;
+    if (
+      existing?.publicKey !== undefined &&
+      existing.publicKey.length > 0 &&
+      existing?.privateKey !== undefined &&
+      existing.privateKey.length > 0
+    ) {
+      return { publicKey: existing.publicKey, privateKey: existing.privateKey };
+    }
+    const { generateVAPIDKeys } = await import('web-push');
+    const keys = generateVAPIDKeys();
+    this.credentials.push = { ...this.credentials.push, ...keys };
+    await this.save();
+    return keys;
   }
 
   // Clear all

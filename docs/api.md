@@ -2,8 +2,9 @@
 
 Display-only HTTP API hosted **inside the daemon** (design §7 HTTP seam,
 P2 step 2). It serves the web app's data and, when `web/dist` has been
-built, the app itself. There are **no control endpoints** in this step —
-the actuator stays wrapped for the start/stop fast-follow.
+built, the app itself. There are **no vehicle-control endpoints** — the
+actuator stays wrapped for the start/stop fast-follow. P2 step 7 added the
+Web Push subscription routes (app plumbing, not actuation).
 
 ## Base URL, port, binding
 
@@ -51,10 +52,10 @@ device (P2 decision: "shared bearer token, stored per device").
 
 ## CORS
 
-The Vite dev origin `http://localhost:5173` is allowed (preflight
-answered without auth; `Authorization` permitted). All other origins get
-no CORS headers — production is same-origin behind the Cloudflare Tunnel
-and needs none.
+The Vite dev origin `http://localhost:5173` is allowed (`GET`, `POST`, and
+preflight answered without auth; `Authorization` permitted). All other
+origins get no CORS headers — production is same-origin behind the
+Cloudflare Tunnel and needs none.
 
 ## Endpoints
 
@@ -63,12 +64,16 @@ and needs none.
 | GET | `/api/now` | Current vehicle + home-battery state, active session, sample freshness |
 | GET | `/api/series` | Downsampled time series for the charts |
 | GET | `/api/sessions` | Paginated charging-session list with tooltip data |
-| GET | `/api/messages` | Notification history (empty until P2 step 7) |
+| GET | `/api/messages` | Paged notification history (newest first) |
+| GET | `/api/push/public-key` | VAPID public key for `PushManager.subscribe` |
+| POST | `/api/push/subscribe` | Store this device's push subscription |
+| POST | `/api/push/unsubscribe` | Drop this device's push subscription (idempotent) |
 | GET | `/` | The built web app (`web/dist`) or a placeholder page |
 
-Anything else under `/api` — unknown paths **and** non-GET verbs — is a
-JSON `404` (`{"error":"no such endpoint: <METHOD> <path>"}`): step 2 is
-GET-only by construction.
+Anything else under `/api` — unknown paths and verbs no route registered —
+is a JSON `404` (`{"error":"no such endpoint: <METHOD> <path>"}`): every
+registered route is a read or push-subscription plumbing; vehicle control
+stays out.
 
 ### Errors
 
@@ -208,30 +213,62 @@ are kWh per bucket.
 
 ## GET /api/messages
 
-Final response shape now; the list is **always empty** until the
-`notifications` table lands in P2 step 7 (out of scope for step 2):
+Paged notification history — one row per event the daemon's notifier
+fanout dispatched (P2 step 7), newest first.
 
-```json
-{ "messages": [] }
-```
-
-A message object will be (provisional — bound to this shape now so the
-app can be built against it):
+Query: `limit` (1–500, default 200), `offset` (≥ 0, default 0).
 
 ```json
 {
-  "id": 42,
-  "tsMs": 1794356800000,
-  "type": "charging-started",
-  "title": "Charging started",
-  "body": "session 42 — EV 54% → 60%, target 62%"
+  "messages": [
+    {
+      "id": 42,
+      "tsMs": 1794356800000,
+      "type": "charging-started",
+      "title": "Charging started",
+      "body": "⚡️ charging started (SoC 54%)"
+    }
+  ]
 }
 ```
 
 - `type` is a `NotificationEvent.type` value (`plug-in-detected`,
   `decision-made`, `charging-started`, `charging-stopped`,
   `session-retargeted`, `failure`, `test`).
-- `title`/`body` are the human headline/detail — what ntfy/Slack show.
+- `title`/`body` are the rendered headline/detail — the exact text ntfy/Slack
+  show (`notificationTitle` + `formatNotificationEvent`).
+- A row is written when the fanout **dispatches** the event (before
+  per-client delivery), so a failed ntfy/Slack post still appears in the
+  list; per-client delivery failures are logged, not reflected here.
+- Rows are pruned with the samples' `retentionDays` by the daemon's daily
+  retention task.
+
+## Web Push (P2 step 7)
+
+Flow between this API, the web app, and the daemon's `webpush` fanout
+target:
+
+1. `GET /api/push/public-key` → `{ "publicKey": "…" }` — the VAPID keypair
+   is minted on first use into the credential store (`ensureVapidKeys()`),
+   same pattern as the bearer token.
+2. The app registers `/sw.js`, `Notification.requestPermission()` runs from
+   a direct user tap, then `PushManager.subscribe({ userVisibleOnly:
+   true, applicationServerKey })`.
+3. `POST /api/push/subscribe` with `{ endpoint, keys: { p256dh, auth } }`
+   → `{ "ok": true }` — an **upsert**: re-subscribing rotates the keys for
+   that endpoint, never duplicates it.
+4. Every dispatched event is pushed to all stored subscriptions with the
+   same `title`/`body` as `/api/messages`; a `404`/`410` answer from the
+   push service drops that subscription.
+5. `POST /api/push/unsubscribe` with `{ endpoint }` → `{ "ok": true }` —
+   idempotent (unknown endpoint still succeeds).
+
+**iOS/iPadOS caveat (verified against WebKit's announcement):** Web Push on
+iOS/iPadOS requires **16.4+** and works only for the app **added to the
+Home Screen** (standalone PWA), with the permission prompt tied to a direct
+user gesture. The Messages tab detects that context and shows the
+Add-to-Home-Screen guidance instead of the enable button — parity with
+desktop/Android is deliberately not promised for plain Safari tabs.
 
 ## Static serving
 

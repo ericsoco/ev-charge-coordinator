@@ -17,6 +17,8 @@ declare module 'express' {
       readonly path: string;
       /** Mount path (`/api` inside a mounted handler). */
       readonly baseUrl: string;
+      /** Parsed JSON body (express.json); undefined until a body parser runs. */
+      body: unknown;
     }
 
     interface Response extends ServerResponse {
@@ -33,10 +35,20 @@ declare module 'express' {
 
     type RequestHandler = (req: Request, res: Response, next: NextFunction) => unknown;
 
+    /** Error middleware — exactly 4 params, reached only via next(err). */
+    type ErrorRequestHandler = (
+      error: unknown,
+      req: Request,
+      res: Response,
+      next: NextFunction
+    ) => unknown;
+
     interface Application {
-      use(...handlers: RequestHandler[]): Application;
-      use(path: string, ...handlers: RequestHandler[]): Application;
+      use(...handlers: (RequestHandler | ErrorRequestHandler)[]): Application;
+      use(path: string, ...handlers: (RequestHandler | ErrorRequestHandler)[]): Application;
       get(path: string, ...handlers: RequestHandler[]): Application;
+      /** POST (P2 step 7 push subscription routes). */
+      post(path: string, ...handlers: RequestHandler[]): Application;
       /** Express's mutable app bag (the actuator seam parks here). */
       locals: Record<string, unknown>;
       listen(port: number, host: string, callback?: () => void): Server;
@@ -44,6 +56,9 @@ declare module 'express' {
 
     /** serve-static: files under root, index.html at `/`. */
     function static(root: string): RequestHandler;
+
+    /** body-parser JSON (P2 step 7 push POSTs). */
+    function json(options?: { limit?: string }): RequestHandler;
   }
 
   export = express;

@@ -13,6 +13,8 @@ import { openStore } from '../../src/store/database.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import * as evStore from '../../src/store/EvStore.js';
 import * as sessionStore from '../../src/store/SessionStore.js';
+import * as notifications from '../../src/store/NotificationStore.js';
+import * as pushSubs from '../../src/store/PushSubscriptionStore.js';
 import {
   DEFAULT_API_PORT,
   DEV_ORIGIN,
@@ -45,6 +47,15 @@ function get(pathname: string, opts: GetOpts = {}): Promise<Response> {
   return fetch(`http://127.0.0.1:${port}${pathname}`, {
     method: opts.method ?? 'GET',
     headers,
+  });
+}
+
+/** JSON POST with the bearer token (push subscription routes). */
+function post(pathname: string, body: unknown): Promise<Response> {
+  return fetch(`http://127.0.0.1:${port}${pathname}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
 }
 
@@ -106,6 +117,8 @@ beforeAll(async () => {
     port: 0,
     webDistDir: path.join(dir, 'no-web-dist'),
     nowMs: () => NOW,
+    // Injected so the suite never races the credential store's mint-on-use.
+    vapidKeys: async () => ({ publicKey: 'test-public-key', privateKey: 'test-private-key' }),
   });
   port = handle.port;
 });
@@ -132,7 +145,12 @@ describe('bearer auth (every /api route)', () => {
   });
 
   it('applies to every endpoint, not just /api/now', async () => {
-    for (const p of ['/api/series?metric=ev_soc&from=1&to=2', '/api/sessions', '/api/messages']) {
+    for (const p of [
+      '/api/series?metric=ev_soc&from=1&to=2',
+      '/api/sessions',
+      '/api/messages',
+      '/api/push/public-key',
+    ]) {
       expect((await get(p, { token: null })).status, p).toBe(401);
     }
   });
@@ -300,13 +318,102 @@ describe('GET /api/sessions', () => {
   });
 });
 
-describe('GET /api/messages and /api 404s', () => {
-  it('returns the final envelope with an empty list (notifications land in step 7)', async () => {
+describe('GET /api/messages', () => {
+  it('starts empty, then returns recorded notifications newest-first', async () => {
+    const before = await json(await get('/api/messages'));
+    expect(before).toEqual({ messages: [] });
+
+    notifications.insertNotification(db, {
+      tsMs: NOW - 5_000,
+      type: 'charging-started',
+      title: 'Charging started',
+      body: '⚡️ charging started (SoC 54%)',
+    });
+    notifications.insertNotification(db, {
+      tsMs: NOW - 1_000,
+      type: 'charging-stopped',
+      title: 'Charging stopped',
+      body: '🛑 charging stopped (SoC 60%) — target reached',
+    });
+
     const body = await json(await get('/api/messages'));
-    expect(body).toEqual({ messages: [] });
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages[0]).toEqual({
+      id: expect.any(Number),
+      tsMs: NOW - 1_000,
+      type: 'charging-stopped',
+      title: 'Charging stopped',
+      body: '🛑 charging stopped (SoC 60%) — target reached',
+    });
+    expect(body.messages[1].type).toBe('charging-started');
   });
 
-  it('404s unknown paths and non-GET verbs as JSON — no control endpoints exist', async () => {
+  it('paginates with limit/offset and rejects bad pages', async () => {
+    const page = await json(await get('/api/messages?limit=1&offset=1'));
+    expect(page.messages).toHaveLength(1);
+    expect(page.messages[0].type).toBe('charging-started');
+
+    for (const query of ['limit=0', 'limit=501', 'limit=abc', 'offset=-1']) {
+      const res = await get(`/api/messages?${query}`);
+      expect(res.status, query).toBe(400);
+    }
+  });
+});
+
+describe('Web Push subscription routes', () => {
+  it('serves the injected VAPID public key', async () => {
+    const body = await json(await get('/api/push/public-key'));
+    expect(body.publicKey).toBe('test-public-key');
+  });
+
+  it('subscribes, upserts keys, and unsubscribes idempotently', async () => {
+    const first = await post('/api/push/subscribe', {
+      endpoint: 'https://push.test/sub-1',
+      keys: { p256dh: 'k1', auth: 'a1' },
+    });
+    expect(first.status).toBe(200);
+    expect(await json(first)).toEqual({ ok: true });
+
+    // Re-subscribe rotates the keys without a duplicate row.
+    await post('/api/push/subscribe', {
+      endpoint: 'https://push.test/sub-1',
+      keys: { p256dh: 'k2', auth: 'a2' },
+    });
+    const rows = pushSubs.listSubscriptions(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].p256dh).toBe('k2');
+    expect(rows[0].auth).toBe('a2');
+
+    const unsub = await post('/api/push/unsubscribe', { endpoint: 'https://push.test/sub-1' });
+    expect(unsub.status).toBe(200);
+    expect(await json(unsub)).toEqual({ ok: true });
+    expect(pushSubs.listSubscriptions(db)).toHaveLength(0);
+
+    // Already gone is still ok — unsubscribe is idempotent.
+    const again = await post('/api/push/unsubscribe', { endpoint: 'https://push.test/sub-1' });
+    expect(await json(again)).toEqual({ ok: true });
+  });
+
+  it('rejects malformed subscribe/unsubscribe bodies with 400', async () => {
+    expect((await post('/api/push/subscribe', { endpoint: 'x' })).status).toBe(400);
+    expect((await post('/api/push/subscribe', {})).status).toBe(400);
+    expect((await post('/api/push/unsubscribe', {})).status).toBe(400);
+    expect(pushSubs.listSubscriptions(db)).toHaveLength(0);
+  });
+
+  it('answers a malformed JSON body as JSON, not HTML', async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/api/push/subscribe`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: '{not json',
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+  });
+});
+
+describe('/api 404s', () => {
+  it('404s unknown paths and unregistered verbs as JSON — no vehicle control', async () => {
     const unknown = await get('/api/nope');
     expect(unknown.status).toBe(404);
     expect(await json(unknown)).toEqual({ error: 'no such endpoint: GET /api/nope' });

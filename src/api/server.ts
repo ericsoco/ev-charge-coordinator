@@ -22,6 +22,8 @@ import { credentialStore } from '../utils/credentials.js';
 import { ApiError } from './ApiError.js';
 import { readMessages, readNow, readSessions } from './reads.js';
 import { parseSeriesParams, querySeries } from './series.js';
+import * as pushStore from '../store/PushSubscriptionStore.js';
+import type { PushSubscribeRequest } from './types.js';
 
 /** The Vite dev origin (P2 step 1's dev server); prod is same-origin. */
 export const DEV_ORIGIN = 'http://localhost:5173';
@@ -80,7 +82,7 @@ function devCors(req: Request, res: Response, next: NextFunction): void {
   if (req.headers.origin === DEV_ORIGIN) {
     res.setHeader('Access-Control-Allow-Origin', DEV_ORIGIN);
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     res.setHeader('Access-Control-Max-Age', '600');
   }
@@ -91,17 +93,24 @@ function devCors(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
-/** Sync handler wrapper: ApiError → its status, anything else → 500. */
-function route(handler: (req: Request, res: Response) => void): RequestHandler {
+/** Handler wrapper: ApiError → its status, anything else → 500. Async-safe. */
+function route(
+  handler: (req: Request, res: Response) => void | Promise<void>
+): RequestHandler {
+  const fail = (res: Response, error: unknown): void => {
+    if (res.headersSent) return;
+    if (error instanceof ApiError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  };
   return (req, res) => {
     try {
-      handler(req, res);
+      const result = handler(req, res);
+      if (result instanceof Promise) result.catch((error) => fail(res, error));
     } catch (error) {
-      if (error instanceof ApiError) {
-        res.status(error.status).json({ error: error.message });
-        return;
-      }
-      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      fail(res, error);
     }
   };
 }
@@ -133,18 +142,28 @@ export interface ApiAppOptions {
   /** Design §7 seam — retained on app.locals; no control route reads it yet. */
   actuator?: ActuatorPort;
   nowMs?: () => number;
+  /**
+   * VAPID keypair provider for GET /api/push/public-key (P2 step 7).
+   * Defaults to the credential store (mint-on-first-use); tests inject.
+   */
+  vapidKeys?: () => Promise<{ publicKey: string; privateKey: string }>;
 }
 
 export function createApiApp(options: ApiAppOptions): Application {
   const app = express();
   const nowMs = options.nowMs ?? Date.now;
+  const vapidKeys = options.vapidKeys ?? (() => credentialStore.ensureVapidKeys());
 
   // Design §7: the wrapped actuator waits here for the start/stop fast-follow;
-  // step 2 registers no control routes (GET-only reads below).
+  // step 2 registered no control routes (GET-only reads below). Step 7 added
+  // the push subscription POSTs — app plumbing, still no vehicle control.
   app.locals.actuator = options.actuator ?? null;
 
   app.use(devCors);
   app.use('/api', requireBearer(options.token));
+  // Step 7's push POSTs carry JSON bodies; query-string reads pass through
+  // this parser untouched.
+  app.use('/api', express.json());
 
   app.get(
     '/api/now',
@@ -169,15 +188,69 @@ export function createApiApp(options: ApiAppOptions): Application {
 
   app.get(
     '/api/messages',
-    route((_req, res) => {
-      res.json(readMessages());
+    route((req, res) => {
+      res.json(readMessages(options.db, req.query));
     })
   );
 
-  // JSON 404 for anything else under /api — unknown paths AND non-GET verbs
-  // (POST /api/now lands here: step 2 deliberately has no control endpoints).
-  app.use('/api', (req, res) => {
+  // Web Push plumbing (P2 step 7): key distribution + subscription storage.
+  app.get(
+    '/api/push/public-key',
+    route(async (_req, res) => {
+      const { publicKey } = await vapidKeys();
+      res.json({ publicKey });
+    })
+  );
+
+  app.post(
+    '/api/push/subscribe',
+    route((req, res) => {
+      const body = req.body as Partial<PushSubscribeRequest> | undefined;
+      const endpoint = typeof body?.endpoint === 'string' ? body.endpoint : '';
+      const p256dh = typeof body?.keys?.p256dh === 'string' ? body.keys.p256dh : '';
+      const auth = typeof body?.keys?.auth === 'string' ? body.keys.auth : '';
+      if (endpoint === '' || p256dh === '' || auth === '') {
+        throw new ApiError(
+          400,
+          'body must be { endpoint, keys: { p256dh, auth } } with non-empty strings'
+        );
+      }
+      // Upsert: a device re-subscribing rotates its keys, never duplicates.
+      pushStore.upsertSubscription(options.db, { endpoint, p256dh, auth, createdTsMs: nowMs() });
+      res.json({ ok: true });
+    })
+  );
+
+  app.post(
+    '/api/push/unsubscribe',
+    route((req, res) => {
+      const body = req.body as { endpoint?: unknown } | undefined;
+      if (typeof body?.endpoint !== 'string' || body.endpoint === '') {
+        throw new ApiError(400, 'body must be { endpoint }');
+      }
+      // Idempotent: dropping an unknown endpoint still answers ok.
+      pushStore.removeSubscription(options.db, body.endpoint);
+      res.json({ ok: true });
+    })
+  );
+
+  // JSON 404 for anything else under /api — unknown paths AND verbs no route
+  // registered (still no vehicle-control endpoints; the actuator waits above).
+  app.use('/api', (req: Request, res: Response) => {
     res.status(404).json({ error: `no such endpoint: ${req.method} ${req.baseUrl}${req.path}` });
+  });
+
+  // JSON for errors that escape a route (e.g. express.json's parse failure on
+  // a malformed POST body), so the /api contract never answers HTML.
+  app.use('/api', (err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) return next(err);
+    const status =
+      typeof err === 'object' &&
+      err !== null &&
+      typeof (err as { status?: unknown }).status === 'number'
+        ? (err as { status: number }).status
+        : 500;
+    res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
   });
 
   const distDir = options.webDistDir ?? defaultWebDistDir();
@@ -185,7 +258,7 @@ export function createApiApp(options: ApiAppOptions): Application {
   if (fs.existsSync(indexFile)) {
     app.use(express.static(distDir));
     // SPA fallback: non-API GETs get the app shell (client-side routing).
-    app.use((req, res, next) => {
+    app.use((req: Request, res: Response, next: NextFunction) => {
       if (req.method !== 'GET' && req.method !== 'HEAD') return next();
       res.sendFile(indexFile);
     });
