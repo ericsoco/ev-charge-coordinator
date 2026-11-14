@@ -15,7 +15,18 @@ import {
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsCoreOption, EChartsType } from 'echarts/core';
-import { percentToWindow, touchReadout, windowToPercent, type TimeWindow, type TouchPhase } from './bsocChart';
+import {
+  EV_COLOR,
+  EV_SERIES_NAME,
+  HOME_COLOR,
+  HOME_SERIES_NAME,
+  percentToWindow,
+  sampleAtOrBefore,
+  touchReadout,
+  windowToPercent,
+  type TimeWindow,
+  type TouchPhase,
+} from './bsocChart';
 
 echarts.use([
   LineChart,
@@ -25,6 +36,10 @@ echarts.use([
   MarkAreaComponent,
   CanvasRenderer,
 ]);
+
+/** Cursor-rule intersection marker: outer size incl. the 2 px stroke (px). */
+const DOT_SIZE = 9;
+const DOT_R = DOT_SIZE / 2;
 
 /** datazoom event payload — programmatic actions report via `batch`. */
 interface DataZoomEventLike {
@@ -97,21 +112,111 @@ export function createChart(
   // pre-pinch position is stale once the scale has moved). Capture phase:
   // zrender's own touch listeners run first on their inner element during
   // the bubble phase.
+  // Down-only cursor rule: a 1 px medium-light grey line at the pointer x —
+  // the readout's anchor — visible only while a button/finger is down, and
+  // truncated to the y-axis (grid) bounds. Two intersection markers sit where
+  // it crosses the BSoC lines: stroked in the series color, 60% white fill.
+  if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+  const overlay = (style: Record<string, string>): HTMLElement => {
+    const node = document.createElement('div');
+    node.setAttribute('aria-hidden', 'true');
+    Object.assign(node.style, {
+      position: 'absolute',
+      pointerEvents: 'none',
+      display: 'none',
+      ...style,
+    });
+    el.appendChild(node);
+    return node;
+  };
+  const rule = overlay({
+    top: '0',
+    height: '100%',
+    width: '1px',
+    background: '#a6a6a6',
+  });
+  const makeDot = (color: string): HTMLElement =>
+    overlay({
+      width: `${DOT_SIZE}px`,
+      height: `${DOT_SIZE}px`,
+      borderRadius: '50%',
+      border: `2px solid ${color}`,
+      background: 'rgba(255, 255, 255, 0.6)',
+      boxSizing: 'border-box',
+    });
+  const evDot = makeDot(EV_COLOR);
+  const homeDot = makeDot(HOME_COLOR);
+  let evPoints: Array<[number, number]> = [];
+  let homePoints: Array<[number, number]> = [];
+  let currentPx: number | null = null;
+
+  /** y-pixel of a logical point in the grid — null before the first layout. */
+  const gridY = (x: number, y: number): number | null => {
+    const p: unknown = chart.convertToPixel({ gridIndex: 0 }, [x, y]);
+    return Array.isArray(p) && typeof p[1] === 'number' && Number.isFinite(p[1]) ? p[1] : null;
+  };
+  const positionDot = (
+    dot: HTMLElement,
+    ts: number | null,
+    points: Array<[number, number]>
+  ): void => {
+    const value = ts === null ? null : sampleAtOrBefore(points, ts);
+    const p: unknown =
+      value === null ? null : chart.convertToPixel({ gridIndex: 0 }, [ts, value]);
+    if (!Array.isArray(p) || typeof p[0] !== 'number' || typeof p[1] !== 'number') {
+      dot.style.display = 'none';
+      return;
+    }
+    dot.style.left = `${p[0] - DOT_R}px`;
+    dot.style.top = `${p[1] - DOT_R}px`;
+    dot.style.display = 'block';
+  };
+  const setRule = (px: number | null): void => {
+    currentPx = px;
+    if (px === null || !Number.isFinite(px)) {
+      rule.style.display = 'none';
+      evDot.style.display = 'none';
+      homeDot.style.display = 'none';
+      return;
+    }
+    // Truncate to the y-axis (grid) bounds — the rule marks values, not margins.
+    const anchorX = domain !== null ? domain.from : 0;
+    const top = gridY(anchorX, 100);
+    const bottom = gridY(anchorX, 0);
+    if (top !== null && bottom !== null && bottom > top) {
+      rule.style.top = `${top}px`;
+      rule.style.height = `${bottom - top}px`;
+    }
+    rule.style.left = `${px}px`;
+    rule.style.display = 'block';
+    const ts = tsAtX(px);
+    positionDot(evDot, ts, evPoints);
+    positionDot(homeDot, ts, homePoints);
+  };
+  let lastTouchAt = 0;
+  /** Compat mouse events trail a tap by ~300 ms — touch owns state that long. */
+  const recentTouch = (): boolean => Date.now() - lastTouchAt < 500;
+
   const zr = chart.getZr();
   let touchPhase: TouchPhase = { fingers: 0, multi: false };
   const touchHandler =
     (kind: 'start' | 'move' | 'end') =>
     (event: TouchEvent): void => {
+      lastTouchAt = Date.now();
       const next = touchReadout(touchPhase, kind, event.touches.length);
       touchPhase = next.phase;
-      if (next.action === 'freeze' || next.action === 'keep') return;
+      if (next.action === 'freeze') return; // still down: rule stays put, readout frozen
+      if (next.action !== 'pin') setRule(null); // lifted: the rule is down-only
+      if (next.action === 'keep') return; // single-finger lift: readout persists
       if (next.action === 'reset') {
         pointerSink(null);
         return;
       }
       const finger = event.touches[0] ?? event.changedTouches[0];
       if (finger === undefined) return;
-      const ts = tsAtX(finger.clientX - el.getBoundingClientRect().left);
+      const px = finger.clientX - el.getBoundingClientRect().left;
+      setRule(px);
+      const ts = tsAtX(px);
       if (ts !== null) pointerSink(ts);
     };
   const onTouchStart = touchHandler('start');
@@ -121,8 +226,8 @@ export function createChart(
   el.addEventListener('touchmove', onTouchMove, { passive: true, capture: true });
   el.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
   el.addEventListener('touchcancel', onTouchEnd, { passive: true, capture: true });
-  const pointerListener = (event: { offsetX?: number; clientX?: number }): void => {
-    if (touchPhase.fingers > 0) return;
+  const pointerListener = (event: { offsetX?: number; clientX?: number; buttons?: number }): void => {
+    if (touchPhase.fingers > 0 || recentTouch()) return;
     const rect = el.getBoundingClientRect();
     const px =
       typeof event.offsetX === 'number' && Number.isFinite(event.offsetX)
@@ -130,12 +235,30 @@ export function createChart(
         : typeof event.clientX === 'number'
           ? event.clientX - rect.left
           : Number.NaN;
+    // Rule is down-only: shown while a button is held, hidden on hover.
+    const down = typeof event.buttons === 'number' && event.buttons > 0;
+    setRule(down && Number.isFinite(px) ? px : null);
     const ts = Number.isFinite(px) ? tsAtX(px) : null;
     pointerSink(ts);
   };
-  const pointerLeaveListener = (): void => pointerSink(null);
+  const pointerLeaveListener = (): void => {
+    setRule(null);
+    pointerSink(null);
+  };
   zr.on('mousemove', pointerListener);
   zr.on('globalout', pointerLeaveListener);
+  // Press anchors the rule at the exact press point (covering click-without-
+  // move) and pins the readout there; release anywhere clears the rule.
+  const onMouseDown = (event: MouseEvent): void => {
+    if (recentTouch()) return;
+    const px = event.clientX - el.getBoundingClientRect().left;
+    setRule(px);
+    pointerSink(tsAtX(px));
+  };
+  const onMouseUp = (): void => setRule(null);
+  el.addEventListener('mousedown', onMouseDown);
+  const win = el.ownerDocument.defaultView;
+  win?.addEventListener('mouseup', onMouseUp);
 
   const listener = (payload: unknown): void => {
     if (domain === null) return;
@@ -147,13 +270,27 @@ export function createChart(
     } else if (typeof part.start === 'number' && typeof part.end === 'number') {
       sink(percentToWindow(part.start, part.end, domain));
     }
+    // The axis may have moved under a held pointer — keep rule/markers aligned.
+    if (currentPx !== null) setRule(currentPx);
   };
   chart.on('datazoom', listener);
 
   return {
     setOption(option, nextDomain) {
       domain = nextDomain;
+      const list = (option as unknown as { series?: Array<{ name?: string; data?: unknown }> })
+        .series;
+      const pairs = (data: unknown): Array<[number, number]> =>
+        Array.isArray(data)
+          ? data.filter(
+              (d): d is [number, number] =>
+                Array.isArray(d) && typeof d[0] === 'number' && typeof d[1] === 'number'
+            )
+          : [];
+      evPoints = pairs(list?.find((s) => s.name === EV_SERIES_NAME)?.data);
+      homePoints = pairs(list?.find((s) => s.name === HOME_SERIES_NAME)?.data);
       chart.setOption(option, { notMerge: true });
+      if (currentPx !== null) setRule(currentPx); // data reloaded under a held pointer
     },
     applyWindow(win) {
       if (domain === null) return;
@@ -178,16 +315,22 @@ export function createChart(
       return chart.getWidth();
     },
     resize() {
+      setRule(null); // px anchors break across a resize; the readout re-syncs on move
       chart.resize();
     },
     dispose() {
       chart.off('datazoom', listener);
       zr.off('mousemove', pointerListener);
       zr.off('globalout', pointerLeaveListener);
+      el.removeEventListener('mousedown', onMouseDown);
+      win?.removeEventListener('mouseup', onMouseUp);
       el.removeEventListener('touchstart', onTouchStart, { capture: true });
       el.removeEventListener('touchmove', onTouchMove, { capture: true });
       el.removeEventListener('touchend', onTouchEnd, { capture: true });
       el.removeEventListener('touchcancel', onTouchEnd, { capture: true });
+      rule.remove();
+      evDot.remove();
+      homeDot.remove();
       chart.dispose();
     },
   };

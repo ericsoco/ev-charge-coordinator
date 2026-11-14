@@ -285,8 +285,10 @@
     cursor: pointer;
   }
 
-  /* ECharts needs an explicit box; width is the full container. */
+  /* ECharts needs an explicit box; width is the full container. The chart
+     element also anchors the view's down-only cursor rule overlay. */
   .chart {
+    position: relative;
     width: 100%;
     height: clamp(200px, 40vh, 360px);
   }
