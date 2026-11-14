@@ -49,6 +49,7 @@ beforeEach(() => {
       return Promise.resolve(ok(seriesPayload(metric)));
     }
     if (url.startsWith('/api/sessions')) return Promise.resolve(ok(sessionsPayload()));
+    if (url.startsWith('/api/messages')) return Promise.resolve(ok({ messages: [] }));
     return Promise.resolve(ok(payload()));
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -87,7 +88,9 @@ describe('app shell', () => {
       await screen.findByRole('img', { name: /state of charge over time/i })
     ).toBeDefined();
     await clickTab(/Messages/);
-    expect(screen.getByRole('main').textContent).toContain('P2 step 7');
+    expect(screen.getByRole('main').textContent).toContain('Messages');
+    // P2 step 7 renders the real list — stubbed empty here.
+    expect(await screen.findByText(/No notifications yet/)).toBeDefined();
     await clickTab(/Now/);
     expect(await screen.findByText('Home battery')).toBeDefined();
   });

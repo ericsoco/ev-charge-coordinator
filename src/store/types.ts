@@ -234,3 +234,54 @@ export interface NewDecision {
   filterResultsJson?: string | null;
   limitedBy?: string | null;
 }
+
+/**
+ * Notification event types — mirrored by the notifications.type CHECK (006)
+ * and pinned to notifiers/types.ts's NotificationEvent.type in tests (the
+ * per-event literals there drive discriminated-union narrowing).
+ */
+export type NotificationEventType =
+  | 'plug-in-detected'
+  | 'decision-made'
+  | 'charging-started'
+  | 'charging-stopped'
+  | 'session-retargeted'
+  | 'failure'
+  | 'test';
+
+/** One sent-notification row (Messages tab); title/body arrive rendered. */
+export interface NotificationRow {
+  id: number;
+  siteId: SiteId;
+  tsMs: number;
+  type: NotificationEventType;
+  /** Human headline (notifiers/format.ts notificationTitle). */
+  title: string;
+  /** Rendered detail (formatNotificationEvent) — what ntfy/Slack show. */
+  body: string;
+}
+
+export interface NewNotification {
+  tsMs: number;
+  type: NotificationEventType;
+  title: string;
+  body: string;
+}
+
+/** One device's browser push subscription (Web Push, P2 step 7). */
+export interface PushSubscriptionRow {
+  id: number;
+  siteId: SiteId;
+  /** Push-service endpoint URL — the device's identity (UNIQUE). */
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  createdTsMs: number;
+}
+
+export interface NewPushSubscription {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  createdTsMs: number;
+}

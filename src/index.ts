@@ -40,6 +40,8 @@ import { createAuthenticateCommand } from './commands/authenticate.js';
 import { createConfigCommand } from './commands/config.js';
 import { createPairTeslaKeyCommand } from './commands/pairTeslaKey.js';
 import { createNotifyCommand, type NotifyDeps } from './commands/notify.js';
+import { openStore, storePath } from './store/database.js';
+import { createNotificationRecorder } from './notifiers/record.js';
 
 const program = new Command();
 // Options bind to the command they follow (Commander positional mode) —
@@ -96,6 +98,16 @@ function buildNotifyDeps(): NotifyDeps {
     promptSecret,
     log: (message) => console.log(message),
     nowMs: () => Date.now(),
+    // A CLI test send lands in the Messages tab like any daemon event (the
+    // fanout isolates a failed write — open/insert/close never rejects it).
+    record: (event) => {
+      const db = openStore(storePath());
+      try {
+        createNotificationRecorder(db)(event);
+      } finally {
+        db.close();
+      }
+    },
   };
 }
 

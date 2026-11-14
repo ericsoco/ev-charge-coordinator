@@ -10,6 +10,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { HOME_SITE, type SessionStopReason, type SiteId } from '../store/types.js';
 import * as evStore from '../store/EvStore.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
+import * as notificationStore from '../store/NotificationStore.js';
 import * as sessionStore from '../store/SessionStore.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import { ApiError } from './ApiError.js';
@@ -189,8 +190,25 @@ export function readSessions(
   return { total: Number(totalRow.n), limit, offset, sessions };
 }
 
-/** Always empty until the notifications table lands (P2 step 7). */
-export function readMessages(): MessagesResponse {
-  return { messages: [] };
+/** Paged notification history, newest first (P2 step 7 — the Messages tab). */
+export const MESSAGES_DEFAULT_LIMIT = 200;
+export const MESSAGES_MAX_LIMIT = 500;
+
+export function readMessages(
+  db: DatabaseSync,
+  query: Record<string, unknown> = {},
+  siteId: SiteId = HOME_SITE
+): MessagesResponse {
+  const limit = intParamOr(query, 'limit', MESSAGES_DEFAULT_LIMIT);
+  if (limit < 1 || limit > MESSAGES_MAX_LIMIT) {
+    throw new ApiError(400, `limit must be between 1 and ${MESSAGES_MAX_LIMIT}`);
+  }
+  const offset = intParamOr(query, 'offset', 0);
+  if (offset < 0) throw new ApiError(400, 'offset must be >= 0');
+  // Strip siteId — the API contract is site-free (single-site today).
+  const rows = notificationStore.recentNotifications(db, { limit, offset }, siteId);
+  return {
+    messages: rows.map(({ id, tsMs, type, title, body }) => ({ id, tsMs, type, title, body })),
+  };
 }
 

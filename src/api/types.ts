@@ -107,9 +107,9 @@ export interface SessionsResponse {
 }
 
 /**
- * A future Messages-tab row (P2 step 7 lands the `notifications` table and
- * the notifier-fanout writes). Documented now so the app can bind to the
- * final shape; the list is empty until then.
+ * A GET /api/messages row (P2 step 7): a fanout-dispatched event as the
+ * Messages tab renders it. Title/body arrive pre-rendered by the server
+ * (notificationTitle + formatNotificationEvent — the ntfy/Slack line).
  */
 export interface ApiMessage {
   id: number;
@@ -122,7 +122,23 @@ export interface ApiMessage {
   body: string;
 }
 
-/** Mirror of GET /api/messages. */
+/** Mirror of GET /api/messages — paged, newest first. */
 export interface MessagesResponse {
   messages: ApiMessage[];
+}
+
+/** Mirror of GET /api/push/public-key. */
+export interface PushPublicKeyResponse {
+  publicKey: string;
+}
+
+/** POST /api/push/subscribe body — the stored PushSubscriptionJSON subset. */
+export interface PushSubscribeRequest {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+
+/** Mirror of POST /api/push/subscribe and POST /api/push/unsubscribe. */
+export interface PushAckResponse {
+  ok: true;
 }

@@ -28,12 +28,16 @@ import * as ev from '../../src/store/EvStore.js';
 import * as sessions from '../../src/store/SessionStore.js';
 import * as weather from '../../src/store/WeatherForecastStore.js';
 import * as decisions from '../../src/store/DecisionStore.js';
+import * as notifications from '../../src/store/NotificationStore.js';
+import * as pushSubs from '../../src/store/PushSubscriptionStore.js';
 import type {
   DecisionRow,
   EventRow,
   EvSampleRow,
   HomeBatterySampleRow,
   HomeEnergyCountersRow,
+  NotificationRow,
+  PushSubscriptionRow,
   SessionRow,
   WeatherForecastRow,
 } from '../../src/store/types.js';
@@ -110,6 +114,16 @@ const TABLES: {
       'site_id', 'vehicle_id', 'ts_ms', 'accepted', 'dry_run', 'reason_code',
     ],
   },
+  {
+    table: 'notifications',
+    columns: ['id', 'site_id', 'ts_ms', 'type', 'title', 'body'],
+    notNull: ['site_id', 'ts_ms', 'type', 'title', 'body'],
+  },
+  {
+    table: 'push_subscriptions',
+    columns: ['id', 'site_id', 'endpoint', 'p256dh', 'auth', 'created_ts_ms'],
+    notNull: ['site_id', 'endpoint', 'p256dh', 'auth', 'created_ts_ms'],
+  },
 ];
 
 /** The aliasing rule every store SELECT follows: snake_case → camelCase. */
@@ -157,6 +171,12 @@ const decisionFixture: DecisionRow = {
   sessionId: null, accepted: 0, dryRun: 0, reasonCode: 'dry_run',
   reasonDetail: null, filterResultsJson: null, limitedBy: null,
 };
+const notificationFixture: NotificationRow = {
+  id: 0, siteId: 'home', tsMs: 0, type: 'test', title: '', body: '',
+};
+const pushSubscriptionFixture: PushSubscriptionRow = {
+  id: 0, siteId: 'home', endpoint: '', p256dh: '', auth: '', createdTsMs: 0,
+};
 
 const FIXTURES: Record<string, readonly string[]> = {
   home_battery_samples: sortedKeys(homeSample),
@@ -166,6 +186,8 @@ const FIXTURES: Record<string, readonly string[]> = {
   sessions: sortedKeys(sessionFixture),
   weather_forecasts: sortedKeys(forecastFixture),
   decisions: sortedKeys(decisionFixture),
+  notifications: sortedKeys(notificationFixture),
+  push_subscriptions: sortedKeys(pushSubscriptionFixture),
 };
 
 let db: DatabaseSync;
@@ -207,6 +229,13 @@ describe('DDL pin (introspected vs the literal list)', () => {
         .run('manual_stop', id)
     ).toThrow(/CHECK constraint failed/);
   });
+
+  it('notifications.type rejects a value outside the CHECK enum', () => {
+    notifications.insertNotification(db, { tsMs: 1, type: 'test', title: 'x', body: 'y' });
+    expect(() =>
+      db.prepare("UPDATE notifications SET type = 'bogus-type'").run()
+    ).toThrow(/CHECK constraint failed/);
+  });
 });
 
 describe('interface pin (DDL columns ↔ row-interface keys)', () => {
@@ -234,6 +263,10 @@ describe('read pin (repository SELECTs ↔ interface keys)', () => {
       vehicleId: 'VIN', tsMs: 1, sessionId: 1, accepted: false, dryRun: true,
       reasonCode: 'dry_run',
     });
+    notifications.insertNotification(db, { tsMs: 1, type: 'test', title: 'x', body: 'y' });
+    pushSubs.upsertSubscription(db, {
+      endpoint: 'https://push.example/pin', p256dh: 'k', auth: 'a', createdTsMs: 1,
+    });
 
     const reads: [string, object | null][] = [
       ['home_battery_samples', homeBattery.latestSample(db)],
@@ -242,6 +275,8 @@ describe('read pin (repository SELECTs ↔ interface keys)', () => {
       ['sessions', sessions.openSessionFor(db, 'VIN')],
       ['weather_forecasts', weather.latestVintage(db)[0] ?? null],
       ['decisions', decisions.decisionForSession(db, 1)],
+      ['notifications', notifications.recentNotifications(db, { limit: 1, offset: 0 })[0] ?? null],
+      ['push_subscriptions', pushSubs.listSubscriptions(db)[0] ?? null],
     ];
     for (const [table, row] of reads) {
       expect(row, table).not.toBeNull();

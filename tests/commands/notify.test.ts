@@ -4,7 +4,7 @@
  * per behavior (the commander quirk: subcommand flags are exercised through
  * parseAsync, not just the functions).
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createNotifyCommand,
   runNotifyClear,
@@ -140,6 +140,13 @@ describe('runNotifyTest', () => {
     await expect(runNotifyTest(deps)).resolves.toBe(true);
     expect(calls).toEqual(['https://ntfy.sh/evcc-secret']);
     expect(state.logLines).toContain('✓ test notification sent to: ntfy');
+  });
+
+  it('records a successful test send through the record hook (Messages parity)', async () => {
+    const record = vi.fn();
+    const { deps } = fakeDeps({ record });
+    await expect(runNotifyTest(deps)).resolves.toBe(true);
+    expect(record).toHaveBeenCalledWith({ type: 'test', tsMs: 1_000 });
   });
 });
 

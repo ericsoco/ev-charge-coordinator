@@ -299,6 +299,16 @@ describe('CredentialStore - read API bearer token (P2 step 2)', () => {
     expect(await new mod.CredentialStore().ensureApiToken()).toBe(token);
   });
 
+  it('mints a VAPID keypair on first use and returns it thereafter (P2 step 7)', async () => {
+    const store = new mod.CredentialStore();
+    const keys = await store.ensureVapidKeys();
+    // URL-safe base64: 65-byte raw public point, 32-byte private value.
+    expect(keys.publicKey).toMatch(/^[A-Za-z0-9_-]{87}$/);
+    expect(keys.privateKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await store.ensureVapidKeys()).toEqual(keys);
+    expect(await new mod.CredentialStore().ensureVapidKeys()).toEqual(keys);
+  });
+
   it('merges alongside other credentials (notifiers/franklin intact)', async () => {
     const store = new mod.CredentialStore();
     await store.setFranklinCredentials('u', 'p', 'GW');

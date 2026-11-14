@@ -112,7 +112,8 @@
 ## P2 — graphical UX (active plan)
 
 > Status: **steps 1–5 complete (steps 1–4 on 2026-11-11, step 5 on 2026-11-13);
-> step 5b (session charging spans, decided 2026-11-13) next.**
+> step 7 complete (2026-11-14, jump-ahead). Next: step 5b (session charging
+> spans, decided 2026-11-13), then step 6.**
 > Design basis:
 > [requirements.md](./docs/requirements.md) 2026.Nov.07 entry, [design.md](./docs/design.md)
 > §3.9/§7 seams + §8, [charts-research.md](./docs/charts-research.md). Same discipline as
@@ -219,6 +220,8 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 7. **Messages + push** — `notifications` migration + write at the notifier fanout;
    Messages list; Web Push (VAPID keys, service worker, manifest). Verify iOS-PWA
    constraints before promising parity.
+   *(Branch `p2/step7-messages-push` — **complete 2026-11-14**, jumped ahead of
+   5b/6 per the user; details in the Log.)*
 8. **History depth** — retention + rollups + Franklin home-side backfill feeding the
    1-year zoom (the EV BSoC line starts at our own sampling — "if available" per the
    requirement). Absorbs Open item 5.
@@ -266,6 +269,69 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 ## Log
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
+
+### 2026-11-14 — P2 step 7 complete: Messages list + Web Push
+
+Branch `p2/step7-messages-push` (user-directed jump ahead — steps 5b and 6
+stay pending and are picked up next). **Shipped** (requirements 2c):
+
+- **Store (migration 006):** `notifications` (site/ts/type/title/body; a
+  `type` CHECK pinned to `NotificationEventType`, which is itself pinned to
+  `NotificationEvent['type']` at compile time in `record.test.ts`) and
+  `push_subscriptions` (UNIQUE endpoint — a re-subscription upserts rotated
+  keys, `created_ts_ms` survives) with `NotificationStore` /
+  `PushSubscriptionStore`; both wired into the three-way schema pin, the
+  `database.test` table list, and round-trip suites.
+- **Write at the fanout:** `createNotifierFanout` gained an optional `record`
+  hook that runs FIRST under the same isolation (a failed write logs
+  `[notify] record failed: …` and never blocks delivery). The daemon attaches
+  `createNotificationRecorder(db)`; `evcc notify test` passes one too, so CLI
+  test sends land in the tab exactly like daemon events. Title =
+  `notificationTitle()`, body = `formatNotificationEvent()` — the same line
+  ntfy/Slack ship. Semantics decided: a row = the fanout **dispatched** the
+  event (before per-client delivery — a failed ntfy post still appears;
+  per-client failures stay logged). The recorder and the webpush client are
+  always-on app channels, independent of the `notifiers: []` config.
+  `retention-prune` now prunes notifications at `retentionDays` too.
+- **API:** `GET /api/messages` real (newest-first; `limit` 1–500 default 200,
+  `offset`; envelope `{messages}` unchanged; `siteId` stripped); `GET
+  /api/push/public-key` backed by `credentialStore.ensureVapidKeys()`
+  (mint-on-first-use, lazy `web-push` import — same pattern as the API
+  token); `POST /api/push/subscribe` (upsert) + `POST /api/push/unsubscribe`
+  (idempotent) behind the same bearer auth. `express.json()` + a JSON error
+  middleware keep the /api contract JSON on malformed bodies; dev CORS now
+  allows POST. The ambient `express.d.ts` shim extended per its own header
+  (`post`, `json`, `Request.body`, `ErrorRequestHandler`). `docs/api.md`
+  rewritten: messages pagination, dispatch semantics, and a Web Push section
+  with the iOS caveat.
+- **Messages tab:** real newest-first list (local time · title · body rows;
+  30 s poll + focus refresh; skeleton / empty / error+retry / shared token
+  gate via `createApiLoader`), pure `messagesText.ts` helpers.
+- **Web Push:** `web-push` **v4** (ESM; **MPL-2.0 → new NOTICE entry**;
+  `@types/web-push` supplies types — no collision with the express shim) as a
+  `webpush` fanout target: payload `{title, body, type, tsMs, url}` identical
+  to the tab's row, 404/410 from the push service drops that subscription,
+  zero subscriptions = no keychain touch. Client side: `web/public/sw.js`
+  (showNotification with per-type tag, click → focus/open),
+  `manifest.webmanifest` (standalone), icons from a dependency-free
+  `web/scripts/generate-icons.mjs` (zlib PNG encoder; dark ground + amber
+  bolt; `npm run icons --workspace=evcc-web`), `index.html`
+  manifest/apple-touch-icon/theme-color links, and `web/src/lib/push.ts` —
+  `pushSupport()` classification plus an injectable `PushPlatform`
+  enable/disable flow (permission prompt always from a click handler).
+- **iOS-PWA verification (the step's checklist item):** confirmed against
+  WebKit's announcement — Web Push requires **iOS/iPadOS 16.4+** and works
+  only for the app **added to the Home Screen** (standalone), with the
+  permission prompt tied to a direct user gesture; desktop-UA iPads are
+  detected via `maxTouchPoints`. The tab shows Add-to-Home-Screen guidance in
+  that context instead of the button — **parity for plain Safari tabs is
+  explicitly not promised** (also recorded in docs/api.md).
+- Gate: `npm run check` green — root **1078 passed / 3 skipped** (was 1053/3
+  on step 5's post-rebase run; +25), web **168/168** (+18), svelte-check 0/0.
+  `web/dist` rebuilt; icons decode under `file`/`sips`.
+- Live validation pending the user: enable push on phone + desktop over
+  Tailscale (HTTPS ✓), `evcc notify test` → tab row + push delivery, and the
+  iOS Add-to-Home-Screen flow on the iPhone.
 
 ### 2026-11-14 — PR #86 (P2 step 5) landed manually (GitHub mergeability flake)
 
