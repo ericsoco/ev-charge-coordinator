@@ -240,6 +240,29 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-13 (3) — Then chart: hide session edge lines at wide zoom
+
+Branch `fix/bsoc-hide-session-edges-wide-zoom` (user request): the dashed
+session start/end `markLine`s clutter the chart when zoomed out, so they now
+render only when the visible span is ≤ 1 week; the tinted `markArea` bands
+stay at every zoom.
+
+- Pure rule in `bsocChart.ts`: `SESSION_EDGE_MAX_SPAN_MS` (1 week) +
+  `sessionEdgesVisible(visible)`; `buildBsocOption` emits session `markLine`
+  data only when the predicate holds (empty otherwise).
+- `Then.svelte`: the option is otherwise only rebuilt on data loads, so a
+  zoom that crosses the week threshold without a refetch would leave stale
+  lines — the debounced zoom callback (300 ms) now rebuilds the option when
+  `sessionEdgesVisible` flips, riding the debounce so it never rebuilds
+  mid-gesture. `edgesVisible` tracks the flag baked into the last option.
+- Tests (`web/tests/bsoc.test.ts`, +3): predicate boundary (7 d shown,
+  > 7 d hidden), option pins (empty markLine + intact band at 8 d span;
+  both edge lines at exactly 7 d).
+
+Gate: `npm run check` green on `main` (258c937, post-rebase) — root **1054
+passed / 2 skipped**, web **92/92** (bsoc 66), svelte-check 0/0.
+
+
 ### 2026-11-13 (2) — Then chart: zoom-refetch 400 + touch readout
 
 Branch `fix/then-zoom-400-touch-readout` — both `docs/TODO.md` "CURRENT
