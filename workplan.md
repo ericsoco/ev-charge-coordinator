@@ -73,6 +73,13 @@
   `initializeVehicle()`, never `ctx.ev`/`services.ev`); the same preference
   applies to any existing `ev*` renames decided then. The bounds seam itself
   already landed (Log, 2026-11-06).
+- **Demo/remote access (decided 2026-11-13): Tailscale Serve** —
+  `tailscale serve --bg 3002`, tailnet-only, verified live (Log, same date).
+  Tailscale **Funnel** only for ephemeral no-install demo links (enable for the
+  demo, `off` right after). This settles neither the ntfy VPS-vs-tunnel decision
+  nor Phase-3 hosting; it's a transport choice, reversible with
+  `tailscale serve reset`. Options analysis (DreamHost shared cannot host
+  persistent processes, VPS paths, costs): `docs/hosting-research.md`.
 
 ## Open items carried from Phase 1
 
@@ -124,6 +131,8 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
   appropriate adapter if a real need appears.
 - **Hosting/access: Cloudflare Tunnel** — HTTPS everywhere (secure context for
   service workers + push), phone reaches home from anywhere, no origin move, free.
+  *(2026-11-13: interim access runs on **Tailscale Serve** instead — tailnet-only,
+  verified live; see Log. Tunnel plan unchanged for a future public origin.)*
 - **Auth: shared bearer token**, stored per device.
 - **Push: in-app Web Push (VAPID** + service worker + manifest/PWA); ntfy stays the
   CLI/daemon notifier (the queued self-hosted ntfy plan is untouched by this).
@@ -230,6 +239,28 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 ## Log
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
+
+### 2026-11-13 — demo access via Tailscale Serve (live-verified)
+
+Branch `docs/tailscale-demo-access`. Immediate goal: show the WIP web app off-LAN
+with ~no setup, without DNS/email moves. User executed setup steps 1–5 (Tailscale
+on Mac + phone, same tailnet; `tailscale serve --bg 3002`; phone verified);
+agent executed the verification matrix below. **No code changes** — the web client
+fetches relatively (`/api/…`) and the server ignores `Host`, so same-origin holds
+under any hostname.
+
+- Serve config: `https://socobook-2025.taile3f535.ts.net (tailnet only)` →
+  `proxy http://127.0.0.1:3002` (API + `web/dist`); `--bg` persists across reboots.
+- Verification (2026-11-13, all pass): loopback `/api/now` no token → **401**;
+  `web/dist/index.html` present (476 B); `tailscale status` node online;
+  HTTPS `GET /` → **200** real app shell (hashed assets — not the placeholder);
+  HTTPS `GET /api/now` no token → **401**; with `evcc api-token` bearer →
+  **200** live JSON (vehicle 21% / battery 24%, fresh sample ages).
+- Caveats: availability = Mac awake + Tailscale connected (daemon `caffeinate -is`
+  covers idle sleep, not lid-close); free plan ≤ 6 users; viewer devices need the
+  Tailscale app (or Funnel for a bare link); serve/funnel share the port — last
+  command wins (`serve --bg 3002` restores private). Rollback:
+  `tailscale serve reset`.
 
 ### 2026-11-11 — `dev:webhost` script added (LAN testing)
 
