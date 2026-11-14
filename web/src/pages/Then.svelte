@@ -31,7 +31,6 @@
     panMsFor,
     readoutAt,
     sampleAtOrBefore,
-    sessionEdgesVisible,
     spanOf,
     zoomAt,
     zoomFactorFor,
@@ -190,8 +189,8 @@
   let boundEl: HTMLDivElement | null = null;
   /** The window the user is looking at; preserved across refetches. */
   let lastVisible: TimeWindow | null = null;
-  /** Session-edge visibility baked into the last built option (see sessionEdgesVisible). */
-  let edgesVisible: boolean | null = null;
+  /** Window + width of the last applied option (see rebuildOption). */
+  let optionKey = '';
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let observer: ResizeObserver | null = null;
 
@@ -207,20 +206,31 @@
     hoverTs = tsMs;
   }
 
+  /**
+   * Rebuild + re-apply the full option from the current data/window/width.
+   * The tick set and session-edge lines derive from the window, so pan/zoom
+   * calls this too (debounced via scheduleRefresh); `force` re-applies for
+   * fresh data even when the window/width are unchanged. The key guard keeps
+   * a setOption-echoed datazoom event from looping rebuilds.
+   */
+  function rebuildOption(force = false): void {
+    const current = loader.state.data;
+    if (view === null || current === null || lastVisible === null) return;
+    const key = `${lastVisible.from}:${lastVisible.to}:${view.width()}`;
+    if (!force && key === optionKey) return;
+    optionKey = key;
+    view.setOption(buildBsocOption(current, lastVisible, domain, Date.now(), view.width()), domain);
+  }
+
   function scheduleRefresh(): void {
     if (refreshTimer !== null) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
       refreshTimer = null;
       const current = loader.state.data;
       if (current === null || lastVisible === null) return;
-      // Session-edge visibility is baked into the option; when the zoom span
-      // crosses the week threshold without a refetch, rebuild (debounced, so
-      // never mid-gesture) to add/remove the start/end lines.
-      const edges = sessionEdgesVisible(lastVisible);
-      if (view !== null && edges !== edgesVisible) {
-        edgesVisible = edges;
-        view.setOption(buildBsocOption(current, lastVisible, domain, Date.now()), domain);
-      }
+      // The window changed under a pan/zoom gesture — re-derive the baked-in
+      // ticks/edges (debounced, so never mid-gesture).
+      rebuildOption();
       if (!needsRefetch(lastVisible, current.bounds, domain)) return;
       requested = fetchWindowFor(lastVisible, domain);
       void loader.refresh();
@@ -280,14 +290,17 @@
       view = createChart(el, handleZoomWindow);
       if (view === null) return;
       el.addEventListener('wheel', onWheel, { passive: false, capture: true });
-      observer = new ResizeObserver(() => view?.resize());
+      // The tick interval derives from the chart width — rebuild on resize too.
+      observer = new ResizeObserver(() => {
+        view?.resize();
+        rebuildOption();
+      });
       observer.observe(el);
     }
     lastVisible = lastVisible === null ? current.bounds : clampWindow(lastVisible, domain);
     view.onDataZoom(handleZoomWindow);
     view.onPointerMove(handlePointerMove);
-    view.setOption(buildBsocOption(current, lastVisible, domain, Date.now()), domain);
-    edgesVisible = sessionEdgesVisible(lastVisible);
+    rebuildOption(true);
   });
 
   onMount(() => {

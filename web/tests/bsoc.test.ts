@@ -31,7 +31,11 @@ import {
   spanOf,
   touchReadout,
   windowToPercent,
+  X_TICK_EDGE_MARGIN_PX,
+  X_TICK_MIN_GAP_PX,
   X_TICK_MIN_INTERVAL_MS,
+  xTickStepMs,
+  xTicksMs,
   zoomAt,
   zoomFactorFor,
   type BsocData,
@@ -311,7 +315,6 @@ describe('formatXTick', () => {
     expect(formatXTick(ts(8, 0))).toBe('8am');
     expect(formatXTick(ts(9, 0))).toBe('9am');
     expect(formatXTick(ts(23, 0))).toBe('11pm');
-    expect(formatXTick(ts(0, 0))).toBe('12am');
     expect(formatXTick(ts(12, 0))).toBe('12pm');
   });
 
@@ -320,6 +323,114 @@ describe('formatXTick', () => {
     expect(formatXTick(ts(8, 5))).toBe('8:05am');
     expect(formatXTick(ts(23, 45))).toBe('11:45pm');
     expect(formatXTick(ts(0, 15))).toBe('12:15am');
+  });
+
+  it('renders zero-padded MMM-DD at day boundaries (midnight ticks)', () => {
+    expect(formatXTick(ts(0, 0))).toBe('Nov-12');
+    expect(formatXTick(new Date(2026, 10, 2, 0, 0).getTime())).toBe('Nov-02');
+    expect(formatXTick(new Date(2026, 11, 31, 0, 0).getTime())).toBe('Dec-31');
+    expect(formatXTick(new Date(2027, 0, 1, 0, 0).getTime())).toBe('Jan-01');
+    // A non-zero sub-minute component is not a day boundary.
+    expect(formatXTick(new Date(2026, 10, 12, 0, 0, 0, 1).getTime())).toBe('12am');
+  });
+});
+
+describe('xTickStepMs', () => {
+  it('takes the smallest tick step clearing the pixel floor', () => {
+    // 1 d on 350 px → 5.5 h desired → the 6 h step.
+    expect(xTickStepMs(DAY, 350)).toBe(6 * HOUR);
+    // 1 d on 800 px → 2.4 h desired → the 4 h step.
+    expect(xTickStepMs(DAY, 800)).toBe(4 * HOUR);
+    // 8 d on 800 px → 19.2 h desired → the 1 d step.
+    expect(xTickStepMs(8 * DAY, 800)).toBe(DAY);
+  });
+
+  it('never goes below the X_TICK_MIN_INTERVAL_MS time floor', () => {
+    expect(xTickStepMs(2 * HOUR, 2560)).toBe(30 * MINUTE);
+  });
+
+  it('grows the step as the chart narrows (pixel floor, not time floor)', () => {
+    const wide = xTickStepMs(DAY, 1400);
+    const narrow = xTickStepMs(DAY, 350);
+    expect(narrow).toBeGreaterThan(wide);
+  });
+
+  it('falls back to the time floor when the width is unusable', () => {
+    expect(xTickStepMs(DAY, 0)).toBe(30 * MINUTE);
+    expect(xTickStepMs(DAY, -5)).toBe(30 * MINUTE);
+  });
+
+  it('clears both floors for any span/width', () => {
+    for (const spanMs of [2 * HOUR, DAY, 30 * DAY, 365 * DAY]) {
+      for (const widthPx of [200, 350, 800, 1400, 2560]) {
+        const step = xTickStepMs(spanMs, widthPx);
+        expect(step).toBeGreaterThanOrEqual(X_TICK_MIN_INTERVAL_MS);
+        expect(step).toBeGreaterThanOrEqual((spanMs * X_TICK_MIN_GAP_PX) / widthPx);
+      }
+    }
+  });
+});
+
+describe('xTicksMs', () => {
+  /** Local-time window helpers so expectations hold in any TZ. */
+  const at = (y: number, mo: number, d: number, h = 0, mi = 0): number =>
+    new Date(y, mo, d, h, mi).getTime();
+
+  it('lands day-or-coarser steps on local midnights (so labels read MMM-DD)', () => {
+    // 5.5 d on 800 px → 13.2 h desired → the 1 d step: one tick per midnight
+    // in range (the window's own edges are not midnights).
+    const visible = { from: at(2026, 10, 10, 3), to: at(2026, 10, 15, 15) };
+    const ticks = xTicksMs(visible, 800);
+    expect(ticks.map((t) => formatXTick(t))).toEqual([
+      'Nov-11',
+      'Nov-12',
+      'Nov-13',
+      'Nov-14',
+      'Nov-15',
+    ]);
+  });
+
+  it('lands sub-day steps on round local times', () => {
+    // 2 h on 800 px → the 30 min floor: ticks on :00/:30.
+    const visible = { from: at(2026, 10, 12, 8, 7), to: at(2026, 10, 12, 10, 7) };
+    const ticks = xTicksMs(visible, 800);
+    expect(ticks.map((t) => formatXTick(t))).toEqual(['8:30am', '9am', '9:30am', '10am']);
+  });
+
+  it('keeps consecutive ticks at least X_TICK_MIN_GAP_PX apart', () => {
+    for (const [from, to] of [
+      [at(2026, 10, 10, 0), at(2026, 10, 10, 2)],
+      [at(2026, 10, 10, 0), at(2026, 10, 11, 0)],
+      [at(2026, 10, 10, 0), at(2026, 10, 13, 0)],
+      [at(2026, 10, 10, 0), at(2026, 11, 9, 0)],
+    ]) {
+      for (const widthPx of [350, 800, 1400]) {
+        const visible = { from, to };
+        const ticks = xTicksMs(visible, widthPx);
+        for (let i = 1; i < ticks.length; i++) {
+          const gapPx = ((ticks[i] - ticks[i - 1]) / spanOf(visible)) * widthPx;
+          expect(gapPx).toBeGreaterThanOrEqual(X_TICK_MIN_GAP_PX);
+        }
+      }
+    }
+  });
+
+  it('drops ticks within X_TICK_EDGE_MARGIN_PX of either edge', () => {
+    const visible = { from: at(2026, 10, 12, 0, 15), to: at(2026, 10, 12, 23, 45) };
+    const ticks = xTicksMs(visible, 800);
+    const marginMs = (spanOf(visible) * X_TICK_EDGE_MARGIN_PX) / 800;
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const t of ticks) {
+      expect(t - visible.from).toBeGreaterThanOrEqual(marginMs);
+      expect(visible.to - t).toBeGreaterThanOrEqual(marginMs);
+    }
+  });
+
+  it('anchors the grid globally so panning does not slide the ticks', () => {
+    const a = xTicksMs({ from: at(2026, 10, 10, 0), to: at(2026, 10, 12, 0) }, 800);
+    const b = xTicksMs({ from: at(2026, 10, 11, 0), to: at(2026, 10, 13, 0) }, 800);
+    const shared = a.filter((t) => b.includes(t));
+    expect(shared.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -495,6 +606,8 @@ describe('sessionEdgesVisible', () => {
 
 describe('buildBsocOption (requirements 2b)', () => {
   const NOW = T0 + 20 * HOUR;
+  /** Chart width passed to the option builder (tick spacing is pixel-based). */
+  const WIDTH = 800;
   /** The DOMAIN — the axis extent and dataZoom percent base. */
   const DOMAIN: TimeWindow = { from: T0, to: T0 + DAY };
   /** Structural view of the option — ECharts types are deliberately loose. */
@@ -507,10 +620,13 @@ describe('buildBsocOption (requirements 2b)', () => {
       type?: string;
       min?: number;
       max?: number;
-      minInterval?: number;
       axisLine?: { show?: boolean };
-      axisTick?: { length?: number; lineStyle?: { color?: string } };
-      axisLabel?: { color?: string; formatter?: (value: unknown) => string };
+      axisTick?: { length?: number; lineStyle?: { color?: string }; customValues?: number[] };
+      axisLabel?: {
+        color?: string;
+        customValues?: number[];
+        formatter?: (value: unknown) => string;
+      };
     };
     yAxis?: {
       min?: number;
@@ -549,7 +665,8 @@ describe('buildBsocOption (requirements 2b)', () => {
       { ...base, ev: { ...base.ev, points: evPoints } },
       visible,
       DOMAIN,
-      NOW
+      NOW,
+      WIDTH
     ) as unknown as OptionShape;
   };
 
@@ -567,9 +684,11 @@ describe('buildBsocOption (requirements 2b)', () => {
     expect(opt.tooltip).toBeUndefined();
   });
 
-  it('spaces x ticks by X_TICK_MIN_INTERVAL_MS and styles axis labels', () => {
+  it('renders x ticks at the xTicksMs positions and styles axis labels', () => {
     const opt = option([]);
-    expect(opt.xAxis?.minInterval).toBe(X_TICK_MIN_INTERVAL_MS);
+    const ticks = xTicksMs(BOUNDS, WIDTH);
+    expect(opt.xAxis?.axisTick?.customValues).toEqual(ticks);
+    expect(opt.xAxis?.axisLabel?.customValues).toEqual(ticks);
     expect(opt.xAxis?.axisLabel?.color).toBe(AXIS_LABEL_COLOR);
     expect(opt.yAxis?.axisLabel?.color).toBe(AXIS_LABEL_COLOR);
   });
@@ -579,7 +698,7 @@ describe('buildBsocOption (requirements 2b)', () => {
     expect(opt.xAxis?.axisLine?.show).toBe(false);
     expect(opt.yAxis?.axisLine?.show).toBe(false);
     const tick = { length: AXIS_TICK_LENGTH, lineStyle: { color: AXIS_LABEL_COLOR } };
-    expect(opt.xAxis?.axisTick).toEqual(tick);
+    expect(opt.xAxis?.axisTick).toEqual({ ...tick, customValues: xTicksMs(BOUNDS, WIDTH) });
     expect(opt.yAxis?.axisTick).toEqual(tick);
   });
 
@@ -597,7 +716,7 @@ describe('buildBsocOption (requirements 2b)', () => {
       ...base,
       bounds: { from: T0 + 2 * HOUR, to: T0 + 3 * HOUR },
     };
-    const opt = buildBsocOption(loadedElsewhere, BOUNDS, DOMAIN, NOW) as unknown as OptionShape;
+    const opt = buildBsocOption(loadedElsewhere, BOUNDS, DOMAIN, NOW, WIDTH) as unknown as OptionShape;
     expect(opt.xAxis).toMatchObject({ min: DOMAIN.from, max: DOMAIN.to });
   });
 
@@ -666,7 +785,7 @@ describe('buildBsocOption (requirements 2b)', () => {
   it('hides session edge markLines at spans wider than a week, keeping the bands', () => {
     const wideDomain: TimeWindow = { from: T0, to: T0 + 30 * DAY };
     const wide: TimeWindow = { from: T0, to: T0 + 8 * DAY };
-    const opt = buildBsocOption(data([session()]), wide, wideDomain, NOW) as unknown as OptionShape;
+    const opt = buildBsocOption(data([session()]), wide, wideDomain, NOW, WIDTH) as unknown as OptionShape;
     const markers = opt.series?.find((s) => s.name === 'Sessions');
     expect(markers?.markLine?.data).toEqual([]);
     expect(markers?.markArea?.data).toEqual([
@@ -677,7 +796,7 @@ describe('buildBsocOption (requirements 2b)', () => {
   it('keeps session edge markLines at a visible span of exactly one week', () => {
     const wideDomain: TimeWindow = { from: T0, to: T0 + 30 * DAY };
     const week: TimeWindow = { from: T0, to: T0 + 7 * DAY };
-    const opt = buildBsocOption(data([session()]), week, wideDomain, NOW) as unknown as OptionShape;
+    const opt = buildBsocOption(data([session()]), week, wideDomain, NOW, WIDTH) as unknown as OptionShape;
     const markers = opt.series?.find((s) => s.name === 'Sessions');
     expect(
       markers?.markLine?.data?.map((m) => ('xAxis' in m ? m.xAxis : null))

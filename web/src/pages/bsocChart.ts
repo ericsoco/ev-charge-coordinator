@@ -55,6 +55,13 @@ export const AXIS_TICK_LENGTH = 2.5;
  * space them wider at coarse zoom levels, never closer than this).
  */
 export const X_TICK_MIN_INTERVAL_MS = 30 * 60 * 1000;
+/**
+ * Floor on the spacing between x-axis ticks in pixels. Tick density is a
+ * pixel phenomenon — the same time span crowds on a narrower chart — so this
+ * floor wins over X_TICK_MIN_INTERVAL_MS whenever the two disagree. Tweak
+ * here: larger = fewer, more widely spaced ticks.
+ */
+export const X_TICK_MIN_GAP_PX = 80;
 
 export interface TimeWindow {
   from: number;
@@ -230,11 +237,16 @@ export function formatBsocValue(value: number | null): string {
 }
 
 /**
- * X-axis tick label: local `(H)H(:MM) am/pm` — no leading zero, no trailing
- * `:00` (e.g. `8am`, `8:30am`, `11pm`); `12am`/`12pm` at midnight/noon.
+ * X-axis tick label: local `MMM-DD` at day boundaries (e.g. `Nov-12` — wide
+ * zooms space ticks at midnights, so dates appear exactly where the tick
+ * spacing is a day or more), local `(H)H(:MM) am/pm` otherwise — no leading
+ * zero, no trailing `:00` (e.g. `8am`, `8:30am`, `11pm`); `12pm` at noon.
  */
 export function formatXTick(tsMs: number): string {
   const d = new Date(tsMs);
+  if (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0) {
+    return `${MONTH_ABBRS[d.getMonth()]}-${String(d.getDate()).padStart(2, '0')}`;
+  }
   const hour12 = d.getHours() % 12 || 12;
   const suffix = d.getHours() < 12 ? 'am' : 'pm';
   const minutes = d.getMinutes();
@@ -387,6 +399,87 @@ export function evGapLine(
   return { solid, dashed };
 }
 
+/** Keep x tick labels this far from the chart's left/right edges (px) so they
+ * never clip the canvas; ticks closer than this are dropped.
+ */
+export const X_TICK_EDGE_MARGIN_PX = 30;
+
+/**
+ * The tick steps the x axis snaps to — rounded up to the next rung so the
+ * rendered spacing always clears both floors. Every rung is a whole number of
+ * days or a whole fraction of one, so the grid lands on round local times.
+ */
+const TICK_STEP_LADDER_MS = [
+  30 * 60 * 1000,
+  60 * 60 * 1000,
+  2 * 60 * 60 * 1000,
+  4 * 60 * 60 * 1000,
+  6 * 60 * 60 * 1000,
+  12 * 60 * 60 * 1000,
+  24 * 60 * 60 * 1000,
+  2 * 24 * 60 * 60 * 1000,
+  4 * 24 * 60 * 60 * 1000,
+  7 * 24 * 60 * 60 * 1000,
+  16 * 24 * 60 * 60 * 1000,
+  30 * 24 * 60 * 60 * 1000,
+  60 * 24 * 60 * 60 * 1000,
+  90 * 24 * 60 * 60 * 1000,
+  180 * 24 * 60 * 60 * 1000,
+  365 * 24 * 60 * 60 * 1000,
+];
+
+/**
+ * The x tick step for a `spanMs`-wide view on a `widthPx`-wide chart: the
+ * smallest step whose pixel spacing clears X_TICK_MIN_GAP_PX, never below
+ * X_TICK_MIN_INTERVAL_MS (a non-positive `widthPx` falls back to the time
+ * floor alone).
+ */
+export function xTickStepMs(spanMs: number, widthPx: number): number {
+  const pixelFloorMs = widthPx > 0 ? (spanMs * X_TICK_MIN_GAP_PX) / widthPx : 0;
+  const desired = Math.max(X_TICK_MIN_INTERVAL_MS, pixelFloorMs);
+  return (
+    TICK_STEP_LADDER_MS.find((rung) => rung >= desired) ??
+    TICK_STEP_LADDER_MS[TICK_STEP_LADDER_MS.length - 1]
+  );
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The x ticks for a `visible` window on a `widthPx`-wide chart: a calendar
+ * grid at xTickStepMs spacing — day steps land on local midnights (a global
+ * day-index grid), sub-day steps on midnight-anchored round local times —
+ * excluding ticks within X_TICK_EDGE_MARGIN_PX of either edge. Rendered via
+ * ECharts' `axisTick/axisLabel.customValues`: exact positions, none of the
+ * nice-tick level interleave that crowds labels in pixels.
+ */
+export function xTicksMs(visible: TimeWindow, widthPx: number): number[] {
+  const step = xTickStepMs(spanOf(visible), widthPx);
+  const marginMs = widthPx > 0 ? (spanOf(visible) * X_TICK_EDGE_MARGIN_PX) / widthPx : 0;
+  const lo = visible.from + marginMs;
+  const hi = visible.to - marginMs;
+  const stepDays = step % DAY_MS === 0 ? step / DAY_MS : 0;
+  const out: number[] = [];
+  const push = (t: number): void => {
+    if (t >= lo && t <= hi) out.push(t);
+  };
+  const day = new Date(visible.from);
+  day.setHours(0, 0, 0, 0);
+  while (day.getTime() <= visible.to) {
+    const next = new Date(day);
+    next.setDate(next.getDate() + 1);
+    if (stepDays > 0) {
+      // Whole-day rungs: a global day-index grid keeps ticks put while panning.
+      const dayIndex = Math.round(Date.UTC(day.getFullYear(), day.getMonth(), day.getDate()) / DAY_MS);
+      if (dayIndex % stepDays === 0) push(day.getTime());
+    } else {
+      for (let t = day.getTime(); t < next.getTime(); t += step) push(t);
+    }
+    day.setDate(day.getDate() + 1);
+  }
+  return out;
+}
+
 /**
  * The full chart option: dual BSoC lines over one time axis spanning the
  * DOMAIN (the visible window rides the dataZoom), inside dataZoom clamped to
@@ -399,9 +492,11 @@ export function buildBsocOption(
   data: BsocData,
   visible: TimeWindow,
   domain: TimeWindow,
-  nowMs: number
+  nowMs: number,
+  widthPx: number
 ): EChartsCoreOption {
   const pct = windowToPercent(visible, domain);
+  const ticks = xTicksMs(visible, widthPx);
   const evGaps = evGapLine(
     data.ev.points,
     EV_GAP_RATIO * data.ev.bucketMs,
@@ -432,15 +527,21 @@ export function buildBsocOption(
       // ride past loaded data (lazy loading refetches it promptly).
       min: domain.from,
       max: domain.to,
-      // Tick look: spacing floor + label style/format — tweak
-      // X_TICK_MIN_INTERVAL_MS, AXIS_TICK_LENGTH, and AXIS_LABEL_COLOR at the
-      // top of this module.
-      minInterval: X_TICK_MIN_INTERVAL_MS,
+      // Tick look: spacing + label style/format — tweak X_TICK_MIN_INTERVAL_MS,
+      // X_TICK_MIN_GAP_PX, X_TICK_EDGE_MARGIN_PX, AXIS_TICK_LENGTH, and
+      // AXIS_LABEL_COLOR at the top of this module. Ticks render at exactly
+      // `customValues` (the xTicksMs calendar grid); ECharts' own nice ticks
+      // interleave levels too closely in pixels.
       // No bottom axis line; half-length ticks in the label color.
       axisLine: { show: false },
-      axisTick: { length: AXIS_TICK_LENGTH, lineStyle: { color: AXIS_LABEL_COLOR } },
+      axisTick: {
+        length: AXIS_TICK_LENGTH,
+        lineStyle: { color: AXIS_LABEL_COLOR },
+        customValues: ticks,
+      },
       axisLabel: {
         color: AXIS_LABEL_COLOR,
+        customValues: ticks,
         formatter: (value: unknown) => formatXTick(Number(value)),
       },
     },
