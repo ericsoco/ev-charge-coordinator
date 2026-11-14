@@ -56,8 +56,19 @@ async function apiGet<T>(path: string): Promise<T> {
     headers: token === null ? {} : { Authorization: `Bearer ${token}` },
   });
   if (response.status === 401) throw new AuthError('API token missing or invalid');
-  if (!response.ok) throw new Error(`read API responded ${response.status}`);
+  if (!response.ok) throw new Error(await failureMessage(response));
   return (await response.json()) as T;
+}
+
+/** Status line plus the server's {error} text when the body carries one. */
+async function failureMessage(response: Response): Promise<string> {
+  const base = `read API responded ${response.status}`;
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === 'string' ? `${base}: ${body.error}` : base;
+  } catch {
+    return base;
+  }
 }
 
 /** GET /api/now. */
@@ -71,7 +82,13 @@ export async function fetchSeries(
   fromMs: number,
   toMs: number
 ): Promise<SeriesResult> {
-  const query = new URLSearchParams({ metric, from: String(fromMs), to: String(toMs) });
+  // dataZoom windows are fractional (percent→time math); the API takes
+  // integer epoch ms and 400s on anything else.
+  const query = new URLSearchParams({
+    metric,
+    from: String(Math.round(fromMs)),
+    to: String(Math.round(toMs)),
+  });
   return apiGet<SeriesResult>(`/api/series?${query}`);
 }
 
