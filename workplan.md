@@ -672,7 +672,9 @@ option pins (minInterval/color wiring, formatter output) — `web/tests/bsoc.tes
 Known limitation: at multi-day+ zoom the formatter still emits time-only labels
 (e.g. `12am` at midnight ticks) per the spec; if the wide view needs dates,
 extend `formatXTick` (or make it span-aware). Gate: `npm run check` green —
-root 1054 passed / 2 skipped, web 81/81, svelte-check 0/0.
+root 1054 passed / 2 skipped, web 81/81, svelte-check 0/0. Re-validated after
+merging `origin/main` (incl. `fix/then-zoom-400-touch-readout`, auto-merge no
+conflicts): web 89/89.
 
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
