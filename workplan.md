@@ -812,6 +812,48 @@ root 1054 passed / 2 skipped, web 81/81, svelte-check 0/0. Re-validated after
 merging `origin/main` (incl. `fix/then-zoom-400-touch-readout`, auto-merge no
 conflicts): web 89/89.
 
+### 2026-11-13 (2) — Then chart: MMM-DD tick labels at wide zoom + pixel-based tick spacing
+
+Branch `fix/chart-tick-labels-spacing` — user report on the axis-ticks change
+above: (a) tick labels no longer show MMM-DD, only time of day (the entry's
+known limitation, confirmed as a bug), (b) ticks can still crowd — "in pixels,
+not in time". Fixes both; the known limitation above is resolved.
+
+- **Labels** (`formatXTick`): `MMM-DD` (e.g. `Nov-12`, zero-padded) at day
+  boundaries — wide-zoom tick grids land on midnights, so dates appear exactly
+  where the spacing is a day or more; `(H)H(:MM) am/pm` otherwise. The old
+  `12am` midnight case is replaced (midnight IS the date case); separator is a
+  one-line tweak in `formatXTick` if `MMM DD` is preferred.
+- **Spacing** is now pixel-based: `xTickStepMs(spanMs, widthPx)` picks the
+  smallest rung of a step ladder (30 min … 365 d) clearing both
+  `X_TICK_MIN_GAP_PX` (80 px, new knob) and `X_TICK_MIN_INTERVAL_MS` (30 min
+  time floor, kept); `xTicksMs(visible, widthPx)` places that step on a
+  calendar grid (day+ rungs on local midnights via a global day-index anchor so
+  panning never slides ticks; sub-day rungs on midnight-anchored round local
+  times) and drops ticks within `X_TICK_EDGE_MARGIN_PX` (30 px) of the window
+  edges so labels never clip the canvas. New knobs sit with the old ones at the
+  top of `bsocChart.ts`.
+- **Rendering** uses ECharts' public `axisTick/axisLabel.customValues` (exact
+  tick positions) instead of `xAxis.minInterval`. Empirical probes against
+  echarts 6.1.0's `TimeScale` showed its nice ticks cannot honor a pixel
+  floor: multi-level interleave (month ticks against the day grid → 1-day
+  gaps ≈ 28 px at 30 d/800 px) and "span overflow" phantom ticks leak into
+  the tick set; `minInterval` is only a rough guide (its interval buckets
+  round down at boundaries). `buildBsocOption` gained `widthPx`;
+  `Then.svelte` passes `view.width()` and rebuilds the option after every
+  debounced pan/zoom gesture and on resize (option-key guard keeps a
+  setOption-echoed datazoom event from looping rebuilds). Mid-gesture the tick
+  set derives from the previous window and snaps on settle (same staleness
+  class as the old minInterval approach).
+- Tests (`web/tests/bsoc.test.ts`): `formatXTick` midnight → `MMM-DD` (the
+  `12am` pin moved to the sub-minute case), 5 `xTickStepMs`, 5 `xTicksMs`
+  (midnight grid labels, sub-day round times, ≥80 px gap matrix over
+  spans×widths, edge margin, global-anchor stability), option pins on
+  `customValues` wiring. Gate: `npm run check` green — root 1053 passed /
+  3 skipped, web 114/114, svelte-check 0/0. Render-level verification
+  (throwaway jsdom + SVG-renderer probe): labels land exactly at
+  `customValues`, no scale-tick leakage.
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"
