@@ -39,6 +39,7 @@ import {
   zoomAt,
   zoomFactorFor,
   type BsocData,
+  type SeriesVisibility,
   type TimeWindow,
   type TouchPhase,
 } from '../src/pages/bsocChart';
@@ -658,7 +659,8 @@ describe('buildBsocOption (requirements 2b)', () => {
   const option = (
     sessions: SessionSummary[],
     visible: TimeWindow = BOUNDS,
-    evPoints: Array<[number, number]> = [[T0 + HOUR, 54]]
+    evPoints: Array<[number, number]> = [[T0 + HOUR, 54]],
+    shown: SeriesVisibility = { ev: true, home: true }
   ): OptionShape => {
     const base = data(sessions);
     return buildBsocOption(
@@ -666,7 +668,8 @@ describe('buildBsocOption (requirements 2b)', () => {
       visible,
       DOMAIN,
       NOW,
-      WIDTH
+      WIDTH,
+      shown
     ) as unknown as OptionShape;
   };
 
@@ -802,5 +805,30 @@ describe('buildBsocOption (requirements 2b)', () => {
       markers?.markLine?.data?.map((m) => ('xAxis' in m ? m.xAxis : null))
     ).toEqual([T0 + 14 * HOUR, T0 + 17 * HOUR]);
   });
-});
 
+  it('hides the EV line and its dashed gap segments when toggled off', () => {
+    const evPoints: Array<[number, number]> = [
+      [T0 + 2 * HOUR, 50],
+      [T0 + 6 * HOUR, 60],
+    ];
+    const opt = option([], BOUNDS, evPoints, { ev: false, home: true });
+    const ev = opt.series?.[0];
+    // Name/color slot stays put; nothing renders.
+    expect(ev?.name).toBe(EV_SERIES_NAME);
+    expect(ev?.data).toEqual([]);
+    expect(ev?.markLine?.data).toEqual([]);
+    // The home line is untouched.
+    expect(opt.series?.[1].data).toEqual([[T0 + HOUR, 71]]);
+  });
+
+  it('hides the home line when toggled off, keeping names and colors stable', () => {
+    const opt = option([], BOUNDS, [[T0 + HOUR, 54]], { ev: true, home: false });
+    expect(opt.series?.slice(0, 2).map((s) => s.name)).toEqual([
+      EV_SERIES_NAME,
+      HOME_SERIES_NAME,
+    ]);
+    expect(opt.series?.[0].data).toEqual([[T0 + HOUR, 54]]);
+    expect(opt.series?.[1].data).toEqual([]);
+    expect(opt.color).toEqual([EV_COLOR, HOME_COLOR]);
+  });
+});
