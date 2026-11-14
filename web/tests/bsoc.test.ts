@@ -24,6 +24,8 @@ import {
   percentToWindow,
   readoutAt,
   sampleAtOrBefore,
+  SESSION_EDGE_MAX_SPAN_MS,
+  sessionEdgesVisible,
   sessionsInWindow,
   spanOf,
   touchReadout,
@@ -479,6 +481,15 @@ describe('evGapLine (dashed EV gap segments)', () => {
   });
 });
 
+describe('sessionEdgesVisible', () => {
+  it('is true at spans up to one week and false beyond', () => {
+    expect(sessionEdgesVisible({ from: T0, to: T0 + DAY })).toBe(true);
+    expect(sessionEdgesVisible({ from: T0, to: T0 + SESSION_EDGE_MAX_SPAN_MS })).toBe(true);
+    expect(sessionEdgesVisible({ from: T0, to: T0 + SESSION_EDGE_MAX_SPAN_MS + 1 })).toBe(false);
+    expect(sessionEdgesVisible({ from: T0, to: T0 + 8 * DAY })).toBe(false);
+  });
+});
+
 
 
 describe('buildBsocOption (requirements 2b)', () => {
@@ -632,6 +643,27 @@ describe('buildBsocOption (requirements 2b)', () => {
     const markers = option([session(), outside]).series?.find((s) => s.name === 'Sessions');
     expect(markers?.markLine?.data).toHaveLength(2);
     expect(markers?.markArea?.data).toHaveLength(1);
+  });
+
+  it('hides session edge markLines at spans wider than a week, keeping the bands', () => {
+    const wideDomain: TimeWindow = { from: T0, to: T0 + 30 * DAY };
+    const wide: TimeWindow = { from: T0, to: T0 + 8 * DAY };
+    const opt = buildBsocOption(data([session()]), wide, wideDomain, NOW) as unknown as OptionShape;
+    const markers = opt.series?.find((s) => s.name === 'Sessions');
+    expect(markers?.markLine?.data).toEqual([]);
+    expect(markers?.markArea?.data).toEqual([
+      [{ xAxis: T0 + 14 * HOUR }, { xAxis: T0 + 17 * HOUR }],
+    ]);
+  });
+
+  it('keeps session edge markLines at a visible span of exactly one week', () => {
+    const wideDomain: TimeWindow = { from: T0, to: T0 + 30 * DAY };
+    const week: TimeWindow = { from: T0, to: T0 + 7 * DAY };
+    const opt = buildBsocOption(data([session()]), week, wideDomain, NOW) as unknown as OptionShape;
+    const markers = opt.series?.find((s) => s.name === 'Sessions');
+    expect(
+      markers?.markLine?.data?.map((m) => ('xAxis' in m ? m.xAxis : null))
+    ).toEqual([T0 + 14 * HOUR, T0 + 17 * HOUR]);
   });
 });
 
