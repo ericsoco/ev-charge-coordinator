@@ -226,6 +226,28 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 - **Start/stop actuation from the app** — endpoints + consent semantics on the seam
   kept in step 2 (the CLI's explicit-flag consent is the model).
 - **Manual refresh UI** — user-triggered fetch alongside polling.
+- **Drag-following page-slide animation** (requested 2026-11-13; upgrades the
+  instant switch of the swipe tab navigation shipped in `feat/swipe-tab-navigation`)
+  — native-app-like tab transitions where the page track follows the finger:
+  - **Track:** render the tab panels in a horizontal flex track with the two
+    neighbor panels beside the active one (lazy-mounted at drag start);
+    `touchmove` translates the track by the drag delta (`translate3d`,
+    compositor-only — requirement 1b's interaction-perf budget).
+  - **Settle:** on release, complete the slide when travel/velocity clears the
+    threshold (reuse `classifySwipe` for direction; velocity picks hard-fling
+    vs eased settle), else snap back; 200–300 ms eased transition on an M3
+    expressive easing curve. `prefers-reduced-motion: reduce` keeps the
+    current instant switch.
+  - **Gestural isolation:** `touch-action: pan-y` on the track so vertical
+    scrolling survives; gestures starting on `data-evcc-swipe-ignore`
+    (charts, nav) never drag the track — the existing ignore rule stays the
+    single gate.
+  - **Open micro-decisions at implementation:** rubber-band resistance vs hard
+    stop at the ends (no wrap-around stands, per the shipped decision);
+    neighbor panel lifecycle while offscreen (Now's polling pause, Then's
+    ECharts mount/dispose cost — the current pages remount on switch and the
+    drag UX may want them kept alive across the gesture).
+  - Validate drag frame time on-device in step 9's QA sweep.
 
 ### Risks / notes
 
@@ -239,6 +261,43 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 ## Log
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
+
+### 2026-11-13 (4) — swipe tab navigation (touch)
+
+Branch `feat/swipe-tab-navigation` (PR issued on `origin/main` at `051a98a`;
+the `workplan.md` Log conflict with the (3) entry below resolved in the
+rebase). On touchscreen devices, horizontal flicks navigate Now/Then/Messages;
+mouse and trackpad behavior are unchanged (touch events only).
+
+- **Pure `web/src/lib/swipe.ts`** (the `bsocChart.ts` no-DOM pattern):
+  `classifySwipe` (deliberate flick = ≥ 48 px travel, ≥ 1.5× horizontal
+  dominance over vertical, ≤ 700 ms; named constants) and `adjacentTabId`
+  (TABS order — left = forward, right = back; **no wrap-around** at the ends,
+  per agreed assumptions). 5 unit tests in `web/tests/swipe.test.ts`.
+- **Wiring in `App.svelte`:** one-finger gesture tracking on the shell —
+  `touchstart` in **capture** phase (chart libs that `stopPropagation` cannot
+  hide where a gesture began) plus `touchend`/`touchcancel`; passive
+  listeners, never `preventDefault`, so page scrolling and chart gestures are
+  untouched. A second finger at `touchstart` (pinch attempt) cancels tracking.
+- **Gestural isolation via `data-evcc-swipe-ignore`** (`SWIPE_IGNORE_ATTR`):
+  the Then chart container (charts own their pan/pinch/readout interface) and
+  the nav bar/rail (its own controls) ignore gestures starting on them; the
+  start-time check is authoritative for the whole gesture (touch targets are
+  fixed). Future charts opt in with the same attribute.
+- **5 component tests** (`web/tests/swipe-gestures.test.ts`; jsdom
+  `fireEvent` TouchEvent with plain coordinate touches — supported natively by
+  jsdom 29's `TouchEvent`): both directions, no wrap at either end, chart +
+  nav ignored, vertical / short-flick / two-finger ignored (with a sanity
+  re-swipe on the same target).
+- **Drag-following page-slide animation planned as a fast-follow** (see
+  Fast-follows above) — not implemented here; the instant switch ships now.
+- Test-invocation gotcha learned en route: `npx vitest run --root web` from
+  the repo root externalizes noph-ui (Node chokes on raw `.svelte`); the npm
+  scripts run vitest with cwd `web/` — that is the supported path.
+
+Gate: `npm run check` green post-rebase (`051a98a`) — root **1054 passed /
+2 skipped**, web **102/102** (+10), svelte-check 0/0. On-device swipe feel
+pending user.
 
 ### 2026-11-13 (3) — Then chart: hide session edge lines at wide zoom
 
@@ -261,7 +320,6 @@ stay at every zoom.
 
 Gate: `npm run check` green on `main` (258c937, post-rebase) — root **1054
 passed / 2 skipped**, web **92/92** (bsoc 66), svelte-check 0/0.
-
 
 ### 2026-11-13 (2) — Then chart: zoom-refetch 400 + touch readout
 
