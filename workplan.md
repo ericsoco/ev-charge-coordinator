@@ -359,13 +359,16 @@ same for the car (vehicle) label/value.
   `web/tests/then-toggle.test.ts` (jsdom render of `Then.svelte`, stubbed
   fetch per the App.test.ts pattern: both toggles start pressed and flip
   independently).
-- **Rebased onto `origin/main` @ `4a6763d`** (the MMM-DD tick labels +
-  pixel-based tick spacing change touches the same files): `buildBsocOption`
-  signature merged to `(..., nowMs, widthPx, shown)`; `shown` threaded through
-  the new `rebuildOption` (call + `optionKey` guard — the guard keys on
-  window + width + visibility so a toggle is a key change on every path).
+- **Rebased onto `origin/main` twice** (both rounds touched the same files):
+  first onto `4a6763d` (MMM-DD tick labels + pixel-based tick spacing —
+  `buildBsocOption` signature merged to `(..., nowMs, widthPx, shown)`;
+  `shown` threaded through the new `rebuildOption`, whose `optionKey` guard
+  now keys on window + width + visibility so a toggle is a key change on
+  every rebuild path), then onto `dc1403a` after PR #86 (sessions selector)
+  landed and moved main again — code replayed cleanly, only the Log entry
+  region conflicted (both sides kept).
 - Gate: `npm run check` green post-rebase — root **1053 passed / 3 skipped**,
-  web **117/117** (+3 over main's 114), svelte-check 0/0.
+  web **150/150** (+3 over main's 147), svelte-check 0/0.
 
 ### 2026-11-13 (4) — swipe tab navigation (touch)
 
