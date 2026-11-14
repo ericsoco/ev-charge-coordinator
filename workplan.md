@@ -48,7 +48,8 @@
 - **Phase 2 (graphical UX) underway** — requirements 2026.Nov.07; all decisions
   resolved with the user (2026-11-10); see **P2 — graphical UX** below. Steps 1–4
   (web scaffold + shell; daemon HTTP seam + read API; Now tab live data; Then tab
-  BSoC + Sessions chart) landed 2026-11-11.
+  BSoC + Sessions chart) landed 2026-11-11; step 5 (sessions selector) landed
+  2026-11-13.
 
 ## Decisions on future work
 
@@ -110,8 +111,8 @@
 
 ## P2 — graphical UX (active plan)
 
-> Status: **steps 1–4 complete (2026-11-11); step 5 (sessions selector) next;
-> step 5b (session charging spans, decided 2026-11-13) queued after it.**
+> Status: **steps 1–5 complete (steps 1–4 on 2026-11-11, step 5 on 2026-11-13);
+> step 5b (session charging spans, decided 2026-11-13) next.**
 > Design basis:
 > [requirements.md](./docs/requirements.md) 2026.Nov.07 entry, [design.md](./docs/design.md)
 > §3.9/§7 seams + §8, [charts-research.md](./docs/charts-research.md). Same discipline as
@@ -177,6 +178,10 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
    *(Branch `p2/step4-bsoc-chart` — **complete 2026-11-11**; details in the Log.)*
 5. **Sessions selector** — lazy/paginated dropdown (start date + time labels);
    select → 1 s eased `dataZoom` focus on the session.
+   *(Branch `p2/step5-sessions-selector` — **complete 2026-11-13**; details in
+   the Log. Decisions D1–D3: selected-session readout re-homes the removed
+   tooltip content; `🔄` marks open sessions in the option label; focus window
+   = session span + 10 % padding each side, 2 h floor centered.)*
 5b. **Session charging spans inside the band (decided Option B)** — *decision
    (user, 2026-11-13; from the 2026-11-12 sessions investigation in the Log):*
    keep session semantics unchanged (plug→unplug rows; decision engine and
@@ -262,6 +267,59 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-13 (4) — P2 step 5 complete: sessions selector
+
+Branch `p2/step5-sessions-selector` (off latest `main`, which had gained the
+axis-tick, integer-windows/touch-readout, and session-edge-line commits since
+the plan was written). **Shipped** (requirements 2b "Sessions history
+selector"; decisions D1–D3 agreed with the user): full-width Noph `Select`
+below the Then chart (chart → readout row → selector → selected-session
+readout); options carry the API `label` (`YYYY-MM-DD HH:MM`) + **`🔄` on the
+open session** (D2); select → **1 s eased `dataZoom` focus** on the session
+(window = session span + 10 % padding each side, 2 h floor centered on the
+session, clamped into the domain — D3); **selected-session readout** re-homes
+the removed hover tooltip's content (start → end time, same-day ends shorten
+to `HH:MM`; `target … % · stopped: … · N kWh` meta with initial→final target
+and missing parts omitted; EV/home SoC start→end with live-sample fallback for
+open sessions — D1). Lazy pagination: one `catalog` unions the chart-coverage
+pages and the selector's pages (`mergeSessions`, incoming-wins by id, newest
+first) and pages in when the menu scrolls near its end (`nearListEnd` on a
+capture-phase scroll listener).
+
+**Structure:** pure `web/src/pages/sessionsSelector.ts` (labels/readout
+formatting, `sessionFocusWindow`, `easeInOutCubic`/`easedWindow`,
+`startTransition` over an injectable `TransitionClock`, `mergeSessions`,
+`nearListEnd`; module named for the feature, plan had said `sessionFocus.ts`);
+thin `bsocChartView.animateTo` (real rAF/performance clock, reduced-motion
+jump, cancelled by wheel/pointerdown/touchstart or a newer call);
+`Then.svelte` wiring. No API/schema change — `docs/api.md` already documented
+the selector label contract.
+
+**Two real bugs the render tests caught and this branch fixes:** (1) Noph
+dispatches the Select's `change` after `await tick()`, so rapid re-selections
+fire both events after the value already moved on — every handler then reads
+the stale value and the focus silently no-ops. Focus is now driven by the
+selection **value** (`$effect` on `selectedValue`; last selection wins).
+(2) Noph's `bind:element` is the field box while the scrollable menu popover is
+its **sibling**, so the pagination scroll listener never fired; it now anchors
+on the Select's own listbox, resolved through the combobox's `aria-controls`
+link.
+
+**Tests:** web **125/125** (was 92) — 27 pure (`web/tests/sessionsSelector.test.ts`,
+incl. frame-by-frame `startTransition` under a fake clock) + 6 render
+(`web/tests/then.test.ts`, chart view mocked to expose `animateTo`; option
+queries scoped to the menu container because the Select also renders a hidden
+native `<option>` list and closed-popover items are `display: none` in jsdom).
+`web/tests/setup.ts` gains popover-API + `scrollIntoView` + `CSS.supports`
+shims (jsdom lacks all three; Noph Menu/Select need them). Browser smoke
+(headless Chrome over raw CDP, mocked `/api`, throwaway harness — step-4
+precedent): Then tab → select → eased frames (110 rAF ticks, settles) → lazy
+refetch landing **byte-exact** on the focus window ± 25 % fetch pad — 4/4
+checks. Touch/menu feel on real devices → step 9 QA.
+
+Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **125/125**,
+svelte-check 0/0, vite build OK (644 kB raw / 219 kB gz).
+
 ### 2026-11-13 (4) — swipe tab navigation (touch)
 
 Branch `feat/swipe-tab-navigation` (PR issued on `origin/main` at `051a98a`;
@@ -330,7 +388,6 @@ down (`currentPx`). Same canvas-gated manual-verify status as the rule itself.
 
 Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **92/92**,
 svelte-check 0/0. `web/dist` rebuilt for the Tailscale origin.
-
 
 ### 2026-11-13 (3) — Then chart: hide session edge lines at wide zoom
 

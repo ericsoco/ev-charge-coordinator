@@ -27,6 +27,11 @@ import {
   type TimeWindow,
   type TouchPhase,
 } from './bsocChart';
+import {
+  FOCUS_DURATION_MS,
+  startTransition,
+  type TransitionClock,
+} from './sessionsSelector';
 
 echarts.use([
   LineChart,
@@ -60,6 +65,11 @@ export interface ChartHandle {
   setOption(option: EChartsCoreOption, domain: TimeWindow): void;
   /** Dispatch a programmatic zoom to `win` (fires the datazoom handler). */
   applyWindow(win: TimeWindow): void;
+  /**
+   * Ease the window to `win` over `durationMs` (default 1 s — requirements
+   * 2b). Superseded by user interaction (wheel/pinch/drag) or a newer call.
+   */
+  animateTo(win: TimeWindow, durationMs?: number): void;
   /** Replace the window-change sink (the page rebinds across effect runs). */
   onDataZoom(handler: (win: TimeWindow) => void): void;
   /**
@@ -93,6 +103,35 @@ export function createChart(
   let domain: TimeWindow | null = null;
   let sink = onDataZoom;
   let pointerSink: (tsMs: number | null) => void = () => {};
+
+  // Eased focus transition (animateTo): startTransition drives dispatchWindow
+  // through easedWindow frames; any user input on the chart cancels it so a
+  // wheel/pinch/drag supersedes the programmatic zoom.
+  let cancelTransition: () => void = () => {};
+  let currentWindow: TimeWindow | null = null;
+  const transitionClock: TransitionClock = {
+    now: () => performance.now(),
+    requestFrame: (callback) => requestAnimationFrame(callback),
+    cancelFrame: (handle) => cancelAnimationFrame(handle),
+    reducedMotion: () =>
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  };
+  const dispatchWindow = (win: TimeWindow): void => {
+    if (domain === null) return;
+    currentWindow = win;
+    const pct = windowToPercent(win, domain);
+    chart.dispatchAction({
+      type: 'dataZoom',
+      dataZoomIndex: 0,
+      start: pct.start,
+      end: pct.end,
+    });
+  };
+  const onUserInput = (): void => cancelTransition();
+  el.addEventListener('wheel', onUserInput, { passive: true, capture: true });
+  el.addEventListener('pointerdown', onUserInput, { passive: true, capture: true });
+  el.addEventListener('touchstart', onUserInput, { passive: true, capture: true });
 
   const tsAtX = (px: number): number | null => {
     // One named axis + scalar px maps px → timestamp (the tuple form of the
@@ -266,9 +305,11 @@ export function createChart(
     const part = event.batch?.[0] ?? event;
     const { startValue, endValue } = part;
     if (typeof startValue === 'number' && typeof endValue === 'number') {
-      sink({ from: startValue, to: endValue });
+      currentWindow = { from: startValue, to: endValue };
+      sink(currentWindow);
     } else if (typeof part.start === 'number' && typeof part.end === 'number') {
-      sink(percentToWindow(part.start, part.end, domain));
+      currentWindow = percentToWindow(part.start, part.end, domain);
+      sink(currentWindow);
     }
     // The axis may have moved under a held pointer — keep rule/markers aligned.
     if (currentPx !== null) setRule(currentPx);
@@ -293,14 +334,18 @@ export function createChart(
       if (currentPx !== null) setRule(currentPx); // data reloaded under a held pointer
     },
     applyWindow(win) {
-      if (domain === null) return;
-      const pct = windowToPercent(win, domain);
-      chart.dispatchAction({
-        type: 'dataZoom',
-        dataZoomIndex: 0,
-        start: pct.start,
-        end: pct.end,
-      });
+      cancelTransition();
+      dispatchWindow(win);
+    },
+    animateTo(win, durationMs = FOCUS_DURATION_MS) {
+      cancelTransition();
+      cancelTransition = startTransition(
+        transitionClock,
+        currentWindow ?? win,
+        win,
+        dispatchWindow,
+        durationMs
+      );
     },
     onDataZoom(handler) {
       sink = handler;
@@ -319,9 +364,13 @@ export function createChart(
       chart.resize();
     },
     dispose() {
+      cancelTransition();
       chart.off('datazoom', listener);
       zr.off('mousemove', pointerListener);
       zr.off('globalout', pointerLeaveListener);
+      el.removeEventListener('wheel', onUserInput, { capture: true });
+      el.removeEventListener('pointerdown', onUserInput, { capture: true });
+      el.removeEventListener('touchstart', onUserInput, { capture: true });
       el.removeEventListener('mousedown', onMouseDown);
       win?.removeEventListener('mouseup', onMouseUp);
       el.removeEventListener('touchstart', onTouchStart, { capture: true });

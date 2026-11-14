@@ -1,8 +1,21 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { Card } from 'noph-ui';
-  import { fetchSeries, fetchSessions, type SessionSummary } from '../lib/api';
-  import { createApiLoader } from '../lib/apiSession.svelte';
+  import { onMount, untrack } from 'svelte';
+  import { Card, Select } from 'noph-ui';
+  import type { SelectOption } from 'noph-ui/types';
+  import {
+    fetchSeries,
+    fetchSessions,
+    AuthError,
+    type SessionSummary,
+  } from '../lib/api';
+  import { createApiLoader, session } from '../lib/apiSession.svelte';
+  import {
+    mergeSessions,
+    nearListEnd,
+    sessionFocusWindow,
+    sessionOptionLabel,
+    sessionReadout,
+  } from './sessionsSelector';
   import {
     buildBsocOption,
     classifyWheel,
@@ -17,6 +30,7 @@
     panBy,
     panMsFor,
     readoutAt,
+    sampleAtOrBefore,
     spanOf,
     zoomAt,
     zoomFactorFor,
@@ -43,6 +57,15 @@
   /** Window the next fetch loads — starts at the last 24 h. */
   let requested: TimeWindow = { from: now0 - INITIAL_SPAN_MS, to: now0 };
 
+  /**
+   * Session catalog for the selector: union of every session fetched (chart
+   * coverage + selector pagination), newest first (mergeSessions). A fetched
+   * row is immutable once closed, so the union only ever grows/re-freshens.
+   */
+  let catalog = $state<SessionSummary[]>([]);
+  /** Total session count from the server; gates the selector's pagination. */
+  let sessionsTotal = $state(Number.POSITIVE_INFINITY);
+
   /** Page sessions (newest first) until they cover the window. */
   async function fetchSessionsCovering(win: TimeWindow): Promise<SessionSummary[]> {
     const all: SessionSummary[] = [];
@@ -51,6 +74,7 @@
     for (let page = 0; page < MAX_SESSION_PAGES; page++) {
       const res = await fetchSessions(SESSIONS_PAGE, offset);
       total = res.total;
+      sessionsTotal = res.total;
       all.push(...res.sessions);
       const oldest = res.sessions[res.sessions.length - 1];
       if (res.sessions.length < SESSIONS_PAGE || all.length >= total) break;
@@ -66,8 +90,88 @@
       fetchSeries('battery_soc', win.from, win.to),
       fetchSessionsCovering(win),
     ]);
+    // Outside the loader's reactive state on purpose: the catalog is an
+    // ever-growing union across refetches, not the latest fetch's slice.
+    catalog = mergeSessions(catalog, sessions);
     return { ev, home, sessions, bounds: win };
   }
+
+  /** One trailing catalog page (selector pagination, newest first). */
+  let loadingMore = false;
+  async function loadMoreSessions(): Promise<void> {
+    if (loadingMore || catalog.length >= sessionsTotal) return;
+    loadingMore = true;
+    try {
+      const res = await fetchSessions(SESSIONS_PAGE, catalog.length);
+      sessionsTotal = res.total;
+      catalog = mergeSessions(catalog, res.sessions);
+    } catch (cause) {
+      // Pagination is opportunistic: transient failures keep what we have and
+      // the next scroll retries; a 401 raises the shared token gate.
+      if (cause instanceof AuthError) session.needsToken = true;
+    } finally {
+      loadingMore = false;
+    }
+  }
+
+  /**
+   * Menu scroll (capture phase — the Noph menu's inner scroller is the event
+   * target and scroll events don't bubble): page in more sessions at the end.
+   */
+  function onMenuScroll(event: Event): void {
+    const el = event.target as HTMLElement | null;
+    if (el === null) return;
+    if (nearListEnd(el.scrollTop, el.clientHeight, el.scrollHeight)) void loadMoreSessions();
+  }
+
+  /** The Noph Select root — the field box (its menu popover is a sibling). */
+  let selectEl = $state<HTMLSpanElement | undefined>(undefined);
+  $effect(() => {
+    const el = selectEl;
+    if (el === undefined) return;
+    // Anchor the capture-phase scroll listener on the Select's own listbox,
+    // reached through the combobox's aria-controls link (the scrollable menu
+    // and its virtualized list are descendants of it). Capture catches inner
+    // scrollers; scroll events don't bubble.
+    const listboxId = el.querySelector('[role="combobox"]')?.getAttribute('aria-controls') ?? '';
+    const menu = el.ownerDocument.getElementById(listboxId);
+    const anchor = menu ?? el;
+    anchor.addEventListener('scroll', onMenuScroll, { passive: true, capture: true });
+    return () => anchor.removeEventListener('scroll', onMenuScroll, { capture: true });
+  });
+
+  /** Placeholder option (value '') — a picked session focuses the chart. */
+  const sessionOptions = $derived.by<SelectOption[]>(() => [
+    { value: '', label: 'Select a session…', selected: true },
+    ...catalog.map((s) => ({ value: s.id, label: sessionOptionLabel(s) })),
+  ]);
+
+  let selectedValue = $state<string | number>('');
+  const selectedSession = $derived(catalog.find((s) => s.id === selectedValue) ?? null);
+  const selectedReadout = $derived.by(() => {
+    const current = data;
+    const s = selectedSession;
+    if (current === null || s === null) return null;
+    return sessionReadout(s, {
+      evSoc: sampleAtOrBefore(current.ev.points, Date.now()),
+      batterySoc: sampleAtOrBefore(current.home.points, Date.now()),
+    });
+  });
+
+  /**
+   * Selecting a session eases the chart to it (requirements 2b: "1 s eased
+   * transition"). Driven by the selection VALUE, not the Select's change
+   * event: Noph dispatches `change` after a `tick()`, so rapid re-selections
+   * can fire their events after the value already moved on. Reacting to the
+   * value makes the last selection win deterministically.
+   */
+  $effect(() => {
+    const value = selectedValue;
+    const s = untrack(() => catalog.find((x) => x.id === value) ?? null);
+    const chart = untrack(() => view);
+    if (chart === null || s === null) return;
+    chart.animateTo(sessionFocusWindow(s, Date.now(), domain));
+  });
 
   // Load/refresh/auth handling is page-agnostic (lib/apiSession.svelte); no
   // poll — history moves slowly and a tab switch remounts this page anyway.
@@ -250,6 +354,34 @@
           </span>
         </div>
       {/if}
+      <div class="selector">
+        <Select
+          label="Charging session"
+          options={sessionOptions}
+          bind:value={selectedValue}
+          bind:element={selectEl}
+          style="width: 100%"
+        />
+      </div>
+      {#if selectedReadout !== null}
+        <div class="session-readout">
+          <div class="session-time">{selectedReadout.timeLabel}</div>
+          {#if selectedReadout.metaLabel !== ''}
+            <div class="session-meta">{selectedReadout.metaLabel}</div>
+          {/if}
+          <div class="readout">
+            <span class="readout-item">
+              <span class="swatch" style:background-color={EV_COLOR}></span>
+              <span>🚗: {selectedReadout.evLabel}</span>
+            </span>
+            <span class="readout-sep" aria-hidden="true">|</span>
+            <span class="readout-item">
+              <span class="swatch" style:background-color={HOME_COLOR}></span>
+              <span>🏠: {selectedReadout.homeLabel}</span>
+            </span>
+          </div>
+        </div>
+      {/if}
     {/if}
     {#if loader.state.error !== null}
       <p class="warn" role="alert">
@@ -336,6 +468,28 @@
     height: 10px;
     border-radius: 2px;
     flex: none;
+  }
+
+  /* Sessions selector (requirements 2b) — full container width. */
+  .selector {
+    width: 100%;
+  }
+
+  /* Selected-session readout: the removed hover tooltip's metadata, pinned. */
+  .session-readout {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .session-time {
+    font-size: 0.95rem;
+  }
+
+  .session-meta {
+    font-size: 0.9rem;
+    opacity: 0.75;
   }
 
   .skeleton {
