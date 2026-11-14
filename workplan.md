@@ -240,6 +240,19 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-13 (5) — Then chart: no bottom axis line, half-length label-colored ticks
+
+User request (follow-up to the axis-tick work in 3ec9a09). `buildBsocOption`
+now: **x-axis `axisLine.show: false`** (the horizontal line coincident with
+the chart bottom is gone), **both axes' `axisTick` halved to 2.5 px**
+(ECharts default is 5 — new exported `AXIS_TICK_LENGTH`) and recolored to
+`AXIS_LABEL_COLOR` (`#909090`, same as the tick labels), and **y-axis gains
+the same ticks with its `axisLine` explicitly suppressed**. Test pin added:
+`suppresses both axis lines and draws half-length label-colored ticks`
+(OptionShape grew `axisLine`/`axisTick` fields). Gate: `npm run check` green —
+root **1054 passed / 2 skipped**, web **93/93**, svelte-check 0/0; `web/dist`
+rebuilt for the Tailscale origin.
+
 ### 2026-11-13 (4) — cursor rule refinements: grey + y-axis bounds + line markers
 
 Follow-up to the down-only cursor rule. The rule is now a fixed

@@ -47,6 +47,8 @@ export const SESSION_LINE_COLOR = '#9aa0a6';
 export const SESSION_TINT = 'rgba(76, 110, 245, 0.10)';
 /** Axis tick label color (medium-dark grey). Tweak here to restyle the ticks. */
 export const AXIS_LABEL_COLOR = '#909090';
+/** Axis tick length — half the ECharts default (5 px). */
+export const AXIS_TICK_LENGTH = 2.5;
 /**
  * Floor on the spacing between x-axis ticks, ms (30 min). Tweak here to change
  * tick density: larger = fewer, more widely spaced ticks (ECharts may still
@@ -431,8 +433,12 @@ export function buildBsocOption(
       min: domain.from,
       max: domain.to,
       // Tick look: spacing floor + label style/format — tweak
-      // X_TICK_MIN_INTERVAL_MS and AXIS_LABEL_COLOR at the top of this module.
+      // X_TICK_MIN_INTERVAL_MS, AXIS_TICK_LENGTH, and AXIS_LABEL_COLOR at the
+      // top of this module.
       minInterval: X_TICK_MIN_INTERVAL_MS,
+      // No bottom axis line; half-length ticks in the label color.
+      axisLine: { show: false },
+      axisTick: { length: AXIS_TICK_LENGTH, lineStyle: { color: AXIS_LABEL_COLOR } },
       axisLabel: {
         color: AXIS_LABEL_COLOR,
         formatter: (value: unknown) => formatXTick(Number(value)),
@@ -442,6 +448,9 @@ export function buildBsocOption(
       type: 'value',
       min: 0,
       max: 100,
+      // Y-axis line stays suppressed; same half-length label-colored ticks as x.
+      axisLine: { show: false },
+      axisTick: { length: AXIS_TICK_LENGTH, lineStyle: { color: AXIS_LABEL_COLOR } },
       axisLabel: { color: AXIS_LABEL_COLOR, formatter: '{value}%' },
       interval: 25
     },
