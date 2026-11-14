@@ -17,6 +17,7 @@
     panBy,
     panMsFor,
     readoutAt,
+    sessionEdgesVisible,
     spanOf,
     zoomAt,
     zoomFactorFor,
@@ -85,6 +86,8 @@
   let boundEl: HTMLDivElement | null = null;
   /** The window the user is looking at; preserved across refetches. */
   let lastVisible: TimeWindow | null = null;
+  /** Session-edge visibility baked into the last built option (see sessionEdgesVisible). */
+  let edgesVisible: boolean | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let observer: ResizeObserver | null = null;
 
@@ -106,6 +109,14 @@
       refreshTimer = null;
       const current = loader.state.data;
       if (current === null || lastVisible === null) return;
+      // Session-edge visibility is baked into the option; when the zoom span
+      // crosses the week threshold without a refetch, rebuild (debounced, so
+      // never mid-gesture) to add/remove the start/end lines.
+      const edges = sessionEdgesVisible(lastVisible);
+      if (view !== null && edges !== edgesVisible) {
+        edgesVisible = edges;
+        view.setOption(buildBsocOption(current, lastVisible, domain, Date.now()), domain);
+      }
       if (!needsRefetch(lastVisible, current.bounds, domain)) return;
       requested = fetchWindowFor(lastVisible, domain);
       void loader.refresh();
@@ -172,6 +183,7 @@
     view.onDataZoom(handleZoomWindow);
     view.onPointerMove(handlePointerMove);
     view.setOption(buildBsocOption(current, lastVisible, domain, Date.now()), domain);
+    edgesVisible = sessionEdgesVisible(lastVisible);
   });
 
   onMount(() => {

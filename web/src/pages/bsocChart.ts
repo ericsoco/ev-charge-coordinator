@@ -36,6 +36,8 @@ export const FETCH_PAD_RATIO = 0.25;
 export const EDGE_BUFFER_RATIO = 0.1;
 /** EV samples further apart than this multiple of the bucket width are a gap. */
 export const EV_GAP_RATIO = 2.5;
+/** Session start/end lines hide once the visible span exceeds one week. */
+export const SESSION_EDGE_MAX_SPAN_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const EV_SERIES_NAME = 'Vehicle BSoC';
 export const HOME_SERIES_NAME = 'Home battery BSoC';
@@ -198,6 +200,14 @@ export function sessionsInWindow(
   return sessions.filter(
     (s) => s.plugTsMs <= win.to && (s.unplugTsMs ?? nowMs) >= win.from
   );
+}
+
+/**
+ * Whether session start/end lines render: at spans wider than one week the
+ * edge lines clutter the chart (the tinted bands alone mark the sessions).
+ */
+export function sessionEdgesVisible(visible: TimeWindow): boolean {
+  return spanOf(visible) <= SESSION_EDGE_MAX_SPAN_MS;
 }
 
 const MONTH_ABBRS = [
@@ -378,9 +388,10 @@ export function evGapLine(
 /**
  * The full chart option: dual BSoC lines over one time axis spanning the
  * DOMAIN (the visible window rides the dataZoom), inside dataZoom clamped to
- * 2 h–1 yr, session markers (faint start/end lines + tinted band) for every
- * session overlapping the loaded window, and dashed EV gap segments. No
- * tooltip/legend — the page renders a static readout row below the chart.
+ * 2 h–1 yr, session markers (tinted band; faint start/end lines only at
+ * spans of a week or less — see `sessionEdgesVisible`) for every session
+ * overlapping the loaded window, and dashed EV gap segments. No tooltip/
+ * legend — the page renders a static readout row below the chart.
  */
 export function buildBsocOption(
   data: BsocData,
@@ -396,12 +407,14 @@ export function buildBsocOption(
     domain.to
   );
   const sessions = sessionsInWindow(data.sessions, data.bounds, nowMs);
-  const markLineData = sessions.flatMap((s) => {
-    const marks = [{ xAxis: s.plugTsMs }];
-    // An open session has no end yet — start line + band to now only.
-    if (s.unplugTsMs !== null) marks.push({ xAxis: s.unplugTsMs });
-    return marks;
-  });
+  const markLineData = sessionEdgesVisible(visible)
+    ? sessions.flatMap((s) => {
+        const marks = [{ xAxis: s.plugTsMs }];
+        // An open session has no end yet — start line + band to now only.
+        if (s.unplugTsMs !== null) marks.push({ xAxis: s.unplugTsMs });
+        return marks;
+      })
+    : [];
   const markAreaData = sessions.map((s) => [
     { xAxis: s.plugTsMs },
     { xAxis: s.unplugTsMs ?? nowMs },
