@@ -35,6 +35,7 @@
     zoomAt,
     zoomFactorFor,
     type BsocData,
+    type SeriesVisibility,
     type TimeWindow,
   } from './bsocChart';
   import { createChart, type ChartHandle } from './bsocChartView';
@@ -196,6 +197,8 @@
 
   /** Timestamp under the pointer; null (initial / pointer leave / post-pinch) = newest sample. */
   let hoverTs = $state<number | null>(null);
+  /** Per-series chart visibility — toggled by tapping the readout label/value. */
+  let shown = $state<SeriesVisibility>({ ev: true, home: true });
   const readout = $derived.by(() => {
     const current = data;
     if (current === null) return null;
@@ -207,19 +210,23 @@
   }
 
   /**
-   * Rebuild + re-apply the full option from the current data/window/width.
-   * The tick set and session-edge lines derive from the window, so pan/zoom
-   * calls this too (debounced via scheduleRefresh); `force` re-applies for
-   * fresh data even when the window/width are unchanged. The key guard keeps
-   * a setOption-echoed datazoom event from looping rebuilds.
+   * Rebuild + re-apply the full option from the current data/window/width/
+   * series visibility. The tick set and session-edge lines derive from the
+   * window, so pan/zoom calls this too (debounced via scheduleRefresh);
+   * `force` re-applies for fresh data even when the key inputs are unchanged.
+   * The key guard (window + width + visibility) keeps a setOption-echoed
+   * datazoom event from looping rebuilds.
    */
   function rebuildOption(force = false): void {
     const current = loader.state.data;
     if (view === null || current === null || lastVisible === null) return;
-    const key = `${lastVisible.from}:${lastVisible.to}:${view.width()}`;
+    const key = `${lastVisible.from}:${lastVisible.to}:${view.width()}:${shown.ev}:${shown.home}`;
     if (!force && key === optionKey) return;
     optionKey = key;
-    view.setOption(buildBsocOption(current, lastVisible, domain, Date.now(), view.width()), domain);
+    view.setOption(
+      buildBsocOption(current, lastVisible, domain, Date.now(), view.width(), shown),
+      domain
+    );
   }
 
   function scheduleRefresh(): void {
@@ -343,15 +350,29 @@
       {#if readout !== null}
         <div class="readout">
           <span class="readout-ts">{readout.tsLabel}</span>
-          <span class="readout-item">
+          <button
+            type="button"
+            class="readout-item"
+            class:off={!shown.home}
+            aria-pressed={shown.home}
+            aria-label="Toggle home battery BSoC series, currently {readout.homeLabel}"
+            onclick={() => (shown.home = !shown.home)}
+          >
             <span class="swatch" style:background-color={HOME_COLOR}></span>
             <span>🏠: {readout.homeLabel}</span>
-          </span>
+          </button>
           <span class="readout-sep" aria-hidden="true">|</span>
-          <span class="readout-item">
+          <button
+            type="button"
+            class="readout-item"
+            class:off={!shown.ev}
+            aria-pressed={shown.ev}
+            aria-label="Toggle vehicle BSoC series, currently {readout.evLabel}"
+            onclick={() => (shown.ev = !shown.ev)}
+          >
             <span class="swatch" style:background-color={EV_COLOR}></span>
             <span>🚗: {readout.evLabel}</span>
-          </span>
+          </button>
         </div>
       {/if}
       <div class="selector">
@@ -456,6 +477,32 @@
     align-items: center;
     gap: 6px;
     white-space: nowrap;
+    position: relative;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Enlarge the tap target without changing layout. */
+  .readout-item::after {
+    content: '';
+    position: absolute;
+    inset: -6px;
+  }
+
+  /* Series toggled off (chart line hidden) — dim the whole label/value. */
+  .readout-item.off {
+    opacity: 0.45;
+  }
+
+  .readout-item:focus-visible {
+    outline: 2px solid var(--np-color-primary, #4c6ef5);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 
   .readout-sep {
