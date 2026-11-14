@@ -3,6 +3,16 @@
   import { Card } from 'noph-ui';
   import { fetchMessages } from '../lib/api';
   import { createApiLoader } from '../lib/apiSession.svelte';
+  import {
+    browserPlatform,
+    detectPushEnv,
+    disablePush,
+    enablePush,
+    pushEnabled,
+    pushSupport,
+    type EnableResult,
+    type PushSupport,
+  } from '../lib/push';
   import { MESSAGES_EMPTY, formatMessageTime } from './messagesText';
 
   /** Poll cadence — events are rare; focus refresh covers tab switches. */
@@ -18,11 +28,74 @@
 
   const messages = $derived(loader.state.data?.messages ?? null);
 
-  onMount(() => loader.start());
+  // Push card (P2 step 7): support is probed on mount; enable runs from a
+  // click (the permission prompt must follow a direct user gesture).
+  let support: PushSupport = $state('unsupported');
+  let pushOn = $state(false);
+  let enableOutcome = $state<EnableResult | null>(null);
+  let pushBusy = $state(false);
+
+  async function onEnablePush(): Promise<void> {
+    pushBusy = true;
+    enableOutcome = await enablePush(browserPlatform());
+    pushOn = enableOutcome === 'enabled';
+    pushBusy = false;
+  }
+
+  async function onDisablePush(): Promise<void> {
+    pushBusy = true;
+    const result = await disablePush(browserPlatform());
+    if (result === 'disabled') pushOn = false;
+    pushBusy = false;
+  }
+
+  onMount(() => {
+    const stopLoader = loader.start();
+    support = pushSupport(detectPushEnv());
+    if (support === 'supported') {
+      void pushEnabled(browserPlatform()).then((value) => (pushOn = value));
+    }
+    return stopLoader;
+  });
 </script>
 
 <section class="messages">
   <h1 class="title">Messages</h1>
+
+  {#if support === 'supported'}
+    <Card variant="elevated" headline="Push notifications">
+      {#if pushOn}
+        <p class="hint">On — this device gets a push when charging starts or stops.</p>
+        <button type="button" onclick={onDisablePush} disabled={pushBusy}>Turn off</button>
+      {:else}
+        <p class="hint">
+          Get a push when charging starts, stops, or the decision engine acts.
+        </p>
+        <button type="button" onclick={onEnablePush} disabled={pushBusy}>Enable push</button>
+      {/if}
+      {#if enableOutcome === 'denied'}
+        <p class="warn" role="alert">
+          Notifications are blocked — allow them for this site in your browser settings, then
+          retry.
+        </p>
+      {:else if enableOutcome === 'dismissed'}
+        <p class="warn" role="alert">
+          Permission not granted yet — tap Enable push to try again.
+        </p>
+      {:else if enableOutcome === 'failed'}
+        <p class="warn" role="alert">Couldn't enable push — is the daemon reachable?</p>
+      {/if}
+    </Card>
+  {:else if support === 'needs-install'}
+    <p class="hint" role="status">
+      On iPhone/iPad, push needs the installed app: tap Share → <strong>Add to Home Screen</strong
+      >, then open it from your home screen (iOS 16.4+).
+    </p>
+  {:else if support === 'insecure'}
+    <p class="hint" role="status">
+      Push needs a secure (https) connection — open this app over the Tailscale or tunnel URL.
+    </p>
+  {/if}
 
   {#if !loader.state.loaded}
     <div class="skeleton row-skeleton" aria-hidden="true"></div>

@@ -17,6 +17,7 @@ import * as homeBattery from '../store/HomeBatteryStore.js';
 import * as evStore from '../store/EvStore.js';
 import * as sessionStore from '../store/SessionStore.js';
 import * as notificationStore from '../store/NotificationStore.js';
+import * as pushStore from '../store/PushSubscriptionStore.js';
 import { acquireLock, lockPath, type LockHandle } from './lockfile.js';
 import { createScheduler, type ScheduledTask } from './scheduler.js';
 import { createBatterySampler } from './BatterySampler.js';
@@ -28,6 +29,7 @@ import { formatLocalTimestamp } from '../utils/time.js';
 import { buildNotifiers, notifierRequiresSecret, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
 import { createNotificationRecorder } from '../notifiers/record.js';
+import { createWebPushNotifier } from '../notifiers/webPush.js';
 import { createFailureThrottle } from '../notifiers/throttle.js';
 import type { Notifier } from '../notifiers/types.js';
 import { createWeatherSampler, type FetchForecast } from './WeatherSampler.js';
@@ -130,11 +132,21 @@ async function resolveNotifier(
       );
     }
   }
-  return createNotifierFanout(
-    buildNotifiers({ entries: options.config.notifiers, secrets, log }),
-    log,
-    createNotificationRecorder(db)
-  );
+  const targets = buildNotifiers({ entries: options.config.notifiers, secrets, log });
+  // The app's own channel: always attached, independent of the notifiers
+  // config (no subscriptions = no-op; VAPID keys mint on first real send).
+  targets.push({
+    name: 'webpush',
+    notifier: createWebPushNotifier({
+      getVapid: () => credentialStore.ensureVapidKeys(),
+      listSubscriptions: () => pushStore.listSubscriptions(db),
+      removeSubscription: (endpoint) => {
+        pushStore.removeSubscription(db, endpoint);
+      },
+      log,
+    }),
+  });
+  return createNotifierFanout(targets, log, createNotificationRecorder(db));
 }
 
 async function prepare(options: RunDaemonOptions): Promise<Prepared> {

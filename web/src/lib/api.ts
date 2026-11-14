@@ -15,6 +15,9 @@ import type {
   NowResponse,
   NowSession,
   NowVehicle,
+  PushAckResponse,
+  PushPublicKeyResponse,
+  PushSubscribeRequest,
   SeriesMetricName,
   SeriesResult,
   SessionSummary,
@@ -28,6 +31,9 @@ export type {
   NowResponse,
   NowSession,
   NowVehicle,
+  PushAckResponse,
+  PushPublicKeyResponse,
+  PushSubscribeRequest,
   SeriesMetricName,
   SeriesResult,
   SessionSummary,
@@ -106,4 +112,37 @@ export async function fetchSessions(limit: number, offset: number): Promise<Sess
 export async function fetchMessages(limit = 200, offset = 0): Promise<MessagesResponse> {
   const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return apiGet<MessagesResponse>(`/api/messages?${query}`);
+}
+
+/** POST a JSON body with the stored bearer token (push subscribe/unsubscribe). */
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const token = getApiToken();
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: {
+      ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 401) throw new AuthError('API token missing or invalid');
+  if (!response.ok) throw new Error(await failureMessage(response));
+  return (await response.json()) as T;
+}
+
+/** GET /api/push/public-key — the VAPID applicationServerKey. */
+export async function fetchPushPublicKey(): Promise<PushPublicKeyResponse> {
+  return apiGet<PushPublicKeyResponse>('/api/push/public-key');
+}
+
+/** POST /api/push/subscribe — upsert this device's subscription. */
+export async function postPushSubscribe(
+  request: PushSubscribeRequest
+): Promise<PushAckResponse> {
+  return apiPost<PushAckResponse>('/api/push/subscribe', request);
+}
+
+/** POST /api/push/unsubscribe — idempotent drop for this device. */
+export async function postPushUnsubscribe(endpoint: string): Promise<PushAckResponse> {
+  return apiPost<PushAckResponse>('/api/push/unsubscribe', { endpoint });
 }
