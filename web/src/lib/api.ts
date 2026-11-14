@@ -9,6 +9,8 @@
  * code keeps one import site.
  */
 import type {
+  ApiMessage,
+  MessagesResponse,
   NowBattery,
   NowResponse,
   NowSession,
@@ -20,6 +22,8 @@ import type {
 } from '../../../src/api/types';
 
 export type {
+  ApiMessage,
+  MessagesResponse,
   NowBattery,
   NowResponse,
   NowSession,
@@ -96,4 +100,10 @@ export async function fetchSeries(
 export async function fetchSessions(limit: number, offset: number): Promise<SessionsResponse> {
   const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return apiGet<SessionsResponse>(`/api/sessions?${query}`);
+}
+
+/** GET /api/messages page (newest first; server caps limit at 500). */
+export async function fetchMessages(limit = 200, offset = 0): Promise<MessagesResponse> {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return apiGet<MessagesResponse>(`/api/messages?${query}`);
 }
