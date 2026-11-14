@@ -46,7 +46,7 @@ export const HOME_COLOR = '#f59e0b';
 export const SESSION_LINE_COLOR = '#9aa0a6';
 export const SESSION_TINT = 'rgba(76, 110, 245, 0.10)';
 /** Axis tick label color (medium-dark grey). Tweak here to restyle the ticks. */
-export const AXIS_LABEL_COLOR = '#616161';
+export const AXIS_LABEL_COLOR = '#909090';
 /**
  * Floor on the spacing between x-axis ticks, ms (30 min). Tweak here to change
  * tick density: larger = fewer, more widely spaced ticks (ECharts may still
