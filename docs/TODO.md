@@ -29,6 +29,7 @@ CHART/APP REFINEMENTS
 [ ] Loading on mobile via LAN: often displays blank page for a while / until refresh? Just witnessed this at ~10:40am.
 [ ] Consider dropping echarts in favor of d3?
     Smaller bundle size, more control, less API + bundle bloat?
+    [ ] Also: sessionSelector.js rolled its own easing engine 🤦‍♂️ should just se d3-ease
 [ ] display window should extend beyond screen edges (prob one full viewport to left and right? or even more, maybe all loaded content?) for better visual continuity; currently e.g. the EV BSOC path is truncated at screen edges when the next measured point is at all off-screen.
 [ ] add interia to horizontal pan on mobile
 [ ] two-finger pinch-zoom increments are too small on desktop + trackpad, too large on mobile (is it a viewport size issue?)
