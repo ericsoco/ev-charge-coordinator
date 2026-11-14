@@ -352,6 +352,19 @@ export interface BsocData {
   bounds: TimeWindow;
 }
 
+/**
+ * Per-series visibility toggles — the readout row's label/value tap targets.
+ * A hidden series keeps its slot in the option (name + color mapping intact)
+ * but renders no line: its data is emptied, and for the EV series so are the
+ * dashed gap segments.
+ */
+export interface SeriesVisibility {
+  /** Vehicle BSoC line (solid runs + dashed gap/edge segments). */
+  ev: boolean;
+  /** Home battery BSoC line. */
+  home: boolean;
+}
+
 /** `[epochMs, value]` sample, as served by GET /api/series. */
 export type BsocPoint = [number, number];
 /** Dashed segment endpoints (gap bridge or edge extension). */
@@ -486,14 +499,17 @@ export function xTicksMs(visible: TimeWindow, widthPx: number): number[] {
  * 2 h–1 yr, session markers (tinted band; faint start/end lines only at
  * spans of a week or less — see `sessionEdgesVisible`) for every session
  * overlapping the loaded window, and dashed EV gap segments. No tooltip/
- * legend — the page renders a static readout row below the chart.
+ * legend — the page renders a static readout row below the chart, whose
+ * label/value taps toggle each BSoC line via `shown` (a hidden series keeps
+ * its name/color slot but renders no line and no dashed gap segments).
  */
 export function buildBsocOption(
   data: BsocData,
   visible: TimeWindow,
   domain: TimeWindow,
   nowMs: number,
-  widthPx: number
+  widthPx: number,
+  shown: SeriesVisibility = { ev: true, home: true }
 ): EChartsCoreOption {
   const pct = windowToPercent(visible, domain);
   const ticks = xTicksMs(visible, widthPx);
@@ -579,7 +595,7 @@ export function buildBsocOption(
         // markLine below bridges them and extends to the chart edges.
         connectNulls: false,
         lineStyle: { width: 2 },
-        data: evGaps.solid,
+        data: shown.ev ? evGaps.solid : [],
         markLine: {
           silent: true,
           symbol: ['none', 'none'],
@@ -587,7 +603,7 @@ export function buildBsocOption(
           lineStyle: { color: EV_COLOR, type: 'dashed', width: 2 },
           label: { show: false },
           // Point→point segments: each entry is a [from, to] marker-item pair.
-          data: evGaps.dashed.map(([from, to]) => [{ coord: from }, { coord: to }]),
+          data: shown.ev ? evGaps.dashed.map(([from, to]) => [{ coord: from }, { coord: to }]) : [],
         },
       },
       {
@@ -596,7 +612,7 @@ export function buildBsocOption(
         showSymbol: false,
         connectNulls: false,
         lineStyle: { width: 2 },
-        data: data.home.points,
+        data: shown.home ? data.home.points : [],
       },
       {
         // Marker carrier: no data of its own.
