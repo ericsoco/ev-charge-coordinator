@@ -629,6 +629,22 @@ step 5b** (after step 5, targeted before step 9; numbered 5b so historical step
 references stay valid) — see the plan section. Gate: `npm run check` green
 (docs only).
 
+### 2026-11-13 — Then tab: x-axis tick spacing + (H)H(:MM) am/pm format + lighter tick color
+
+Branch `chart/axis-ticks` — the TODO.md "axis ticks" block (user-maintained, left
+unticked there). All knobs live as exported constants/functions at the top of
+`web/src/pages/bsocChart.ts` for user tweaking: `X_TICK_MIN_INTERVAL_MS` (30 min
+floor on tick spacing via `xAxis.minInterval` — larger = wider spacing),
+`AXIS_LABEL_COLOR` (`#616161` medium-dark grey, applied to x **and** y axis
+labels since the TODO item is generic), and `formatXTick` (pure, local-time
+`(H)H(:MM) am/pm` — no leading zero, no trailing `:00`; `12am`/`12pm` at
+midnight/noon). Tests: 4 `formatXTick` cases (TZ-safe local construction) + 2
+option pins (minInterval/color wiring, formatter output) — `web/tests/bsoc.test.ts`.
+Known limitation: at multi-day+ zoom the formatter still emits time-only labels
+(e.g. `12am` at midnight ticks) per the spec; if the wide view needs dates,
+extend `formatXTick` (or make it span-aware). Gate: `npm run check` green —
+root 1054 passed / 2 skipped, web 81/81, svelte-check 0/0.
+
 ## Queued plan — self-hosted ntfy (2026-11-01; NOT started)
 
 Purpose: (1) kill the "anyone who learns the topic name can publish/read it"
