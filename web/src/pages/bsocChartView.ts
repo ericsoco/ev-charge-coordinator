@@ -97,21 +97,54 @@ export function createChart(
   // pre-pinch position is stale once the scale has moved). Capture phase:
   // zrender's own touch listeners run first on their inner element during
   // the bubble phase.
+  // Down-only cursor rule: a 1 px vertical line at the pointer x — the
+  // readout's anchor — visible only while a button/finger is down.
+  const rule = document.createElement('div');
+  rule.setAttribute('aria-hidden', 'true');
+  Object.assign(rule.style, {
+    position: 'absolute',
+    top: '0',
+    bottom: '0',
+    width: '1px',
+    background: 'currentColor',
+    opacity: '0.5',
+    pointerEvents: 'none',
+    display: 'none',
+  });
+  if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+  el.appendChild(rule);
+  const setRule = (px: number | null): void => {
+    if (px === null || !Number.isFinite(px)) {
+      rule.style.display = 'none';
+      return;
+    }
+    rule.style.left = `${px}px`;
+    rule.style.display = 'block';
+  };
+  let lastTouchAt = 0;
+  /** Compat mouse events trail a tap by ~300 ms — touch owns state that long. */
+  const recentTouch = (): boolean => Date.now() - lastTouchAt < 500;
+
   const zr = chart.getZr();
   let touchPhase: TouchPhase = { fingers: 0, multi: false };
   const touchHandler =
     (kind: 'start' | 'move' | 'end') =>
     (event: TouchEvent): void => {
+      lastTouchAt = Date.now();
       const next = touchReadout(touchPhase, kind, event.touches.length);
       touchPhase = next.phase;
-      if (next.action === 'freeze' || next.action === 'keep') return;
+      if (next.action === 'freeze') return; // still down: rule stays put, readout frozen
+      if (next.action !== 'pin') setRule(null); // lifted: the rule is down-only
+      if (next.action === 'keep') return; // single-finger lift: readout persists
       if (next.action === 'reset') {
         pointerSink(null);
         return;
       }
       const finger = event.touches[0] ?? event.changedTouches[0];
       if (finger === undefined) return;
-      const ts = tsAtX(finger.clientX - el.getBoundingClientRect().left);
+      const px = finger.clientX - el.getBoundingClientRect().left;
+      setRule(px);
+      const ts = tsAtX(px);
       if (ts !== null) pointerSink(ts);
     };
   const onTouchStart = touchHandler('start');
@@ -121,8 +154,8 @@ export function createChart(
   el.addEventListener('touchmove', onTouchMove, { passive: true, capture: true });
   el.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
   el.addEventListener('touchcancel', onTouchEnd, { passive: true, capture: true });
-  const pointerListener = (event: { offsetX?: number; clientX?: number }): void => {
-    if (touchPhase.fingers > 0) return;
+  const pointerListener = (event: { offsetX?: number; clientX?: number; buttons?: number }): void => {
+    if (touchPhase.fingers > 0 || recentTouch()) return;
     const rect = el.getBoundingClientRect();
     const px =
       typeof event.offsetX === 'number' && Number.isFinite(event.offsetX)
@@ -130,12 +163,30 @@ export function createChart(
         : typeof event.clientX === 'number'
           ? event.clientX - rect.left
           : Number.NaN;
+    // Rule is down-only: shown while a button is held, hidden on hover.
+    const down = typeof event.buttons === 'number' && event.buttons > 0;
+    setRule(down && Number.isFinite(px) ? px : null);
     const ts = Number.isFinite(px) ? tsAtX(px) : null;
     pointerSink(ts);
   };
-  const pointerLeaveListener = (): void => pointerSink(null);
+  const pointerLeaveListener = (): void => {
+    setRule(null);
+    pointerSink(null);
+  };
   zr.on('mousemove', pointerListener);
   zr.on('globalout', pointerLeaveListener);
+  // Press anchors the rule at the exact press point (covering click-without-
+  // move) and pins the readout there; release anywhere clears the rule.
+  const onMouseDown = (event: MouseEvent): void => {
+    if (recentTouch()) return;
+    const px = event.clientX - el.getBoundingClientRect().left;
+    setRule(px);
+    pointerSink(tsAtX(px));
+  };
+  const onMouseUp = (): void => setRule(null);
+  el.addEventListener('mousedown', onMouseDown);
+  const win = el.ownerDocument.defaultView;
+  win?.addEventListener('mouseup', onMouseUp);
 
   const listener = (payload: unknown): void => {
     if (domain === null) return;
@@ -178,16 +229,20 @@ export function createChart(
       return chart.getWidth();
     },
     resize() {
+      setRule(null); // px anchors break across a resize; the readout re-syncs on move
       chart.resize();
     },
     dispose() {
       chart.off('datazoom', listener);
       zr.off('mousemove', pointerListener);
       zr.off('globalout', pointerLeaveListener);
+      el.removeEventListener('mousedown', onMouseDown);
+      win?.removeEventListener('mouseup', onMouseUp);
       el.removeEventListener('touchstart', onTouchStart, { capture: true });
       el.removeEventListener('touchmove', onTouchMove, { capture: true });
       el.removeEventListener('touchend', onTouchEnd, { capture: true });
       el.removeEventListener('touchcancel', onTouchEnd, { capture: true });
+      rule.remove();
       chart.dispose();
     },
   };

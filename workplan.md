@@ -262,6 +262,27 @@ stay at every zoom.
 Gate: `npm run check` green on `main` (258c937, post-rebase) — root **1054
 passed / 2 skipped**, web **92/92** (bsoc 66), svelte-check 0/0.
 
+### 2026-11-13 (3) — Then chart: down-only cursor rule
+
+Branch `feature/then-pointer-rule`. A 1 px vertical rule at the pointer's x
+position, visible **only while the pointer is down** (user request): mouse
+press-and-hold/drag (`buttons` bit in the zrender mousemove path + a DOM
+`mousedown` that anchors the exact press point — covering click-without-move,
+which also pins the readout there) and touch (`touchReadout` actions: `pin`
+shows at the finger x, `freeze` keeps it during pinch, `keep`/`reset` hide it
+on lift). Release (`mouseup` anywhere via `window`), pointer leave
+(`globalout`), pinch-lift, and resize all clear it. A 500 ms `lastTouchAt`
+guard keeps the compat mouse trail a tap leaves behind from re-showing the
+rule. Overlay is a self-styled div created/removed with the chart
+(`aria-hidden`, `pointer-events: none`, `currentColor` at 50% so it follows
+the theme); `.chart` gains `position: relative` to anchor it. No tests —
+`bsocChartView` is canvas-gated (jsdom `createChart` returns null) and has
+never been unit-tested; behavior is manual-verify (below).
+
+Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **89/89**
+(includes the axis-ticks additions from 3ec9a09), svelte-check 0/0. `web/dist`
+rebuilt; manual check: press/drag on desktop shows the rule and hides on
+release; tap/drag on phone shows it while down, hidden after lift.
 
 ### 2026-11-13 (2) — Then chart: zoom-refetch 400 + touch readout
 
