@@ -219,6 +219,7 @@
       <div
         class="chart"
         bind:this={chartEl}
+        data-evcc-swipe-ignore
         role="img"
         aria-label="Vehicle and home battery state of charge over time, charging sessions marked"
       ></div>
