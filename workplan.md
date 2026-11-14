@@ -231,6 +231,28 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 - **Start/stop actuation from the app** — endpoints + consent semantics on the seam
   kept in step 2 (the CLI's explicit-flag consent is the model).
 - **Manual refresh UI** — user-triggered fetch alongside polling.
+- **Drag-following page-slide animation** (requested 2026-11-13; upgrades the
+  instant switch of the swipe tab navigation shipped in `feat/swipe-tab-navigation`)
+  — native-app-like tab transitions where the page track follows the finger:
+  - **Track:** render the tab panels in a horizontal flex track with the two
+    neighbor panels beside the active one (lazy-mounted at drag start);
+    `touchmove` translates the track by the drag delta (`translate3d`,
+    compositor-only — requirement 1b's interaction-perf budget).
+  - **Settle:** on release, complete the slide when travel/velocity clears the
+    threshold (reuse `classifySwipe` for direction; velocity picks hard-fling
+    vs eased settle), else snap back; 200–300 ms eased transition on an M3
+    expressive easing curve. `prefers-reduced-motion: reduce` keeps the
+    current instant switch.
+  - **Gestural isolation:** `touch-action: pan-y` on the track so vertical
+    scrolling survives; gestures starting on `data-evcc-swipe-ignore`
+    (charts, nav) never drag the track — the existing ignore rule stays the
+    single gate.
+  - **Open micro-decisions at implementation:** rubber-band resistance vs hard
+    stop at the ends (no wrap-around stands, per the shipped decision);
+    neighbor panel lifecycle while offscreen (Now's polling pause, Then's
+    ECharts mount/dispose cost — the current pages remount on switch and the
+    drag UX may want them kept alive across the gesture).
+  - Validate drag frame time on-device in step 9's QA sweep.
 
 ### Risks / notes
 
@@ -298,6 +320,75 @@ checks. Touch/menu feel on real devices → step 9 QA.
 Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **125/125**,
 svelte-check 0/0, vite build OK (644 kB raw / 219 kB gz).
 
+### 2026-11-13 (4) — swipe tab navigation (touch)
+
+Branch `feat/swipe-tab-navigation` (PR issued on `origin/main` at `051a98a`;
+the `workplan.md` Log conflict with the (3) entry below resolved in the
+rebase). On touchscreen devices, horizontal flicks navigate Now/Then/Messages;
+mouse and trackpad behavior are unchanged (touch events only).
+
+- **Pure `web/src/lib/swipe.ts`** (the `bsocChart.ts` no-DOM pattern):
+  `classifySwipe` (deliberate flick = ≥ 48 px travel, ≥ 1.5× horizontal
+  dominance over vertical, ≤ 700 ms; named constants) and `adjacentTabId`
+  (TABS order — left = forward, right = back; **no wrap-around** at the ends,
+  per agreed assumptions). 5 unit tests in `web/tests/swipe.test.ts`.
+- **Wiring in `App.svelte`:** one-finger gesture tracking on the shell —
+  `touchstart` in **capture** phase (chart libs that `stopPropagation` cannot
+  hide where a gesture began) plus `touchend`/`touchcancel`; passive
+  listeners, never `preventDefault`, so page scrolling and chart gestures are
+  untouched. A second finger at `touchstart` (pinch attempt) cancels tracking.
+- **Gestural isolation via `data-evcc-swipe-ignore`** (`SWIPE_IGNORE_ATTR`):
+  the Then chart container (charts own their pan/pinch/readout interface) and
+  the nav bar/rail (its own controls) ignore gestures starting on them; the
+  start-time check is authoritative for the whole gesture (touch targets are
+  fixed). Future charts opt in with the same attribute.
+- **5 component tests** (`web/tests/swipe-gestures.test.ts`; jsdom
+  `fireEvent` TouchEvent with plain coordinate touches — supported natively by
+  jsdom 29's `TouchEvent`): both directions, no wrap at either end, chart +
+  nav ignored, vertical / short-flick / two-finger ignored (with a sanity
+  re-swipe on the same target).
+- **Drag-following page-slide animation planned as a fast-follow** (see
+  Fast-follows above) — not implemented here; the instant switch ships now.
+- Test-invocation gotcha learned en route: `npx vitest run --root web` from
+  the repo root externalizes noph-ui (Node chokes on raw `.svelte`); the npm
+  scripts run vitest with cwd `web/` — that is the supported path.
+
+Gate: `npm run check` green post-rebase (`051a98a`) — root **1054 passed /
+2 skipped**, web **102/102** (+10), svelte-check 0/0. On-device swipe feel
+pending user.
+
+### 2026-11-13 (5) — Then chart: no bottom axis line, half-length label-colored ticks
+
+User request (follow-up to the axis-tick work in 3ec9a09). `buildBsocOption`
+now: **x-axis `axisLine.show: false`** (the horizontal line coincident with
+the chart bottom is gone), **both axes' `axisTick` halved to 2.5 px**
+(ECharts default is 5 — new exported `AXIS_TICK_LENGTH`) and recolored to
+`AXIS_LABEL_COLOR` (`#909090`, same as the tick labels), and **y-axis gains
+the same ticks with its `axisLine` explicitly suppressed**. Test pin added:
+`suppresses both axis lines and draws half-length label-colored ticks`
+(OptionShape grew `axisLine`/`axisTick` fields). Gate: `npm run check` green —
+root **1054 passed / 2 skipped**, web **93/93**, svelte-check 0/0; `web/dist`
+rebuilt for the Tailscale origin.
+
+### 2026-11-13 (4) — cursor rule refinements: grey + y-axis bounds + line markers
+
+Follow-up to the down-only cursor rule. The rule is now a fixed
+**medium-light grey** (`#a6a6a6`, theme-independent) and **truncated to the
+y-axis (grid) bounds** — top/bottom come from
+`convertToPixel({gridIndex: 0}, [x, 100|0])` instead of spanning the whole
+chart element (which included margins above/below the 0–100% axis). Two
+**intersection markers** were added: a 9 px circle where the rule crosses
+each BSoC line, stroked in the series color (`EV_COLOR` / `HOME_COLOR`,
+2 px) with a 60% white fill; positioned via `sampleAtOrBefore` +
+`convertToPixel`, so they sit exactly on the lines and hide when a series has
+no sample at/before the rule (or during data gaps). Series points are
+extracted from the option in `setOption` (name-matched, gap `null`s filtered);
+markers re-align on every datazoom event and data reload while the pointer is
+down (`currentPx`). Same canvas-gated manual-verify status as the rule itself.
+
+Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **92/92**,
+svelte-check 0/0. `web/dist` rebuilt for the Tailscale origin.
+
 ### 2026-11-13 (3) — Then chart: hide session edge lines at wide zoom
 
 Branch `fix/bsoc-hide-session-edges-wide-zoom` (user request): the dashed
@@ -320,6 +411,27 @@ stay at every zoom.
 Gate: `npm run check` green on `main` (258c937, post-rebase) — root **1054
 passed / 2 skipped**, web **92/92** (bsoc 66), svelte-check 0/0.
 
+### 2026-11-13 (3) — Then chart: down-only cursor rule
+
+Branch `feature/then-pointer-rule`. A 1 px vertical rule at the pointer's x
+position, visible **only while the pointer is down** (user request): mouse
+press-and-hold/drag (`buttons` bit in the zrender mousemove path + a DOM
+`mousedown` that anchors the exact press point — covering click-without-move,
+which also pins the readout there) and touch (`touchReadout` actions: `pin`
+shows at the finger x, `freeze` keeps it during pinch, `keep`/`reset` hide it
+on lift). Release (`mouseup` anywhere via `window`), pointer leave
+(`globalout`), pinch-lift, and resize all clear it. A 500 ms `lastTouchAt`
+guard keeps the compat mouse trail a tap leaves behind from re-showing the
+rule. Overlay is a self-styled div created/removed with the chart
+(`aria-hidden`, `pointer-events: none`, `currentColor` at 50% so it follows
+the theme); `.chart` gains `position: relative` to anchor it. No tests —
+`bsocChartView` is canvas-gated (jsdom `createChart` returns null) and has
+never been unit-tested; behavior is manual-verify (below).
+
+Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **89/89**
+(includes the axis-ticks additions from 3ec9a09), svelte-check 0/0. `web/dist`
+rebuilt; manual check: press/drag on desktop shows the rule and hides on
+release; tap/drag on phone shows it while down, hidden after lift.
 
 ### 2026-11-13 (2) — Then chart: zoom-refetch 400 + touch readout
 

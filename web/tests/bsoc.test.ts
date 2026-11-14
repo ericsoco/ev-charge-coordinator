@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SeriesResult, SessionSummary } from '../../src/api/types';
 import {
   AXIS_LABEL_COLOR,
+  AXIS_TICK_LENGTH,
   buildBsocOption,
   classifyWheel,
   clampWindow,
@@ -507,9 +508,17 @@ describe('buildBsocOption (requirements 2b)', () => {
       min?: number;
       max?: number;
       minInterval?: number;
+      axisLine?: { show?: boolean };
+      axisTick?: { length?: number; lineStyle?: { color?: string } };
       axisLabel?: { color?: string; formatter?: (value: unknown) => string };
     };
-    yAxis?: { min?: number; max?: number; axisLabel?: { color?: string } };
+    yAxis?: {
+      min?: number;
+      max?: number;
+      axisLine?: { show?: boolean };
+      axisTick?: { length?: number; lineStyle?: { color?: string } };
+      axisLabel?: { color?: string };
+    };
     dataZoom?: Array<{
       type?: string;
       start?: number;
@@ -563,6 +572,15 @@ describe('buildBsocOption (requirements 2b)', () => {
     expect(opt.xAxis?.minInterval).toBe(X_TICK_MIN_INTERVAL_MS);
     expect(opt.xAxis?.axisLabel?.color).toBe(AXIS_LABEL_COLOR);
     expect(opt.yAxis?.axisLabel?.color).toBe(AXIS_LABEL_COLOR);
+  });
+
+  it('suppresses both axis lines and draws half-length label-colored ticks', () => {
+    const opt = option([]);
+    expect(opt.xAxis?.axisLine?.show).toBe(false);
+    expect(opt.yAxis?.axisLine?.show).toBe(false);
+    const tick = { length: AXIS_TICK_LENGTH, lineStyle: { color: AXIS_LABEL_COLOR } };
+    expect(opt.xAxis?.axisTick).toEqual(tick);
+    expect(opt.yAxis?.axisTick).toEqual(tick);
   });
 
   it('formats x tick labels as (H)H(:MM) am/pm', () => {

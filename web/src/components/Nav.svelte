@@ -21,7 +21,7 @@
   swaps so the layout needs no JS. Emoji icons are the requirements'
   literal ⚡️/🔄/💬 and cost no font payload.
 -->
-<div class="bar">
+<div class="bar" data-evcc-swipe-ignore>
   <NavigationBar aria-label="Main">
     {#each TABS as tab (tab.id)}
       <NavigationBarItem
@@ -35,7 +35,7 @@
   </NavigationBar>
 </div>
 
-<div class="rail">
+<div class="rail" data-evcc-swipe-ignore>
   <NavigationRail aria-label="Main">
     {#each TABS as tab (tab.id)}
       <NavigationRailItem

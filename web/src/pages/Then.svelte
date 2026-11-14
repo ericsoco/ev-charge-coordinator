@@ -323,6 +323,7 @@
       <div
         class="chart"
         bind:this={chartEl}
+        data-evcc-swipe-ignore
         role="img"
         aria-label="Vehicle and home battery state of charge over time, charging sessions marked"
       ></div>
@@ -416,8 +417,10 @@
     cursor: pointer;
   }
 
-  /* ECharts needs an explicit box; width is the full container. */
+  /* ECharts needs an explicit box; width is the full container. The chart
+     element also anchors the view's down-only cursor rule overlay. */
   .chart {
+    position: relative;
     width: 100%;
     height: clamp(200px, 40vh, 360px);
   }
