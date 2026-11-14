@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SeriesResult, SessionSummary } from '../../src/api/types';
 import {
+  AXIS_LABEL_COLOR,
   buildBsocOption,
   classifyWheel,
   clampWindow,
@@ -10,6 +11,7 @@ import {
   fetchWindowFor,
   formatBsocValue,
   formatReadoutTs,
+  formatXTick,
   HOME_COLOR,
   HOME_SERIES_NAME,
   MAX_EVENT_ZOOM,
@@ -26,6 +28,7 @@ import {
   spanOf,
   touchReadout,
   windowToPercent,
+  X_TICK_MIN_INTERVAL_MS,
   zoomAt,
   zoomFactorFor,
   type BsocData,
@@ -297,6 +300,26 @@ describe('formatBsocValue', () => {
   });
 });
 
+describe('formatXTick', () => {
+  /** Local-time wall clock → timestamp, so expectations hold in any TZ. */
+  const ts = (h: number, m: number): number => new Date(2026, 10, 12, h, m).getTime();
+
+  it('renders (H)H am/pm with no leading zero and no trailing :00', () => {
+    expect(formatXTick(ts(8, 0))).toBe('8am');
+    expect(formatXTick(ts(9, 0))).toBe('9am');
+    expect(formatXTick(ts(23, 0))).toBe('11pm');
+    expect(formatXTick(ts(0, 0))).toBe('12am');
+    expect(formatXTick(ts(12, 0))).toBe('12pm');
+  });
+
+  it('renders :MM when the tick is not on the hour', () => {
+    expect(formatXTick(ts(8, 30))).toBe('8:30am');
+    expect(formatXTick(ts(8, 5))).toBe('8:05am');
+    expect(formatXTick(ts(23, 45))).toBe('11:45pm');
+    expect(formatXTick(ts(0, 15))).toBe('12:15am');
+  });
+});
+
 describe('sampleAtOrBefore', () => {
   const points: Array<[number, number]> = [
     [100, 10],
@@ -468,8 +491,14 @@ describe('buildBsocOption (requirements 2b)', () => {
     /** Pinned absent: the readout row below the chart replaces both. */
     legend?: unknown;
     tooltip?: unknown;
-    xAxis?: { type?: string; min?: number; max?: number };
-    yAxis?: { min?: number; max?: number };
+    xAxis?: {
+      type?: string;
+      min?: number;
+      max?: number;
+      minInterval?: number;
+      axisLabel?: { color?: string; formatter?: (value: unknown) => string };
+    };
+    yAxis?: { min?: number; max?: number; axisLabel?: { color?: string } };
     dataZoom?: Array<{
       type?: string;
       start?: number;
@@ -516,6 +545,21 @@ describe('buildBsocOption (requirements 2b)', () => {
     // The static readout row below the chart replaces both.
     expect(opt.legend).toBeUndefined();
     expect(opt.tooltip).toBeUndefined();
+  });
+
+  it('spaces x ticks by X_TICK_MIN_INTERVAL_MS and styles axis labels', () => {
+    const opt = option([]);
+    expect(opt.xAxis?.minInterval).toBe(X_TICK_MIN_INTERVAL_MS);
+    expect(opt.xAxis?.axisLabel?.color).toBe(AXIS_LABEL_COLOR);
+    expect(opt.yAxis?.axisLabel?.color).toBe(AXIS_LABEL_COLOR);
+  });
+
+  it('formats x tick labels as (H)H(:MM) am/pm', () => {
+    const formatter = option([]).xAxis?.axisLabel?.formatter;
+    expect(typeof formatter).toBe('function');
+    // Local wall clock so the expectation holds in any TZ.
+    expect(formatter?.(new Date(2026, 10, 12, 8, 30).getTime())).toBe('8:30am');
+    expect(formatter?.(new Date(2026, 10, 12, 8, 0).getTime())).toBe('8am');
   });
 
   it('spans the DOMAIN on the x axis even when the loaded bounds differ', () => {
