@@ -1,3 +1,19 @@
+Two problems with chart interaction I'd like you to fix:
+1. When I scroll/zoom in the bsocChart, I only ever see the most recent 24h of data. Nothing else loads, and I see this error displayed: "Refresh failed: read API responded 400 -- showing the last good data."
+2. The tooltip-like functionality no longer works after removing the tooltip and moving the display to the static legend: the legend does not update with tap/click nor with drag.
+
+NEXT CHART/APP TASKS (after web hosting)
+[ ] Loading on mobile via LAN: often displays blank page for a while / until refresh? Just witnessed this at ~10:40am.
+[ ] switch to d3?
+[ ] display window should extend beyond screen edges (prob one full viewport to left and right? or even more, maybe all loaded content?) for better visual continuity; currently e.g. the EV BSOC path is truncated at screen edges when the next measured point is at all off-screen.
+[ ] add interia to horizontal pan on mobile
+[ ] two-finger pinch-zoom increments are too small on desktop + trackpad, too large on mobile (is it a viewport size issue?)
+[ ] axis ticks:
+    [ ] increase spacing between x-axis ticks
+    [ ] format x-axis ticks as (H)H(:MM) am/pm
+        e.g. "8am", "8:30am", "11am"
+    [ ] lighter font-color
+
 FEATURES
 [X] Trigger charging math + session on vehicle plugged in (at home) event. Does Tesla provide a way to push this event?
     [X] Need to (re?) design application as a long-running process
@@ -63,6 +79,8 @@ TASKS / BUGS
     [ ] Remove noisy logs
 [ ] Expose common commands in package.json to run via `npm run x`
 [ ] Add convenience npm script to open config / daemon-config json files in an editor
+[ ] Consioder dropping echarts in favor of d3?
+    Smaller bundle size, more control, less API + bundle bloat?
 [ ] Consider removing `get-ev-bsoc` in favor of `get-charging-state`
 [ ] Clean up README (remove slop; make dev setup steps clear and contiguous; same for end-user steps; ensure unified docs across CLI + REPL, as there is some divergence)
     [ ] So far, have cleaned up up to "## CLI Reference". Continue from there.
@@ -77,63 +95,6 @@ TASKS / BUGS
     [X] Clean up index.ts?
         Very bloated now, can individual commands be moved out?
         How are REPL + one-shot / Commander kept in sync?
-
-
----------------------------------------------------------------------------------------------------
-
-# UX fixes (post-P2-step-4)
-try using cline kanban agent:
-Prepare a plan for the below fixes to the Web app functionality created so far.
-Use subagents + and run agents in parallel as helpful to complete the work.
-Ultimately, land all these fixes to a single branch, and push a PR from that branch.
-
-## Web app overall
-// * Loading on mobile via LAN: often displays blank page for a while / until refresh? need clearer repro
-
-## Now tab
-* bsoc values should be rounded to nearest tenth of a percent
-
-## Then tab
-* legend
-    * color key is missing
-    * make legend labels dynamic to display tooltip content (see tooltip below)
-    * format legend like this: 🟧 🏠: x% | 🟦 🚗: y%, where:
-        * squares are not emoji, but are css-colored squares that match the colors used in the chart
-        * x and y are bsoc values for home battery and car battery, respectively
-        * bsoc values should be rounded to nearest tenth of a percent
-    * ts should be formatted as MMM DD HH:SS and displayed in a static location,
-      to left of legend
-* tooltip interaction
-    * should only display vehicle + home bsoc, not charging session info
-    * should be dependent only on x-axis location (not y-axis / chart marks hit area),
-      displaying all relevant values at that moment in time: ts, home bsoc, car bsoc
-    * displayed content is integrated into the chart legend, in a static location (see legend above).
-      if this means we can eliminate the TooltipComponent usage, go ahead and remove it.
-* chart
-    * desktop:
-        * i can't zoom or scrub, neither using two-finger scrolling nor pinch-zoom on trackpad.
-          (note: i don't have a mouse scroll wheel to test with)
-    * mobile:
-        * do not update tooltip (legend) values while pinching to zoom in/out
-        // * one-finger drag to scroll only works while over far left/right edges of chart
-            --> maybe this is an issue with windowing rather than interaction? it works better when zoomed in...
-    * both:
-        * i left pagination / lazy-loading to you, but i don't see it working
-          (despite refetch logic in bsocChart.js). i have not been able to trigger
-          a pagination / refetch at all.
-          zoom/pan should automatically fetch more time series data as needed when chart bounds
-          are wider than currently loaded data (minus a buffer to prevent displaying empty space).
-          this may end up necessitating changes to data time-bucketing,
-          but let's try to avoid that in this pass.
-        * i can't zoom out more than a 24h window -- i believe because nothing is loading when i zoom out.
-        * connect gaps in EV bsoc samples with a dashed line. extend this line forward/backward in time
-          from latest/earliest bsoc sample to left/right edge of chart as needed.
-        * sessions don't seem to be displaying properly, but I think this is likely more a
-          data modeling issue than a charting issue. I see one session on nov 12
-          from ~approx. ~09:30 to ~15:40 in which EV BSoC stayed flat (while home battery increased significantly),
-          and another from ~16:55 to the latest timestep (~23:00 at the time of writing) that is still open,
-          with EV BSoC increasing until ~18:00 then staying flat.
-
 
 
 
