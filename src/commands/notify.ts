@@ -4,7 +4,7 @@
  * All I/O sits behind NotifyDeps so tests dispatch through a fake store.
  */
 import { Command } from 'commander';
-import type { NotifierConfigEntry } from '../notifiers/types.js';
+import type { NotificationEvent, NotifierConfigEntry } from '../notifiers/types.js';
 import { buildNotifiers, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
 
@@ -19,6 +19,11 @@ export interface NotifyDeps {
   promptSecret: (question: string) => Promise<string>;
   log: (message: string) => void;
   nowMs: () => number;
+  /**
+   * Fanout record hook (P2 step 7): persists a successful test send so the
+   * Messages tab shows it exactly like any daemon event. Unset = no record.
+   */
+  record?: (event: NotificationEvent) => void;
   /** Injectable for tests; forwarded to the HTTP clients. */
   fetchImpl?: typeof fetch;
 }
@@ -87,7 +92,10 @@ export async function runNotifyTest(deps: NotifyDeps): Promise<boolean> {
   }
 
   const names = targets.map((target) => target.name);
-  await createNotifierFanout(targets, deps.log).notify({ type: 'test', tsMs: deps.nowMs() });
+  await createNotifierFanout(targets, deps.log, deps.record).notify({
+    type: 'test',
+    tsMs: deps.nowMs(),
+  });
   deps.log(`✓ test notification sent to: ${names.join(', ')}`);
   return true;
 }

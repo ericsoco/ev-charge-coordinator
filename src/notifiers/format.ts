@@ -2,6 +2,9 @@
  * The one pure renderer: event → the single line every client ships.
  * Deliberately timestamp-free — push services stamp delivery time, and
  * daemon.log already prefixes its own local timestamps.
+ *
+ * `notificationTitle` is its pair: the human headline for the Messages tab
+ * and the Web Push payload (P2 step 7).
  */
 import type { NotificationEvent } from './types.js';
 import type { SessionStopReason } from '../store/types.js';
@@ -52,5 +55,29 @@ function formatDecision(event: DecisionEvent): string {
       return `❌ auto-start failed${detail}`;
     default:
       return `⛔ not started: ${event.reasonCode}${detail}`;
+  }
+}
+
+/**
+ * Headline for the Messages list / push payload — short, glanceable, and
+ * paired with formatNotificationEvent's body (the line ntfy/Slack show).
+ */
+export function notificationTitle(event: NotificationEvent): string {
+  switch (event.type) {
+    case 'plug-in-detected':
+      return 'Vehicle plugged in';
+    case 'decision-made':
+      if (event.dryRun) return 'Auto-start dry-run';
+      return event.accepted ? 'Auto-start accepted' : 'Auto-start declined';
+    case 'charging-started':
+      return 'Charging started';
+    case 'charging-stopped':
+      return 'Charging stopped';
+    case 'session-retargeted':
+      return event.direction === 'raise' ? 'Target raised' : 'Target lowered';
+    case 'failure':
+      return `Failure: ${event.component}`;
+    case 'test':
+      return 'Test notification';
   }
 }

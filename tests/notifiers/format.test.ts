@@ -4,7 +4,7 @@
  * push notification is enough.
  */
 import { describe, expect, it } from 'vitest';
-import { formatNotificationEvent } from '../../src/notifiers/format.js';
+import { formatNotificationEvent, notificationTitle } from '../../src/notifiers/format.js';
 import type { NotificationEvent } from '../../src/notifiers/types.js';
 
 describe('formatNotificationEvent', () => {
@@ -195,5 +195,88 @@ describe('formatNotificationEvent', () => {
       { type: 'failure', tsMs: 1, component: 'ev-poll', message: 'boom' },
     ];
     for (const event of events) expect(formatNotificationEvent(event)).not.toBe('');
+  });
+});
+
+describe('notificationTitle', () => {
+  const base = { tsMs: 1_000, vehicleId: 'VIN' } as const;
+
+  it('headlines every event type for the Messages list / push payload', () => {
+    expect(
+      notificationTitle({ ...base, type: 'plug-in-detected', sessionId: 1, evSocPercent: null })
+    ).toBe('Vehicle plugged in');
+    expect(
+      notificationTitle({
+        ...base,
+        type: 'decision-made',
+        sessionId: null,
+        accepted: true,
+        dryRun: true,
+        reasonCode: 'dry_run',
+        reasonDetail: null,
+        targetPercent: null,
+        evSocPercent: null,
+      })
+    ).toBe('Auto-start dry-run');
+    expect(
+      notificationTitle({
+        ...base,
+        type: 'decision-made',
+        sessionId: null,
+        accepted: true,
+        dryRun: false,
+        reasonCode: 'started',
+        reasonDetail: null,
+        targetPercent: 80,
+        evSocPercent: 45,
+      })
+    ).toBe('Auto-start accepted');
+    expect(
+      notificationTitle({
+        ...base,
+        type: 'decision-made',
+        sessionId: null,
+        accepted: false,
+        dryRun: false,
+        reasonCode: 'below_buffer',
+        reasonDetail: null,
+        targetPercent: null,
+        evSocPercent: null,
+      })
+    ).toBe('Auto-start declined');
+    expect(
+      notificationTitle({ ...base, type: 'charging-started', sessionId: null, evSocPercent: null })
+    ).toBe('Charging started');
+    expect(
+      notificationTitle({
+        ...base,
+        type: 'charging-stopped',
+        sessionId: null,
+        evSocPercent: null,
+        reason: null,
+      })
+    ).toBe('Charging stopped');
+    expect(
+      notificationTitle({
+        ...base,
+        type: 'session-retargeted',
+        sessionId: 1,
+        direction: 'raise',
+        detail: '',
+      })
+    ).toBe('Target raised');
+    expect(
+      notificationTitle({
+        ...base,
+        type: 'session-retargeted',
+        sessionId: 1,
+        direction: 'lower',
+        detail: '',
+      })
+    ).toBe('Target lowered');
+    expect(
+      notificationTitle({ type: 'failure', tsMs: 1, component: 'ev-poll', message: 'boom' })
+    ).toBe('Failure: ev-poll');
+    expect(notificationTitle({ type: 'test', tsMs: 1 })).toBe('Test notification');
   });
 });

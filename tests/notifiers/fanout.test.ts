@@ -71,4 +71,29 @@ describe('createNotifierFanout', () => {
     await expect(createNotifierFanout([], log).notify(event)).resolves.toBeUndefined();
     expect(log).not.toHaveBeenCalled();
   });
+
+  it('runs the record hook first with the same event (P2 step 7)', async () => {
+    const target = named('a', async () => {});
+    const record = vi.fn();
+
+    await createNotifierFanout([target], vi.fn(), record).notify(event);
+
+    expect(record).toHaveBeenCalledWith(event);
+    expect(target.calls).toEqual([event]);
+  });
+
+  it('a failing record hook is logged and never blocks delivery', async () => {
+    const target = named('a', async () => {});
+    const log = vi.fn();
+    const record = vi.fn(() => {
+      throw new Error('disk full');
+    });
+
+    await expect(
+      createNotifierFanout([target], log, record).notify(event)
+    ).resolves.toBeUndefined();
+
+    expect(target.calls).toEqual([event]);
+    expect(log).toHaveBeenCalledWith('[notify] record failed: disk full');
+  });
 });

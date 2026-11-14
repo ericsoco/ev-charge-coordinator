@@ -16,6 +16,7 @@ import { openStore, storePath } from '../store/database.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
 import * as evStore from '../store/EvStore.js';
 import * as sessionStore from '../store/SessionStore.js';
+import * as notificationStore from '../store/NotificationStore.js';
 import { acquireLock, lockPath, type LockHandle } from './lockfile.js';
 import { createScheduler, type ScheduledTask } from './scheduler.js';
 import { createBatterySampler } from './BatterySampler.js';
@@ -26,6 +27,7 @@ import { createReTargeter, type ReTargeter } from './reTarget.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import { buildNotifiers, notifierRequiresSecret, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
+import { createNotificationRecorder } from '../notifiers/record.js';
 import { createFailureThrottle } from '../notifiers/throttle.js';
 import type { Notifier } from '../notifiers/types.js';
 import { createWeatherSampler, type FetchForecast } from './WeatherSampler.js';
@@ -104,13 +106,16 @@ const RETENTION_TASK_MS = 86_400_000;
 
 /**
  * The daemon's notification sink: a caller override (tests), else one fanout
- * built from config.notifiers + credential-store secrets. The secret read is
- * lazy — log-only configs never touch the credential store — and fails soft:
+ * built from config.notifiers + credential-store secrets, with the Messages
+ * recorder attached (P2 step 7 — every dispatched event is written regardless
+ * of which external clients are configured). The secret read is lazy —
+ * log-only configs never touch the credential store — and fails soft:
  * secretless clients are then skipped by the builder with a loud line.
  */
 async function resolveNotifier(
   options: RunDaemonOptions,
-  log: (message: string) => void
+  log: (message: string) => void,
+  db: DatabaseSync
 ): Promise<Notifier> {
   if (options.notifier) return options.notifier;
   let secrets: NotifierSecrets | undefined;
@@ -127,7 +132,8 @@ async function resolveNotifier(
   }
   return createNotifierFanout(
     buildNotifiers({ entries: options.config.notifiers, secrets, log }),
-    log
+    log,
+    createNotificationRecorder(db)
   );
 }
 
@@ -157,7 +163,7 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
 
   const eventVehicleId = options.vehicleId ?? 'daemon';
   const tasks: ScheduledTask[] = [];
-  const notifier = await resolveNotifier(options, log);
+  const notifier = await resolveNotifier(options, log, db);
 
   // Record the proxy WE spawned so one-shot commands (status attach,
   // charge-from-battery, exit) can find and authenticate against it. Attached
@@ -317,11 +323,20 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
     name: 'retention-prune',
     everyMs: RETENTION_TASK_MS,
     run: () => {
+      const now = nowMs();
       const removed =
-        homeBattery.prune(db, options.config.retentionDays, nowMs()) +
-        evStore.prune(db, options.config.retentionDays, nowMs());
+        homeBattery.prune(db, options.config.retentionDays, now) +
+        evStore.prune(db, options.config.retentionDays, now);
       if (removed > 0) {
         log(`[daemon] retention-prune removed ${removed} raw rows (>${options.config.retentionDays}d)`);
+      }
+      const messages = notificationStore.pruneNotifications(
+        db,
+        options.config.retentionDays,
+        now
+      );
+      if (messages > 0) {
+        log(`[daemon] retention-prune removed ${messages} notifications (>${options.config.retentionDays}d)`);
       }
     },
   });
