@@ -1,19 +1,3 @@
-Two problems with chart interaction I'd like you to fix:
-1. When I scroll/zoom in the bsocChart, I only ever see the most recent 24h of data. Nothing else loads, and I see this error displayed: "Refresh failed: read API responded 400 -- showing the last good data."
-2. The tooltip-like functionality no longer works after removing the tooltip and moving the display to the static legend: the legend does not update with tap/click nor with drag.
-
-NEXT CHART/APP TASKS (after web hosting)
-[ ] Loading on mobile via LAN: often displays blank page for a while / until refresh? Just witnessed this at ~10:40am.
-[ ] switch to d3?
-[ ] display window should extend beyond screen edges (prob one full viewport to left and right? or even more, maybe all loaded content?) for better visual continuity; currently e.g. the EV BSOC path is truncated at screen edges when the next measured point is at all off-screen.
-[ ] add interia to horizontal pan on mobile
-[ ] two-finger pinch-zoom increments are too small on desktop + trackpad, too large on mobile (is it a viewport size issue?)
-[ ] axis ticks:
-    [ ] increase spacing between x-axis ticks
-    [ ] format x-axis ticks as (H)H(:MM) am/pm
-        e.g. "8am", "8:30am", "11am"
-    [ ] lighter font-color
-
 FEATURES
 [X] Trigger charging math + session on vehicle plugged in (at home) event. Does Tesla provide a way to push this event?
     [X] Need to (re?) design application as a long-running process
@@ -40,13 +24,14 @@ FEATURES
         [ ] Now page big number charts: start with this:
             https://codefronts.com/motion/css-number-counter-animations/svg-stroke-dash-progress-ring-counter/
             but slow down counter tick animation, since numbers will change infrequently
-    [ ] automate execution:
-        [ ] switch cline (> settings) to smarter model for Plan mode (Act can stay medium)
-        [ ] create new branch to use as base ref for cline kanban worktrees
-        [ ] write prompt for agent team
-        [ ] feed to cline prompt to break into smaller tasks and add to kanban board -- set all tasks to auto-commit
-        [ ] hit play on kanban board
-[ ] 
+
+CHART/APP REFINEMENTS
+[ ] Loading on mobile via LAN: often displays blank page for a while / until refresh? Just witnessed this at ~10:40am.
+[ ] Consider dropping echarts in favor of d3?
+    Smaller bundle size, more control, less API + bundle bloat?
+[ ] display window should extend beyond screen edges (prob one full viewport to left and right? or even more, maybe all loaded content?) for better visual continuity; currently e.g. the EV BSOC path is truncated at screen edges when the next measured point is at all off-screen.
+[ ] add interia to horizontal pan on mobile
+[ ] two-finger pinch-zoom increments are too small on desktop + trackpad, too large on mobile (is it a viewport size issue?)
 
 SCALING
 [ ] Host application online somewhere
@@ -74,13 +59,13 @@ TASKS / BUGS
 [X] Every `npm start daemon restart` throws an error the first run, succeeds the second.
     Error: bootstrap of /Users/ericsoco/Library/LaunchAgents/com.transmote.ev-charge-coordinator.daemon.plist failed: Bootstrap failed: 5: Input/output error Try re-running the command as root for richer errors.
 
+
+
 [ ] Refine ntfy messaging
     [ ] More human-readable and helpful
     [ ] Remove noisy logs
 [ ] Expose common commands in package.json to run via `npm run x`
 [ ] Add convenience npm script to open config / daemon-config json files in an editor
-[ ] Consioder dropping echarts in favor of d3?
-    Smaller bundle size, more control, less API + bundle bloat?
 [ ] Consider removing `get-ev-bsoc` in favor of `get-charging-state`
 [ ] Clean up README (remove slop; make dev setup steps clear and contiguous; same for end-user steps; ensure unified docs across CLI + REPL, as there is some divergence)
     [ ] So far, have cleaned up up to "## CLI Reference". Continue from there.
