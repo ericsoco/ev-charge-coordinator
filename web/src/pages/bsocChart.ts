@@ -43,6 +43,14 @@ export const EV_COLOR = '#4c6ef5';
 export const HOME_COLOR = '#f59e0b';
 export const SESSION_LINE_COLOR = '#9aa0a6';
 export const SESSION_TINT = 'rgba(76, 110, 245, 0.10)';
+/** Axis tick label color (medium-dark grey). Tweak here to restyle the ticks. */
+export const AXIS_LABEL_COLOR = '#616161';
+/**
+ * Floor on the spacing between x-axis ticks, ms (30 min). Tweak here to change
+ * tick density: larger = fewer, more widely spaced ticks (ECharts may still
+ * space them wider at coarse zoom levels, never closer than this).
+ */
+export const X_TICK_MIN_INTERVAL_MS = 30 * 60 * 1000;
 
 export interface TimeWindow {
   from: number;
@@ -207,6 +215,20 @@ export function formatBsocValue(value: number | null): string {
 }
 
 /**
+ * X-axis tick label: local `(H)H(:MM) am/pm` — no leading zero, no trailing
+ * `:00` (e.g. `8am`, `8:30am`, `11pm`); `12am`/`12pm` at midnight/noon.
+ */
+export function formatXTick(tsMs: number): string {
+  const d = new Date(tsMs);
+  const hour12 = d.getHours() % 12 || 12;
+  const suffix = d.getHours() < 12 ? 'am' : 'pm';
+  const minutes = d.getMinutes();
+  return minutes === 0
+    ? `${hour12}${suffix}`
+    : `${hour12}:${String(minutes).padStart(2, '0')}${suffix}`;
+}
+
+/**
  * Value of the nearest sample at or before `tsMs` (points sorted oldest
  * first); null before the first sample or with no samples.
  */
@@ -353,13 +375,20 @@ export function buildBsocOption(
       // The DOMAIN, not the loaded bounds: the visible window must be able to
       // ride past loaded data (lazy loading refetches it promptly).
       min: domain.from,
-      max: domain.to
+      max: domain.to,
+      // Tick look: spacing floor + label style/format — tweak
+      // X_TICK_MIN_INTERVAL_MS and AXIS_LABEL_COLOR at the top of this module.
+      minInterval: X_TICK_MIN_INTERVAL_MS,
+      axisLabel: {
+        color: AXIS_LABEL_COLOR,
+        formatter: (value: unknown) => formatXTick(Number(value)),
+      },
     },
     yAxis: {
       type: 'value',
       min: 0,
       max: 100,
-      axisLabel: { formatter: '{value}%' },
+      axisLabel: { color: AXIS_LABEL_COLOR, formatter: '{value}%' },
       interval: 25
     },
     dataZoom: [
