@@ -267,6 +267,19 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-14 — PR #86 (P2 step 5) landed manually (GitHub mergeability flake)
+
+GitHub's mergeability UI reported conflicts again after `origin/main` moved
+twice (PR #84 + the tick-labels work), even though both rounds were resolved
+on the branch (merge commits; last `11e9b16`) and CI was green on both Node
+versions — the same flake as PR #78. Landed via git CLI from the main worktree
+as merge commit **`dfe04f2`** ("Merge pull request #86: P2 step 5: Then-tab
+sessions selector with 1s eased focus"; first parent `origin/main` at
+`4a6763d`, second parent the branch head) — merge tree identical to the gated
+branch tree (`ee4af9cc`), so the `npm run check` result transfers. GitHub
+auto-marked PR #86 **MERGED**. The human's uncommitted `docs/TODO.md` edit in
+the main worktree was not in the landing delta and stayed untouched.
+
 ### 2026-11-13 (4) — P2 step 5 complete: sessions selector
 
 Branch `p2/step5-sessions-selector` (off latest `main`, which had gained the
