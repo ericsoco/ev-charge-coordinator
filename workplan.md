@@ -335,7 +335,8 @@ svelte-check 0/0, vite build OK (644 kB raw / 219 kB gz).
 
 ### 2026-11-13 (6) — Then tab: tap readout labels to toggle BSoC series
 
-Branch `feature/then-bsoc-series-toggle`. User request: tapping the home
+Branch `feature/then-bsoc-series-toggle` (PR [#87](https://github.com/ericsoco/ev-charge-coordinator/pull/87)
+issued on `origin/main`). User request: tapping the home
 label/value in the Then readout row toggles the home BSoC chart series on/off;
 same for the car (vehicle) label/value.
 
