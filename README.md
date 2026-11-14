@@ -607,6 +607,65 @@ A configured client without its secret is skipped at boot with a loud log line
 naming the command that fixes it. Restart the daemon after config changes
 (`evcc daemon restart` re-reads the file).
 
+## Remote access (Tailscale)
+
+The read API binds loopback only, so to view the web app from outside your
+LAN you reach it through [Tailscale Serve](https://tailscale.com/kb/1312/serve):
+the Mac and your devices join a tailnet, and one command forwards the port to
+an `https://…ts.net` hostname over an encrypted link. Nothing is exposed
+publicly, no DNS or registrar changes are involved, and it is $0 on the
+[free plan](https://tailscale.com/pricing) (up to 6 users, unlimited devices).
+
+**Setup (once):**
+
+1. Install [Tailscale](https://tailscale.com/download) on the Mac, sign in
+   (this creates your tailnet), and check `tailscale status` shows the node
+   online.
+2. Build the web app if `web/dist` is missing —
+   `npm run build --workspace=evcc-web` (the daemon serves it at `/` next to
+   the API; see [docs/api.md](./docs/api.md) static serving).
+3. Forward the API port:
+
+   ```bash
+   tailscale serve --bg 3002
+   ```
+
+   Prints `https://<machine>.<tailnet>.ts.net (tailnet only)` →
+   `proxy http://127.0.0.1:3002`. The first run auto-enables HTTPS
+   certificates for your tailnet; `--bg` persists across reboots (Serve
+   resumes whenever Tailscale restarts).
+4. On your phone, install the Tailscale app, sign in with the same account,
+   turn the VPN on, and open the printed URL. The app's token panel appears
+   on the first 401 — paste `node dist/index.js api-token` — then
+   **Add to Home Screen** for an app-like icon.
+5. Verify / roll back:
+
+   ```bash
+   tailscale serve status    # https://…ts.net → proxy http://127.0.0.1:3002
+   tailscale serve reset     # remove all serve forwards
+   ```
+
+**Demoing to someone else:** they can install Tailscale and join your tailnet
+(admin console → Users → invite), or — for a bare link with no install — you
+can flip the same port to public with
+[Tailscale Funnel](https://tailscale.com/kb/1343/funnel):
+
+```bash
+tailscale funnel --bg 3002        # public: prints the same …ts.net URL (approve the prompt once)
+tailscale funnel --bg 3002 off    # close it again
+tailscale serve --bg 3002         # …and return to tailnet-only serve
+```
+
+With Funnel the static shell is public, but **every `/api` route still
+requires the bearer token** (display-only API, no control endpoints). Serve
+and Funnel share the port — whichever command ran last wins.
+
+Caveats: the Mac must be awake and Tailscale connected (the daemon's
+`caffeinate -is` covers idle sleep, not a closed lid), and tailnet mode
+requires the app on every viewer's device. This is transport only — the
+multi-user / cloud-hosting direction for later phases is unchanged
+(workplan.md, 2026-11-13).
+
 ## CLI Reference
 
 One-shot and interactive CLI commands. Commands marked with ➡️ are one-shot only (`node dist/index.js <command>` or `npm start <command>`); those marked with 🔁 work only in the interactive CLI (inside `start`).
@@ -803,7 +862,7 @@ interface + repositories + pin lists to move together — any omission fails
   token lives in the credential store (keychain/encrypted file — never
   config.json) and is shown by `ev-charge-coordinator api-token` or the
   daemon's boot log line; it is bound to loopback and never leaves the machine
-  without the tunnel.
+  without a tunnel — see **Remote access (Tailscale)** above.
 
 ## Development
 
@@ -880,6 +939,30 @@ row interfaces, and the repositories' SELECT aliases together (see
 ```bash
 npm run dev start
 ```
+
+### Web app (`web/`)
+
+The mobile + desktop UX is a Svelte 5 + Vite SPA in `web/` (npm workspace
+`evcc-web`). In production the daemon serves the built `web/dist` bundle and
+the API from one origin; in development the Vite dev server proxies `/api` to
+`http://127.0.0.1:3002`, so run the daemon for live data and paste
+`node dist/index.js api-token` into the app's token panel on the first 401.
+
+```bash
+npm run dev:web       # Vite dev server at http://localhost:5173 (loopback only)
+npm run dev:webhost   # same, bound to all interfaces (--host) so phones on your LAN can load it
+npm run check:web     # web build + svelte-check + web unit tests (vitest)
+```
+
+- `dev:webhost` exists because npm swallows pass-through flags
+  (`npm run dev:web -- --host` → `npm warn Unknown cli config "--host"` →
+  Vite stays on loopback). Extra args still pass through it:
+  `npm run dev:webhost -- --port 5199`.
+- Tests live in `web/tests/` with `fetch` mocked (no network); the root
+  `npm run check` gate runs them via `check:web`. Root `npm run test` covers
+  `tests/` (CLI/daemon) only — run `check:web` when touching `web/`.
+- To reach the built app from another network, see **Remote access
+  (Tailscale)** above.
 
 ## Adding Support for Other Systems
 
