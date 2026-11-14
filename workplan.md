@@ -240,6 +240,35 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-13 (2) — Then chart: zoom-refetch 400 + touch readout
+
+Branch `fix/then-zoom-400-touch-readout` — both `docs/TODO.md` "CURRENT
+CHART/APP BUGS":
+
+1. **Zoom/pan froze the chart at 24 h** (`Refresh failed: read API responded
+   400`). dataZoom windows are fractional (percent→time math); `fetchSeries`
+   stringified them raw and the API's integer-epoch-ms contract rejected them
+   (live-repro: `from=…5` → `400 {"error":"from must be an integer"}`, integer
+   params → 200). `requested` stayed fractional, so every lazy refetch failed.
+   Fixes: `fetchWindowFor` rounds the padded/clamped window, `fetchSeries`
+   rounds both params, `apiGet` appends the server `{error}` body to the
+   banner (`read API responded 400: from must be an integer` — the body was
+   discarded, which hid the cause). Server unchanged.
+2. **Static readout never updated on tap/drag.** zrender drops touch-derived
+   `mousemove` on the pointer-events path (`isPointerFromTouch`) and its
+   legacy synthesized events carry no `offsetX`; the old guard also reset to
+   the newest sample on lift — on touch devices the row could only ever show
+   the newest sample. Fix: pure `touchReadout` state machine in
+   `bsocChart.ts` (single finger → `pin` at the touched x, persists after
+   lift; second finger → `freeze` mid-pinch → `reset` to newest on full
+   lift) wired by element-level touch listeners in `bsocChartView.ts`; the
+   mouse path gained a `clientX`-rect fallback when `offsetX` is absent.
+
+Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **85/85**
+(+8: rounding, error-body, integer-window, 5× touchReadout), svelte-check
+0/0. `web/dist` rebuilt and live-served over Tailscale (`index-DFMLENfc.js`).
+Manual regression (desktop wheel/hover; phone tap/drag/pinch) pending user.
+
 ### 2026-11-13 — demo access via Tailscale Serve (live-verified)
 
 Branch `docs/tailscale-demo-access`. Immediate goal: show the WIP web app off-LAN

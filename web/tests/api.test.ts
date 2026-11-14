@@ -91,6 +91,25 @@ describe('fetchSeries', () => {
     });
   });
 
+  it('rounds fractional windows to integer epoch ms (dataZoom math)', async () => {
+    fetchMock.mockResolvedValue(ok(SERIES));
+    await fetchSeries('ev_soc', 1000.6, 2000.4);
+    expect(fetchMock).toHaveBeenCalledWith('/api/series?metric=ev_soc&from=1001&to=2000', {
+      headers: {},
+    });
+  });
+
+  it('surfaces the server error body in the failure message', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'from must be an integer' }),
+    } as unknown as Response);
+    await expect(fetchSeries('ev_soc', 1.5, 2)).rejects.toThrow(
+      'read API responded 400: from must be an integer'
+    );
+  });
+
   it('throws AuthError on 401', async () => {
     fetchMock.mockResolvedValue({
       ok: false,

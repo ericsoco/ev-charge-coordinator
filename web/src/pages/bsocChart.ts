@@ -4,7 +4,7 @@
  * helpers. No DOM/ECharts runtime here (only a type-only import), so every
  * rule below is unit-testable: the 2 h–1 yr zoom clamp, wheel gesture
  * direction (vertical = zoom, horizontal = scrub), session markers, EV gap
- * lines, and the readout formatting/lookup.
+ * lines, the readout formatting/lookup, and touch→readout routing.
  *
  * Window model: the DOMAIN (now − 1 yr .. now, fixed at page init) is the
  * coordinate space — zoom/pan clamp into it, the time axis spans it, and the
@@ -183,7 +183,10 @@ export function needsRefetch(
 /** Fetch window for a visible view: padded, clamped into the domain. */
 export function fetchWindowFor(visible: TimeWindow, domain: TimeWindow): TimeWindow {
   const pad = spanOf(visible) * FETCH_PAD_RATIO;
-  return clampWindow({ from: visible.from - pad, to: visible.to + pad }, domain);
+  // Round: zoom/pan windows are fractional and GET /api/series rejects
+  // non-integer epoch ms (the 400 that froze the chart at 24 h).
+  const win = clampWindow({ from: visible.from - pad, to: visible.to + pad }, domain);
+  return { from: Math.round(win.from), to: Math.round(win.to) };
 }
 
 /** Sessions overlapping a window (for markers). */
@@ -277,6 +280,44 @@ export function readoutAt(
     homeLabel: tsMs === null ? '—' : formatBsocValue(sampleAtOrBefore(home.points, tsMs)),
     evLabel: tsMs === null ? '—' : formatBsocValue(sampleAtOrBefore(ev.points, tsMs)),
   };
+}
+
+/** Touch gesture state for routing chart touches to the readout (pure). */
+export interface TouchPhase {
+  /** Fingers currently down. */
+  fingers: number;
+  /** A multi-finger moment occurred in this gesture — frozen until full lift. */
+  multi: boolean;
+}
+
+export type TouchAction =
+  /** Set the readout to the gesture's x position (tap / single-finger drag). */
+  | 'pin'
+  /** Leave the readout untouched (mid-pinch: the scale is moving). */
+  | 'freeze'
+  /** Single-finger gesture over: the pinned value persists so it can be read. */
+  | 'keep'
+  /** Multi-finger gesture over: fall back to the newest sample. */
+  | 'reset';
+
+/**
+ * Decide how a touch event moves the static readout. Single-finger tap/drag
+ * pins values at the touched x (tooltip-like); a second finger freezes
+ * updates and, on full lift, resets — the pre-pinch position is stale once
+ * the scale has moved. `fingerCount` = `event.touches.length` (for `end`,
+ * the fingers still down).
+ */
+export function touchReadout(
+  phase: TouchPhase,
+  kind: 'start' | 'move' | 'end',
+  fingerCount: number
+): { phase: TouchPhase; action: TouchAction } {
+  if (kind === 'end' && fingerCount === 0) {
+    return { phase: { fingers: 0, multi: false }, action: phase.multi ? 'reset' : 'keep' };
+  }
+  if (fingerCount === 0) return { phase, action: 'freeze' }; // no position to read
+  const multi = phase.multi || fingerCount > 1;
+  return { phase: { fingers: fingerCount, multi }, action: multi ? 'freeze' : 'pin' };
 }
 
 export interface BsocData {

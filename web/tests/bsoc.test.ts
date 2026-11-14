@@ -26,12 +26,14 @@ import {
   sampleAtOrBefore,
   sessionsInWindow,
   spanOf,
+  touchReadout,
   windowToPercent,
   X_TICK_MIN_INTERVAL_MS,
   zoomAt,
   zoomFactorFor,
   type BsocData,
   type TimeWindow,
+  type TouchPhase,
 } from '../src/pages/bsocChart';
 
 const MINUTE = 60_000;
@@ -256,6 +258,15 @@ describe('needsRefetch / fetchWindowFor (lazy loading)', () => {
     expect(clamped.from).toBe(DOMAIN.from);
     expect(clamped.to).toBe(DOMAIN.from + 15 * DAY); // padded span shifts in, span preserved
   });
+
+  it('rounds a fractional visible window to integer bounds (API contract)', () => {
+    // dataZoom percent→time math yields fractions; the API 400s on them.
+    const visible = { from: T0 + 6 * HOUR + 0.4, to: T0 + 18 * HOUR + 0.4 };
+    const win = fetchWindowFor(visible, DOMAIN);
+    expect(win).toEqual({ from: T0 + 3 * HOUR, to: T0 + 21 * HOUR });
+    expect(Number.isInteger(win.from)).toBe(true);
+    expect(Number.isInteger(win.to)).toBe(true);
+  });
 });
 
 describe('sessionsInWindow', () => {
@@ -374,6 +385,39 @@ describe('readoutAt', () => {
     const emptyHome = series([]);
     const readout = readoutAt(emptyEv, emptyHome, newestSampleTs(emptyEv, emptyHome));
     expect(readout).toEqual({ tsMs: null, tsLabel: '—', homeLabel: '—', evLabel: '—' });
+  });
+});
+
+describe('touchReadout (touch → static readout)', () => {
+  const IDLE: TouchPhase = { fingers: 0, multi: false };
+
+  it('pins on a single-finger tap and keeps the value when it lifts', () => {
+    const down = touchReadout(IDLE, 'start', 1);
+    expect(down).toEqual({ phase: { fingers: 1, multi: false }, action: 'pin' });
+    const up = touchReadout(down.phase, 'end', 0);
+    expect(up).toEqual({ phase: { fingers: 0, multi: false }, action: 'keep' });
+  });
+
+  it('keeps pinning along a single-finger drag', () => {
+    const move = touchReadout({ fingers: 1, multi: false }, 'move', 1);
+    expect(move.action).toBe('pin');
+    expect(move.phase).toEqual({ fingers: 1, multi: false });
+  });
+
+  it('freezes when a second finger lands and stays frozen while any remains', () => {
+    const two = touchReadout({ fingers: 1, multi: false }, 'start', 2);
+    expect(two).toEqual({ phase: { fingers: 2, multi: true }, action: 'freeze' });
+    const oneLeft = touchReadout(two.phase, 'end', 1);
+    expect(oneLeft).toEqual({ phase: { fingers: 1, multi: true }, action: 'freeze' });
+  });
+
+  it('resets to the newest sample when a multi-finger gesture fully lifts', () => {
+    const up = touchReadout({ fingers: 1, multi: true }, 'end', 0);
+    expect(up).toEqual({ phase: { fingers: 0, multi: false }, action: 'reset' });
+  });
+
+  it('stays frozen mid-pinch even with one finger left', () => {
+    expect(touchReadout({ fingers: 2, multi: true }, 'move', 1).action).toBe('freeze');
   });
 });
 describe('evGapLine (dashed EV gap segments)', () => {
