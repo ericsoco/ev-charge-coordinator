@@ -341,7 +341,7 @@ label/value in the Then readout row toggles the home BSoC chart series on/off;
 same for the car (vehicle) label/value.
 
 - **Pure `bsocChart.ts`:** new `SeriesVisibility` export (`{ ev, home }`);
-  `buildBsocOption` takes an optional 5th `shown` arg (default both on). A
+  `buildBsocOption` takes a trailing optional `shown` arg (default both on). A
   hidden series renders `data: []` (EV's dashed gap `markLine` emptied too)
   and keeps its name/color slot, so `color: [EV_COLOR, HOME_COLOR]`, the
   readout swatches, and the view's find-by-name point extraction are all
@@ -359,8 +359,13 @@ same for the car (vehicle) label/value.
   `web/tests/then-toggle.test.ts` (jsdom render of `Then.svelte`, stubbed
   fetch per the App.test.ts pattern: both toggles start pressed and flip
   independently).
-- Gate: `npm run check` green — root **1054 passed / 2 skipped**, web
-  **106/106** (+3), svelte-check 0/0.
+- **Rebased onto `origin/main` @ `4a6763d`** (the MMM-DD tick labels +
+  pixel-based tick spacing change touches the same files): `buildBsocOption`
+  signature merged to `(..., nowMs, widthPx, shown)`; `shown` threaded through
+  the new `rebuildOption` (call + `optionKey` guard — the guard keys on
+  window + width + visibility so a toggle is a key change on every path).
+- Gate: `npm run check` green post-rebase — root **1053 passed / 3 skipped**,
+  web **117/117** (+3 over main's 114), svelte-check 0/0.
 
 ### 2026-11-13 (4) — swipe tab navigation (touch)
 
