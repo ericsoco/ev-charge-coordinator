@@ -240,6 +240,25 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-13 (4) — cursor rule refinements: grey + y-axis bounds + line markers
+
+Follow-up to the down-only cursor rule. The rule is now a fixed
+**medium-light grey** (`#a6a6a6`, theme-independent) and **truncated to the
+y-axis (grid) bounds** — top/bottom come from
+`convertToPixel({gridIndex: 0}, [x, 100|0])` instead of spanning the whole
+chart element (which included margins above/below the 0–100% axis). Two
+**intersection markers** were added: a 9 px circle where the rule crosses
+each BSoC line, stroked in the series color (`EV_COLOR` / `HOME_COLOR`,
+2 px) with a 60% white fill; positioned via `sampleAtOrBefore` +
+`convertToPixel`, so they sit exactly on the lines and hide when a series has
+no sample at/before the rule (or during data gaps). Series points are
+extracted from the option in `setOption` (name-matched, gap `null`s filtered);
+markers re-align on every datazoom event and data reload while the pointer is
+down (`currentPx`). Same canvas-gated manual-verify status as the rule itself.
+
+Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **92/92**,
+svelte-check 0/0. `web/dist` rebuilt for the Tailscale origin.
+
 ### 2026-11-13 (3) — Then chart: hide session edge lines at wide zoom
 
 Branch `fix/bsoc-hide-session-edges-wide-zoom` (user request): the dashed
