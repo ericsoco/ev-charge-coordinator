@@ -333,6 +333,34 @@ checks. Touch/menu feel on real devices → step 9 QA.
 Gate: `npm run check` green — root **1054 passed / 2 skipped**, web **125/125**,
 svelte-check 0/0, vite build OK (644 kB raw / 219 kB gz).
 
+### 2026-11-13 (6) — Then tab: tap readout labels to toggle BSoC series
+
+Branch `feature/then-bsoc-series-toggle`. User request: tapping the home
+label/value in the Then readout row toggles the home BSoC chart series on/off;
+same for the car (vehicle) label/value.
+
+- **Pure `bsocChart.ts`:** new `SeriesVisibility` export (`{ ev, home }`);
+  `buildBsocOption` takes an optional 5th `shown` arg (default both on). A
+  hidden series renders `data: []` (EV's dashed gap `markLine` emptied too)
+  and keeps its name/color slot, so `color: [EV_COLOR, HOME_COLOR]`, the
+  readout swatches, and the view's find-by-name point extraction are all
+  undisturbed — and the cursor-rule intersection dot hides itself (its points
+  list comes from the emptied series data).
+- **`Then.svelte`:** `shown` `$state` passed at both `buildBsocOption` call
+  sites (the lifecycle `$effect` reads it, so a tap rebuilds the option
+  immediately). The home/car readout items are now `<button>`s:
+  `aria-pressed` = series visible, descriptive `aria-label` carrying the
+  current value, `.off` dims the item when hidden, `::after` inflates the tap
+  target ~6 px without affecting layout, plus a `:focus-visible` ring.
+  Toggling affects only the chart line — the readout value keeps showing.
+- **Tests:** 2 pure pins in `web/tests/bsoc.test.ts` (hidden EV → empty data +
+  empty gap markLine, hidden home → empty data with names/colors stable) and
+  `web/tests/then-toggle.test.ts` (jsdom render of `Then.svelte`, stubbed
+  fetch per the App.test.ts pattern: both toggles start pressed and flip
+  independently).
+- Gate: `npm run check` green — root **1054 passed / 2 skipped**, web
+  **106/106** (+3), svelte-check 0/0.
+
 ### 2026-11-13 (4) — swipe tab navigation (touch)
 
 Branch `feat/swipe-tab-navigation` (PR issued on `origin/main` at `051a98a`;
