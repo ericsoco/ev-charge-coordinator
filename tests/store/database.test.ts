@@ -64,6 +64,8 @@ describe('openStore', () => {
           'ev_samples',
           'home_battery_samples',
           'home_energy_counters',
+          'notifications',
+          'push_subscriptions',
           'sessions',
           'weather_forecasts',
         ].sort()
