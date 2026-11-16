@@ -20,6 +20,38 @@ export interface EVStatus {
   battery: EVBatteryStats;
 }
 
+/**
+ * One OEM charging-schedule window, normalized across OEMs. Times are
+ * minutes after midnight in the VEHICLE's local timezone (the daemon host is
+ * assumed to share it).
+ */
+export interface ChargingScheduleWindow {
+  /**
+   * 'charging' = a start-at charging schedule; 'departure' = a charge-by /
+   * departure schedule (the car picks its own start inside the window).
+   */
+  kind: 'charging' | 'departure';
+  /** Days the window belongs to (0 = Sunday), keyed to its START day; null = every day. */
+  daysOfWeek: number[] | null;
+  /** Minutes after midnight the window opens. */
+  startMinute: number;
+  /**
+   * Minutes after midnight the window closes (exclusive); null = open-ended.
+   * A window whose end is at or before its start wraps midnight.
+   */
+  endMinute: number | null;
+  enabled: boolean;
+}
+
+/**
+ * The vehicle's configured charging schedules. Null = the OEM cannot report
+ * them (the ownership policy then degrades to 'manual' attribution and the
+ * `handOverAt` fallback).
+ */
+export interface ChargingScheduleSnapshot {
+  windows: ChargingScheduleWindow[];
+}
+
 /** Connectivity from the cheap non-waking vehicle probe. */
 export interface EVVehicleState {
   state: string; // e.g., "online", "asleep", "offline"
@@ -85,6 +117,14 @@ export interface EVService {
    * Get full vehicle status.
    */
   getStatus(): Promise<EVStatus>;
+
+  /**
+   * The OEM's configured charging schedules (read-only — EVCC never writes
+   * schedules). Optional: an implementation that cannot introspect schedules
+   * omits it and the ownership policy degrades gracefully (manual
+   * attribution, `handOverAt` hand-over fallback).
+   */
+  getChargingSchedule?(): Promise<ChargingScheduleSnapshot | null>;
 
   /**
    * Cheap connectivity probe: never wakes the vehicle and never waits on it,
