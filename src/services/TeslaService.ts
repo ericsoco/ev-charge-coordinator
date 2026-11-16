@@ -13,7 +13,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as http from 'http';
 import * as https from 'https';
-import type { EVService, EVCredentials, EVStatus, EVVehicleState, VehicleLocation, EVBatteryStats, TeslaTokens } from '../types/ev.js';
+import type { EVService, EVCredentials, EVStatus, EVVehicleState, VehicleLocation, EVBatteryStats, TeslaTokens, ChargingScheduleSnapshot } from '../types/ev.js';
 import { credentialStore } from '../utils/credentials.js';
 import * as paint from '../utils/color.js';
 import {
@@ -38,6 +38,7 @@ import {
   TOKEN_FORM_HEADERS,
   type PkcePair,
 } from './tesla/oauth.js';
+import { mapChargingScheduleSnapshot } from './tesla/schedule.js';
 
 /** Default loopback port for the OAuth redirect; also register this with Tesla. */
 const DEFAULT_CALLBACK_PORT = 8089;
@@ -939,6 +940,30 @@ export class TeslaService implements EVService {
       state: data.state,
       battery
     };
+  }
+
+  /**
+   * Schedule introspection for the ownership policy: one vehicle_data read of
+   * the schedule endpoints plus the legacy charge_state schedule fields,
+   * mapped defensively (tesla/schedule.ts). Read-only — EVCC never writes
+   * schedules — and never wakes the car (an asleep car 408s like any read).
+   */
+  async getChargingSchedule(): Promise<ChargingScheduleSnapshot> {
+    if (!this.vin) {
+      throw new Error('No VIN configured');
+    }
+    const response = await this.client.get<{
+      response: {
+        charge_state?: unknown;
+        charge_schedule_data?: unknown;
+        preconditioning_schedule_data?: unknown;
+      };
+    }>(`/api/1/vehicles/${this.vin}/vehicle_data`, {
+      params: {
+        endpoints: 'charge_state,charge_schedule_data,preconditioning_schedule_data',
+      },
+    });
+    return mapChargingScheduleSnapshot(response.data.response);
   }
 
   async getStateOfCharge(): Promise<number> {
