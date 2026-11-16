@@ -128,6 +128,27 @@ export interface NewEvent {
  */
 export type SessionStopReason = 'target_reached' | 'battery_buffer';
 
+/**
+ * Who started a charging episode — mirrored by the session_owners.owner CHECK
+ * (006). 'evcc' = EVCC issued the start (decision actuation, resume, or a
+ * managed CLI start); 'manual' = a human started it (app, touchscreen, dumb
+ * CLI start); 'scheduled' = an OEM charging schedule started it.
+ */
+export type SessionOwnerKind = 'evcc' | 'manual' | 'scheduled';
+
+/**
+ * One charging episode of a session's ownership timeline. Append-only: the
+ * next row's `fromTsMs` ends the previous episode (the last episode ends at
+ * unplug). Initial/final owner = first/last row for the session.
+ */
+export interface SessionOwnerRow {
+  id: number;
+  siteId: SiteId;
+  sessionId: number;
+  owner: SessionOwnerKind;
+  fromTsMs: number;
+}
+
 export interface SessionRow {
   id: number;
   siteId: SiteId;
@@ -160,6 +181,18 @@ export interface SessionRow {
   targetChangeReason: string | null;
   /** The monitor's last stop reason; cleared on the next charging_start. */
   stopReason: SessionStopReason | null;
+  /**
+   * The vehicle's charge limit before EVCC's first limit write for this
+   * plug-in (write-once, 006). Restoring it hands the car back its user-set
+   * limit; NULL = EVCC never wrote a limit (or pre-006 row).
+   */
+  userChargeLimitPercent: number | null;
+  /**
+   * Set when EVCC releases control of the plug-in (`release-charging` or a
+   * scheduled-charging hand-over, 006). After it, EVCC never manages this
+   * plug-in again. NULL = still EVCC's to manage (or never managed).
+   */
+  releasedTsMs: number | null;
 }
 
 export interface NewOpenSession {
@@ -202,7 +235,8 @@ export type DecisionReasonCode =
   | 'service_error'
   | 'filter_declined'
   | 'config_error'
-  | 'insufficient_energy';
+  | 'insufficient_energy'
+  | 'scheduled_window';
 
 export interface DecisionRow {
   id: number;

@@ -10,8 +10,11 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
   HOME_SITE,
+  type EventKind,
   type NewEvent,
   type NewOpenSession,
+  type SessionOwnerKind,
+  type SessionOwnerRow,
   type SessionRow,
   type SessionStopReason,
   type SiteId,
@@ -38,6 +41,17 @@ const SESSION_COLUMNS = [
   'initial_target_percent AS initialTargetPercent',
   'target_change_reason AS targetChangeReason',
   'stop_reason AS stopReason',
+  'user_charge_limit_percent AS userChargeLimitPercent',
+  'released_ts_ms AS releasedTsMs',
+].join(', ');
+
+/** Same aliasing rule for the session_owners rows. */
+const SESSION_OWNER_COLUMNS = [
+  'id',
+  'site_id AS siteId',
+  'session_id AS sessionId',
+  'owner',
+  'from_ts_ms AS fromTsMs',
 ].join(', ');
 
 /** Append one transition; returns the row id. Bad kinds fail the CHECK. */
@@ -250,6 +264,148 @@ export function setSessionStopReason(
     .get(reason, sessionId, siteId) as { id: number } | null | undefined;
   return row ? Number(row.id) : null;
 }
+
+/**
+ * Append one ownership row (one charging episode) to a session's timeline;
+ * returns the row id. Rows are append-only: the next row's `fromTsMs` ends
+ * the previous episode. EVCC start paths write ('evcc') as a claim at
+ * command time; the daemon attributes foreign starts ('manual'/'scheduled')
+ * at the charging_start it observes.
+ */
+export function appendSessionOwner(
+  db: DatabaseSync,
+  sessionId: number,
+  owner: SessionOwnerKind,
+  fromTsMs: number,
+  siteId: SiteId = HOME_SITE
+): number {
+  const result = db
+    .prepare(
+      `INSERT INTO session_owners (site_id, session_id, owner, from_ts_ms)
+       VALUES (?, ?, ?, ?)`
+    )
+    .run(siteId, sessionId, owner, fromTsMs);
+  return Number(result.lastInsertRowid);
+}
+
+/** A session's ownership timeline, oldest first. */
+export function sessionOwners(
+  db: DatabaseSync,
+  sessionId: number,
+  siteId: SiteId = HOME_SITE
+): SessionOwnerRow[] {
+  return db
+    .prepare(
+      `SELECT ${SESSION_OWNER_COLUMNS} FROM session_owners
+        WHERE site_id = ? AND session_id = ?
+        ORDER BY from_ts_ms, id`
+    )
+    .all(siteId, sessionId) as unknown as SessionOwnerRow[];
+}
+
+/**
+ * The row covering "now" for a session — its most recent episode's owner.
+ * Null = no episode attributed yet.
+ */
+export function lastSessionOwner(
+  db: DatabaseSync,
+  sessionId: number,
+  siteId: SiteId = HOME_SITE
+): SessionOwnerRow | null {
+  const row = db
+    .prepare(
+      `SELECT ${SESSION_OWNER_COLUMNS} FROM session_owners
+        WHERE site_id = ? AND session_id = ?
+        ORDER BY from_ts_ms DESC, id DESC LIMIT 1`
+    )
+    .get(siteId, sessionId) as SessionOwnerRow | null | undefined;
+  return row ?? null;
+}
+
+/**
+ * Timestamp of the newest event of one kind for a vehicle, or null. The
+ * ownership attribution rule reads charging_start/charging_stop through this.
+ */
+export function latestEventTs(
+  db: DatabaseSync,
+  vehicleId: string,
+  kind: EventKind,
+  siteId: SiteId = HOME_SITE
+): number | null {
+  const row = db
+    .prepare(
+      `SELECT ts_ms AS tsMs FROM events
+        WHERE site_id = ? AND vehicle_id = ? AND kind = ?
+        ORDER BY ts_ms DESC, id DESC LIMIT 1`
+    )
+    .get(siteId, vehicleId, kind) as { tsMs: number } | null | undefined;
+  return row ? Number(row.tsMs) : null;
+}
+
+/**
+ * Record the charge limit that was on the vehicle before EVCC's first limit
+ * write (write-once: later captures never overwrite the original — the
+ * session's user-set limit is a snapshot from before EVCC touched the car).
+ * Returns the session id, or null when no such session exists.
+ */
+export function recordSessionUserLimit(
+  db: DatabaseSync,
+  sessionId: number,
+  percent: number,
+  siteId: SiteId = HOME_SITE
+): number | null {
+  const row = db
+    .prepare(
+      `UPDATE sessions SET user_charge_limit_percent = ?
+        WHERE id = ? AND site_id = ? AND user_charge_limit_percent IS NULL
+        RETURNING id`
+    )
+    .get(percent, sessionId, siteId) as { id: number } | null | undefined;
+  return row ? Number(row.id) : null;
+}
+
+/**
+ * Overwrite the recorded user limit — for an explicit `set-ev-charge-limit`
+ * (the user stating a new limit through EVCC *is* the user-set limit).
+ * Returns the session id, or null when no such session exists.
+ */
+export function replaceSessionUserLimit(
+  db: DatabaseSync,
+  sessionId: number,
+  percent: number,
+  siteId: SiteId = HOME_SITE
+): number | null {
+  const row = db
+    .prepare(
+      `UPDATE sessions SET user_charge_limit_percent = ?
+        WHERE id = ? AND site_id = ?
+        RETURNING id`
+    )
+    .get(percent, sessionId, siteId) as { id: number } | null | undefined;
+  return row ? Number(row.id) : null;
+}
+
+/**
+ * Release EVCC's control of a plug-in: stamp `released_ts_ms` and clear any
+ * monitor stop reason (so the re-targeter can never resume it). Idempotent;
+ * returns the session id, or null when no such session exists.
+ */
+export function releaseSession(
+  db: DatabaseSync,
+  sessionId: number,
+  tsMs: number,
+  siteId: SiteId = HOME_SITE
+): number | null {
+  const row = db
+    .prepare(
+      `UPDATE sessions SET released_ts_ms = ?, stop_reason = NULL
+        WHERE id = ? AND site_id = ?
+        RETURNING id`
+    )
+    .get(tsMs, sessionId, siteId) as { id: number } | null | undefined;
+  return row ? Number(row.id) : null;
+}
+
 
 /**
  * Recent sessions with a computable efficiency, newest first — the raw feed
