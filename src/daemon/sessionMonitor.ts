@@ -34,7 +34,7 @@ export interface SessionStopInput {
    * (the 2026-11-14 ownership rule — this refines the buffer stop's old
    * "regardless of who started charging" policy).
    */
-  managed: boolean;
+  managedSession: boolean;
 }
 
 export type SessionStopVerdict =
@@ -50,7 +50,7 @@ export type SessionStopVerdict =
  */
 export function evaluateSessionStop(input: SessionStopInput): SessionStopVerdict {
   if (input.chargingState !== 'Charging') return { stop: false };
-  if (!input.managed) return { stop: false };
+  if (!input.managedSession) return { stop: false };
 
   if (
     input.homeBatterySocPercent !== null &&
@@ -180,7 +180,7 @@ export function createSessionMonitor(
         sessionTargetPercent: session?.targetPercent ?? null,
         homeBatterySocPercent: batterySoc,
         bufferPercent: energyConfig?.bufferPercent ?? null,
-        managed: isManagedEpisode({
+        managedSession: isManagedEpisode({
           lastOwner:
             session === null ? null : sessionStore.lastSessionOwner(deps.db, session.id),
           releasedTsMs: session?.releasedTsMs ?? null,
