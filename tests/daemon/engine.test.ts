@@ -28,9 +28,30 @@ function input(overrides: Partial<DecisionInput> = {}): DecisionInput {
     home: null,
     vehicleLocation: null,
     weather: null,
+    scheduleWindowStartingSoon: false,
     ...overrides,
   };
 }
+
+describe('prioritize scheduled charging (scheduled_window interlock)', () => {
+  it('declines before the math when a schedule window is starting soon', () => {
+    const outcome = evaluateDecision(input({ scheduleWindowStartingSoon: true }));
+    expect(outcome).toMatchObject({
+      accepted: false,
+      reasonCode: 'scheduled_window',
+      targetPercent: null,
+      stopTargetPercent: null,
+    });
+    expect(outcome.reasonDetail).toContain('prioritizing it');
+  });
+
+  it('an already-charging car still reports already_charging first', () => {
+    const outcome = evaluateDecision(
+      input({ chargingState: 'Charging', scheduleWindowStartingSoon: true })
+    );
+    expect(outcome.reasonCode).toBe('already_charging');
+  });
+});
 
 describe('weather-adjusted reserve (P1c step 3)', () => {
   const WEATHER = { adjustmentPercent: 5, detail: 'low solar next 24h (600 < 2000 Wh/m²)' };

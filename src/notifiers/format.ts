@@ -20,6 +20,8 @@ export function formatNotificationEvent(event: NotificationEvent): string {
       return `🛑 charging stopped (${soc(event.evSocPercent)})${stopReason(event.reason)}`;
     case 'session-retargeted':
       return `${event.direction === 'raise' ? '📈' : '📉'} ${event.detail}`;
+    case 'session-released':
+      return `⏭️ EVCC released control — ${event.detail}`;
     case 'failure':
       return `⚠️ ${event.component} failed: ${event.message}`;
     case 'test':
@@ -48,6 +50,8 @@ function formatDecision(event: DecisionEvent): string {
       return `🧪 dry-run: would set limit ${event.targetPercent ?? '?'}% and start charging (autoStart off or --dry-run)`;
     case 'below_buffer':
       return `⛔ interlock: home battery below the buffer — not starting${detail}`;
+    case 'scheduled_window':
+      return `⏭️ prioritizing the OEM scheduled charge — not starting${detail}`;
     case 'service_error':
       return `❌ auto-start failed${detail}`;
     default:

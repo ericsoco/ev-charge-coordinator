@@ -38,6 +38,7 @@ const CONFIG: DaemonConfig = {
   retentionDays: 90,
   notifiers: [{ type: 'log' }],
   autoStart: DEFAULT_DAEMON_CONFIG.autoStart,
+  scheduledCharging: DEFAULT_DAEMON_CONFIG.scheduledCharging,
 };
 const FAST: DaemonConfig = { ...CONFIG, batterySampleSec: 0.02 };
 

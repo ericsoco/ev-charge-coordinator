@@ -218,6 +218,48 @@ describe('autoStart block (P1b decision config)', () => {
   });
 });
 
+describe('scheduledCharging block (prioritize scheduled charging, D5)', () => {
+  it('defaults: prioritize on, 15-minute lead, no handOverAt', () => {
+    expect(DEFAULT_DAEMON_CONFIG.scheduledCharging).toEqual({
+      prioritize: true,
+      leadMinutes: 15,
+      handOverAt: null,
+    });
+  });
+
+  it('valid values apply field-by-field; absent fields keep defaults', () => {
+    const resolved = resolveDaemonConfig(
+      fixture('{"scheduledCharging": {"prioritize": false, "handOverAt": "22:30"}}')
+    );
+    expect(resolved.problems).toEqual([]);
+    expect(resolved.config?.scheduledCharging).toEqual({
+      prioritize: false,
+      leadMinutes: 15,
+      handOverAt: '22:30',
+    });
+  });
+
+  it('invalid values refuse loudly, one problem each', () => {
+    const resolved = resolveDaemonConfig(
+      fixture(
+        '{"scheduledCharging": {"prioritize": "yes", "leadMinutes": -1, "handOverAt": "25:99"}}'
+      )
+    );
+    expect(resolved.config).toBeNull();
+    expect(resolved.problems.join('\n')).toContain('scheduledCharging.prioritize');
+    expect(resolved.problems.join('\n')).toContain('scheduledCharging.leadMinutes');
+    expect(resolved.problems.join('\n')).toContain('scheduledCharging.handOverAt');
+    expect(resolved.problems).toHaveLength(3);
+  });
+
+  it('the reconcile pass writes the block into an old file', () => {
+    const file = fixture('{"batterySampleSec": 300}');
+    expect(ensureDaemonConfigFile(file)).toBe('updated');
+    const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(written.scheduledCharging).toEqual(DEFAULT_DAEMON_CONFIG.scheduledCharging);
+  });
+});
+
 describe('notifiers block (P1b notifications, design §3.7)', () => {
   it('defaults to log-only: visible but harmless', () => {
     const resolved = resolveDaemonConfig(fixture());

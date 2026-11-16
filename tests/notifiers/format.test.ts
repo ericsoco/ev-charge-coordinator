@@ -154,6 +154,37 @@ describe('formatNotificationEvent', () => {
     );
   });
 
+  it('formats the session-released event', () => {
+    expect(
+      formatNotificationEvent({
+        type: 'session-released',
+        tsMs: 1_000,
+        sessionId: 7,
+        vehicleId: 'VIN',
+        detail: 'handed over to scheduled charging — scheduled window activated (1380 min)',
+      })
+    ).toBe(
+      '⏭️ EVCC released control — handed over to scheduled charging — scheduled window activated (1380 min)'
+    );
+  });
+
+  it('formats the scheduled_window decision decline', () => {
+    expect(
+      formatNotificationEvent({
+        type: 'decision-made',
+        tsMs: 1_000,
+        sessionId: 7,
+        vehicleId: 'VIN',
+        accepted: false,
+        dryRun: false,
+        reasonCode: 'scheduled_window',
+        reasonDetail: 'an OEM charging schedule is active or starts soon — prioritizing it',
+        targetPercent: null,
+        evSocPercent: 40,
+      })
+    ).toContain('⏭️ prioritizing the OEM scheduled charge — not starting');
+  });
+
   it('formats a session retarget with direction arrows', () => {
     expect(
       formatNotificationEvent({
@@ -192,6 +223,7 @@ describe('formatNotificationEvent', () => {
       { ...base, type: 'charging-started', sessionId: 1, evSocPercent: null },
       { ...base, type: 'charging-stopped', sessionId: 1, evSocPercent: null, reason: null },
       { ...base, type: 'session-retargeted', sessionId: 1, direction: 'raise', detail: 're-target 45% → 63%' },
+      { ...base, type: 'session-released', sessionId: 1, vehicleId: 'VIN', detail: 'released' },
       { type: 'failure', tsMs: 1, component: 'ev-poll', message: 'boom' },
     ];
     for (const event of events) expect(formatNotificationEvent(event)).not.toBe('');

@@ -23,6 +23,7 @@ import { createEvPoller } from './EvPoller.js';
 import { createDecisionConsumer } from './decisionConsumer.js';
 import { createSessionMonitor } from './sessionMonitor.js';
 import { createReTargeter, type ReTargeter } from './reTarget.js';
+import { createHandoverStage } from './handover.js';
 import { formatLocalTimestamp } from '../utils/time.js';
 import { buildNotifiers, notifierRequiresSecret, type NotifierSecrets } from '../notifiers/build.js';
 import { createNotifierFanout } from '../notifiers/fanout.js';
@@ -234,6 +235,10 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         setChargeLimit: (percent) => tesla.setChargeLimit(percent),
         startCharging: () => tesla.startCharging(),
       },
+      getChargingSchedule: tesla.getChargingSchedule
+        ? () => tesla.getChargingSchedule!()
+        : undefined,
+      scheduledCharging: options.config.scheduledCharging,
       notify: (event) => notifier.notify(event),
       log,
     });
@@ -272,6 +277,23 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
       log,
     });
     reTargetStage = reTargetOnProgress;
+    // Hand-over stage (2026-11-14 ownership work): restores the user charge
+    // limit on foreign episodes and releases EVCC control when a scheduled
+    // window activates. Runs FIRST so a release takes effect in the same tick
+    // the re-targeter/monitor below evaluate.
+    const handoverStage = createHandoverStage({
+      db,
+      vehicleId,
+      autoStart: options.config.autoStart,
+      dryRun: options.dryRun ?? false,
+      getChargingSchedule: tesla.getChargingSchedule
+        ? () => tesla.getChargingSchedule!()
+        : undefined,
+      setChargeLimit: (percent) => tesla.setChargeLimit(percent),
+      scheduledCharging: options.config.scheduledCharging,
+      notify: (event) => notifier.notify(event),
+      log,
+    });
     tasks.push(
       createEvPoller({
         db,
@@ -285,10 +307,10 @@ async function prepare(options: RunDaemonOptions): Promise<Prepared> {
         log,
         notify: (event) => notifier.notify(event),
         onVehiclePlugIn: decideOnVehiclePlugIn,
-        // Re-target (P1c step 4) evaluates before the stop check in the same
-        // tick: a lowered target is enforced immediately, a raised one moves
-        // the line the stop check reads (the workplan's seam).
+        // Hand-over → re-target → stop check: a release lands before the
+        // management verdicts of the same tick (the ownership seam).
         onChargingProgress: async (progressCtx) => {
+          await handoverStage(progressCtx);
           await reTargetOnProgress(progressCtx);
           await monitorChargingProgress(progressCtx);
         },
