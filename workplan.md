@@ -267,7 +267,65 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+<<<<<<< Updated upstream
 ### 2026-11-15 — session ownership + scheduled-charging coexistence (branch `feat/session-ownership`)
+=======
+### 2026-11-16 — consideration: where action-taking code lives (write-surface visibility)
+
+**Question raised in PR #90 review:** `daemon/handover.ts` executes actions
+(car limit restore, session release, notification) — should actions like these
+be concentrated in one file rather than spread across modules, for
+visibility/discoverability? (The premise was that actions so far lived in
+`engine.ts`; they have not — `engine.ts` is pure by design, "pure, no I/O"
+(design §3.3), and has never actuated.)
+
+**Where writes actually live — the deliberate pure-policy / I/O-edge
+convention.** Every daemon stage = pure policy module + edge module; the
+edges own all I/O:
+
+| Module | Actions it owns |
+|---|---|
+| `engine.ts` / `filters.ts` | none — pure verdicts |
+| `daemon/decisionConsumer.ts` | `setChargeLimit`/`startCharging`, session arming, ownership claim, decision rows, notify |
+| `daemon/sessionMonitor.ts` | `stopCharging`, stop-reason rows, notify |
+| `daemon/reTarget.ts` | `setChargeLimit`/`startCharging`, target rows, ownership claims, notify |
+| `daemon/handover.ts` | `setChargeLimit` (user-limit restore), release rows, notify |
+| `daemon/EvPoller.ts` | events/session/owner rows, attribution, notify |
+| `commands/vehicle.ts` (CLI) | `setChargeLimit`/`startCharging`/`stopCharging`, release/claim/limit bookkeeping |
+
+Discoverability seam today: `runDaemon.ts` is the single assembly point where
+each stage's write capabilities are injected as narrow typed deps — reading
+that one file shows every write every stage can perform. The pure/edge split
+is what keeps the policy layer testable with plain objects (the 1100+ unit
+tests lean on it). **Do not move actions into `engine.ts`** — collapsing I/O
+into the policy module would destroy that seam.
+
+**Proposed follow-ups, in order of value (none implemented yet):**
+
+1. **Extract a shared `releaseControl()`** (natural home: beside
+   `daemon/ownership.ts`, or a small `release.ts`): the release sequence —
+   `releaseSession` (store) + user-limit restore (car) + `session-released`
+   notification — is currently implemented twice: `handover.ts`'s auto-release
+   and the `release-charging` CLI handler (`vehicle.ts`). One function gives
+   "what release means" a single home; the CLI keeps its extra UX around it
+   (optional stop, `--limit`, prompting, reporting). This is genuine
+   duplication — worth doing regardless of the rest.
+2. **Converge car writes behind one port:** `api/server.ts` already defines
+   `ActuatorPort` (`setChargeLimit`/`startCharging`/`stopCharging`), wired in
+   `runDaemon` for the web-control fast-follow. Give every stage (daemon +
+   CLI) that same port shape so the car-write surface has one definition to
+   grep and document. Store writes stay in the repositories (already
+   centralized); notifications stay behind the shared notify sink.
+3. **"Who writes what" table in `design.md`** (the table above, kept current)
+   — a cheap discoverability map for reviewers.
+
+Scope: (1) is small and self-contained; (2) touches every stage's deps wiring
+plus test fixtures; (3) is docs-only. If adopted: (1)+(3) first on a fresh
+branch, (2) only if the extra indirection keeps paying for itself.
+
+
+### 2026-11-14 — P2 step 7 complete: Messages list + Web Push
+>>>>>>> Stashed changes
 
 **Problem (user report, evidence-backed):** EVCC aborted OEM-scheduled overnight
 charging — `[session-monitor] stopped charging (battery_buffer)` at 2026-11-13

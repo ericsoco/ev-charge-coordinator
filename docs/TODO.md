@@ -58,8 +58,7 @@ TASKS / BUGS
     [X] should start every log with a timestamp first, formatted the same for all logs[ ] Rename ambiguous battery-related commands like `get-battery-soc`, `charge-from-battery`, and `set-battery-buffer`
 [X] Every `npm start daemon restart` throws an error the first run, succeeds the second.
     Error: bootstrap of /Users/ericsoco/Library/LaunchAgents/com.transmote.ev-charge-coordinator.daemon.plist failed: Bootstrap failed: 5: Input/output error Try re-running the command as root for richer errors.
-
-
+[X] Deconflict EVCC session management with manual+scheduled charging starts
 
 [ ] Refine ntfy messaging
     [ ] More human-readable and helpful
@@ -292,3 +291,45 @@ While charging, watch `evcc sessions` and ntfy:
 **Biggest practical risk:** B5 needs a charging session with moving battery SoC — if the car won't charge long enough naturally, do what step 4 planning did: engineer one evening (plug in at low SoC, let battery swing) and watch the logs.
 
 Want me to draft the exact `sqlite3` verification queries per test (expected rows before/after), or turn this into a checklist in the workplan when you switch to Act mode?
+
+## Deconflicting EVCC session management with manual+scheduled charging starts
+    
+Keeping below thinking for future reference:
+
+For end user this should be simplified to a "Prioritize scheduled charging" toggle.
+What does "Prioritize scheduled charging" mean? -->
+Use vehicle API to determine if a schedule is set. If it is not, use normal EVCC logic.
+If it is set:
+    EVCC will not trigger a retargeted charging restart after it stops an active session
+    _within the time window_ determined to be a scheduled charging priority window.
+    Details on this logic:
+    - without the SCP window logic, a vehicle plugged in at 10am
+        might only charge for a couple hours, stop, and ignore increased home BSoC, missing
+        the chance to draw down additional energy accrued during the day
+    - it's difficult to determine when the SCP window should be, because that logic
+        is owned by tesla / the vehicle and not directly exposed; if we estimated the window
+        too narrowly, we'd miss the scheduled start time and might cut off
+
+Really, what we need is logic saying "if someone else started the session, don't stop it!!"
+    - this handles user manual start as well as scheduled start
+    - THIS IS THE SOLUTION
+    - and doesn't require the SCP window at all
+
+...but what if scheduled charging issues a start command while a EVCC session is active?
+can we detect these events, and hand control back over to scheduled charging?
+
+--> PROMPT --> 
+    What we need is logic to honor this condition:
+    --> If someone other than EVCC starts a session, EVCC should not manage it.
+
+    Some thoughts on this:
+    1. If a human manually starts a session, EVCC should not manage it. Similarly, if a charging schedule starts charging, EVCC should not manage it.
+    2. EVCC should still monitor + store these sessions, but needs to indicate the "owner" of the session: EVCC, manual, or scheduled, based on who triggered the charging start.
+    2a. Note (per 4a. below) the "owner" may change during a session, so "owner" actually takes a shape something like `"owners": [{"owner": "evcc"|"manual"|"scheduled", "from":ts}, ...]`. We can differentiate initial owner / final owner from this shape.
+    3. This logic needs to apply to all OEMs, not just Tesla, so be sure to implement it in a generalized fashion.
+    4. This depends in part on our ability to detect charging start from a scheduler. Do we have the ability to detect this?
+    4a. One challenge for which I haven't yet pinned down a solution: when EVCC is actively managing an ongoing charging session, and a scheduled start happens, can we detect this and hand over control to the scheduled charging (i.e. release EVCC control)? If not, what other options do we have?
+
+    Ultimately, deconflicting EVCC, manual, and scheduled management should "just work" for the end user, but if we need to add a simple preference (e.g. "Prioritize scheduled charging"), let's consider that.
+
+    Finally, if we determine we'll need a function to release EVCC control of a session, I still think it makes sense to expose this as a CLI (one-shot and REPL both) command, for manual testing + control.
