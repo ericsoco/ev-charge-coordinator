@@ -85,7 +85,7 @@ export interface ReTargetInput {
    * ⇒ the session is never re-targeted or resumed (the 2026-11-14 ownership
    * rule — a manual/scheduled episode is not EVCC's to manage).
    */
-  managed: boolean;
+  managedSession: boolean;
   /** Freshness-gated by the edge: stale reads pass as null (skip, never act). */
   homeBatterySocPercent: number | null;
   /** Effective config: observed-efficiency overlay + weather-adjusted buffer. */
@@ -129,7 +129,7 @@ export function evaluateReTarget(input: ReTargetInput): ReTargetVerdict {
 
   const stored = input.sessionTargetPercent;
   const monitorStopped = input.sessionStopReason !== null;
-  const managesState = input.managed && (input.chargingState === 'Charging' || monitorStopped);
+  const managesState = input.managedSession && (input.chargingState === 'Charging' || monitorStopped);
 
   let change: ReTargetChange = 'none';
   let newStopTarget: number | null = null;
@@ -162,7 +162,7 @@ export function evaluateReTarget(input: ReTargetInput): ReTargetVerdict {
   // target-reached stop from micro-bursting until the next real raise.
   const effectiveTarget = newStopTarget ?? stored;
   const resume =
-    input.managed &&
+    input.managedSession &&
     input.chargingState !== 'Charging' &&
     monitorStopped &&
     effectiveTarget !== null &&
@@ -281,7 +281,7 @@ export function createReTargeter(deps: ReTargeterDeps): ReTargeter {
         sessionTargetPercent: session?.targetPercent ?? null,
         sessionInitialTargetPercent: session?.initialTargetPercent ?? null,
         sessionStopReason: session?.stopReason ?? null,
-        managed: isManagedEpisode({
+        managedSession: isManagedEpisode({
           lastOwner:
             session === null ? null : sessionStore.lastSessionOwner(deps.db, session.id),
           releasedTsMs: session?.releasedTsMs ?? null,

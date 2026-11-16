@@ -33,7 +33,7 @@ describe('evaluateSessionStop (pure)', () => {
     sessionTargetPercent: 60,
     homeBatterySocPercent: 60,
     bufferPercent: 20,
-    managed: true,
+    managedSession: true,
   };
 
   it('not charging never stops, even with every condition met', () => {
@@ -104,7 +104,7 @@ describe('evaluateSessionStop (pure)', () => {
         sessionTargetPercent: null,
         homeBatterySocPercent: null,
         bufferPercent: null,
-        managed: true,
+        managedSession: true,
       })
     ).toEqual({ stop: false });
   });
@@ -116,7 +116,7 @@ describe('evaluateSessionStop (pure)', () => {
         ...charging,
         evSocPercent: 90,
         homeBatterySocPercent: 5,
-        managed: false,
+        managedSession: false,
       })
     ).toEqual({ stop: false });
   });

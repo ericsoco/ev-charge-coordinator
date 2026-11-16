@@ -39,7 +39,7 @@ function input(overrides: Partial<ReTargetInput> = {}): ReTargetInput {
     sessionTargetPercent: 55,
     sessionInitialTargetPercent: 55,
     sessionStopReason: null,
-    managed: true,
+    managedSession: true,
     homeBatterySocPercent: 70,
     energyConfig: CFG,
     ...overrides,

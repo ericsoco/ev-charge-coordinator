@@ -104,7 +104,7 @@ export function createHandoverStage(
       const session = sessionStore.openSessionFor(deps.db, deps.vehicleId);
       if (session === null) return;
       const lastOwner = sessionStore.lastSessionOwner(deps.db, session.id);
-      const managed = isManagedEpisode({ lastOwner, releasedTsMs: session.releasedTsMs });
+      const managedSession = isManagedEpisode({ lastOwner, releasedTsMs: session.releasedTsMs });
       const live = deps.autoStart.enabled && !deps.dryRun;
       const nowMs = ctx.tsMs;
       const fromMs = lastTickMs ?? nowMs - SCHEDULE_CACHE_MS;
@@ -113,7 +113,7 @@ export function createHandoverStage(
       const userLimit = session.userChargeLimitPercent;
       if (
         ctx.chargingState === 'Charging' &&
-        !managed &&
+        !managedSession &&
         lastOwner !== null &&
         userLimit != null &&
         ctx.chargeLimitPercent != null &&
@@ -139,7 +139,7 @@ export function createHandoverStage(
       //    activates mid-managed-episode or the handOverAt fallback passes.
       if (
         policy.prioritize &&
-        managed &&
+        managedSession &&
         ctx.chargingState === 'Charging' &&
         session.releasedTsMs === null
       ) {
