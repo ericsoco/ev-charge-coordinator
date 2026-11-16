@@ -96,6 +96,12 @@ export interface SessionSummary {
   batterySocStartPercent: number | null;
   /** Null while open — an open session has no final value yet. */
   batterySocEndPercent: number | null;
+  /**
+   * Ownership timeline (who started each charging episode), oldest first —
+   * the same shape the store's session_owners rows serialize to. Initial
+   * owner = first entry; final owner = last entry.
+   */
+  owners: Array<{ owner: 'evcc' | 'manual' | 'scheduled'; from: number }>;
 }
 
 /** Mirror of GET /api/sessions. */

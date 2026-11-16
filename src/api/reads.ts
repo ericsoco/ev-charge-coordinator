@@ -183,6 +183,13 @@ export function readSessions(
       batterySocEndPercent: open
         ? null
         : socEdge(db, 'home_battery_samples', row.plugTsMs, row.unplugTsMs, null, 'last', siteId),
+      owners: db
+        .prepare(
+          `SELECT owner, from_ts_ms AS "from" FROM session_owners
+            WHERE site_id = ? AND session_id = ?
+            ORDER BY from_ts_ms, id`
+        )
+        .all(siteId, row.id) as unknown as SessionSummary['owners'],
     };
   });
 

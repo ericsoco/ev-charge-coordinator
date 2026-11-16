@@ -190,7 +190,8 @@ are kWh per bucket.
       "evSocStartPercent": 54,
       "evSocEndPercent": null,
       "batterySocStartPercent": 71.5,
-      "batterySocEndPercent": null
+      "batterySocEndPercent": null,
+      "owners": [{ "owner": "evcc", "from": 1794181385000 }]
     }
   ]
 }
@@ -203,6 +204,9 @@ are kWh per bucket.
 - SoC **end** values are `null` while a session is open — an open session
   has no final value yet; the chart can show "start → now" from the series
   endpoints. Start/end are also `null` when the window holds no samples.
+- `owners` = the charging-ownership timeline (who started each charging
+  episode: `evcc` | `manual` | `scheduled`, `from` = episode start, oldest
+  first). Initial owner = first entry; final owner = last entry.
 - `energyKwh` / `energyPercent` / `efficiency` are closing aggregates
   (null until the session closes; `efficiency` = EV kWh ÷ house kWh).
 

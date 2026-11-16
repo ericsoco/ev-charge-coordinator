@@ -576,6 +576,59 @@ session's target when the plan has genuinely moved:
   notification can never disagree. Stale battery samples skip the tick: never
   re-target from old data.
 
+### Charging ownership (who started it)
+
+Every charging episode of a plug-in is attributed to one of three owners —
+**`evcc`**, **`manual`** (a human: app, touchscreen, `start-ev-charging`), or
+**`scheduled`** (an OEM charging schedule) — recorded in the store as an
+append-only timeline (`session_owners`) and exposed on `GET /api/sessions`
+(`owners`) and the session displays. The core rule (2026-11-14):
+
+> **If someone other than EVCC started a charging episode, EVCC does not
+> manage it.**
+
+- Unmanaged episodes are **never** stopped (including the battery-buffer
+  interlock), never re-targeted, never auto-resumed. EVCC keeps observing and
+  storing them like any session. The house-battery backstop for foreign
+  episodes is Franklin's hardware reserve — the same posture already accepted
+  while the Mac sleeps.
+- EVCC's own episodes (auto-start, `charge-from-battery --start`, resume) work
+  exactly as before; their claims are recorded at command time.
+- When a foreign episode starts, EVCC **restores the user-set charge limit**
+  (the value recorded before EVCC's first limit write), so an OEM-scheduled
+  charge completes to *your* limit — not EVCC's energy-budget target.
+- Attribution: "did EVCC start it?" is deterministic (EVCC knows its own
+  commands); manual-vs-scheduled is a documented heuristic (a manual start
+  inside an active schedule window labels as `scheduled`) — management
+  behavior is identical either way.
+
+**Prioritize scheduled charging** (`daemon-config.json` → `scheduledCharging`,
+default **on**) makes EVCC actively yield:
+
+```json
+"scheduledCharging": {
+  "prioritize": true,
+  "leadMinutes": 15,
+  "handOverAt": null
+}
+```
+
+- `prioritize` — plug-in auto-start declines (`scheduled_window`) when a
+  start-at schedule window is active or begins within `leadMinutes` ("don't
+  start a session about to be superseded"), and a managed session **hands
+  over** when a window activates mid-episode: EVCC releases control without
+  stopping the car and restores your charge limit — the scheduled charge
+  seamlessly continues (`⏭️ EVCC released control` notification).
+- `leadMinutes` — the plug-in decline lead (default 15).
+- `handOverAt` — optional daily `"HH:MM"` auto-release fallback for OEMs
+  whose schedules EVCC cannot introspect (unset = off).
+
+`scheduled_window` declines and schedule reads **fail open**: a broken
+schedule read can never block EVCC entirely. EVCC never writes schedules —
+they are created and edited only in the OEM app.
+
+For a manual hand-over at any time (e.g. before bed), run `release-charging`.
+
 ### Notifications (ntfy, Slack)
 
 The daemon reports its typed events through pluggable notifiers (docs/design.md
@@ -694,8 +747,9 @@ One-shot and interactive CLI commands. Commands marked with ➡️ are one-shot 
 | `get-charging-state` | Get the EV's charging state, battery level, and charge limit (`charge_state`; does not wake the vehicle — a sleeping car returns HTTP 408 with asleep/offline advice) |
 | `charge-from-battery [--start] [--dry-run]` | Set EV charge limit from the energy the solar battery can spare (kWh math). With no flags, a terminal is shown the computed plan and prompted `Set the EV charge limit to N% and start charging? (y/n)`; declining sends nothing, and a non-TTY run is a no-op that points at the flags; `--start` sets the limit and starts charging without prompting; `--dry-run` calculates and prints BSoC and the computed charge target, without issuing any commands; the output names the charge efficiency in effect and, on a low-solar outlook, the weather reserve |
 | `set-ev-charge-limit <percent>` | Set the EV's charge limit (50-100%); in the REPL the percent may be given inline (`set-ev-charge-limit 80`) or omitted to be prompted for, and `--help` prints the command help |
-| `start-ev-charging` | Start charging the EV |
-| `stop-ev-charging` | Stop charging the EV |
+| `start-ev-charging` | Start charging the EV (a human start: EVCC records the episode as `manual` and stays out of it) |
+| `stop-ev-charging` | Stop charging the EV (a raw stop — EVCC keeps managing the plug-in; for a full hand-over use `release-charging`) |
+| `release-charging [--limit <percent>] [--keep-charging]` | Release EVCC's control of the current plug-in: stop charging (default; `--keep-charging` hands over seamlessly), restore the user-set charge limit (`--limit`, else the value recorded before EVCC changed it, else prompt), and mark the plug-in released so the daemon never stops, resumes, or re-targets it again. The car's own scheduled charging keeps running exactly as configured in the OEM app |
 
 ### Configuring
 | Command | Description |

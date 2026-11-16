@@ -44,6 +44,7 @@ function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
     evSocEndPercent: 62,
     batterySocStartPercent: 71,
     batterySocEndPercent: 58,
+    owners: [],
     ...overrides,
   };
 }

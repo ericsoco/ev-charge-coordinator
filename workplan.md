@@ -267,6 +267,60 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-15 — session ownership + scheduled-charging coexistence (branch `feat/session-ownership`)
+
+**Problem (user report, evidence-backed):** EVCC aborted OEM-scheduled overnight
+charging — `[session-monitor] stopped charging (battery_buffer)` at 2026-11-13
+04:35 and 2026-11-14 01:35 killed scheduled sessions (sessions 36/37), and
+EVCC's lowered charge limit left on the car capped any surviving scheduled
+charge. Requirement reframed by the user around one rule: **if someone other
+than EVCC starts a charging episode, EVCC must not manage it** — with an
+ownership timeline per session and a `release-charging` command.
+
+**Decisions (user-approved 2026-11-14/15):** D1 `session_owners` table (not a
+JSON column — atomic cross-process appends, CHECK enum, queryable); D2
+`start-ev-charging` counts as `manual`; D3 hands-off buffer interlock for
+non-managed episodes (**this refines the 2026-11-03 "buffer stop regardless of
+who started" decision** — Franklin hardware is the backstop for foreign
+episodes, the accepted Mac-sleep posture); D4 restore the user charge limit
+whenever EVCC doesn't own the active episode; D5 `scheduledCharging` config
+block (`prioritize` default ON, `leadMinutes` 15, `handOverAt` fallback);
+D6 `release-charging` (kebab-case), documented with all commands; D7 accept
+the manual-vs-scheduled attribution heuristic (management treats both alike).
+
+**What landed (8 commits):** migration 006 (`session_owners` +
+`user_charge_limit_percent` + `released_ts_ms`; `decisions.reason_code` gains
+`scheduled_window`) with schema-pin + `openStoreWritable` (CLI writes, never
+migrates); OEM-neutral `EVService.getChargingSchedule?()` + `utils/schedule.ts`
+window math + defensive Tesla wire mapping (legacy `scheduled_*` fields +
+`charge_schedule_data` / `preconditioning_schedule_data`, unknown shapes
+skipped); `daemon/ownership.ts` attribution (EVCC claims at command time cover
+a later start; foreign starts label `scheduled` inside an active window else
+`manual`; one rule covers observed transitions AND restart reconciliation);
+monitor + re-targeter manage only EVCC-owned, unreleased episodes (resumes
+claim as `evcc`); `daemon/handover.ts` (first in the chain) restores the user
+limit on foreign episodes and auto-releases without stopping the car when a
+start-at window activates (or `handOverAt` passes) — `session-released`
+notification, TTL-cached schedule reads; engine `scheduled_window` decline
+(fail-open on schedule-read errors); `release-charging` CLI (stop default,
+`--keep-charging`, `--limit`, prompt fallback, ownership + schedule report);
+`charge-from-battery --start` / `set-ev-charge-limit` record ownership
+bookkeeping; `GET /api/sessions` gains `owners` (+ web fixtures); README
+"Charging ownership" section + command table; docs/api.md. Gate green
+(1126 + 150 web).
+
+**Known limits / follow-ups:** manual-vs-scheduled labels are heuristic (a
+manual start inside a schedule window reads `scheduled`); Tesla
+`charge_schedule_data` / `preconditioning_schedule_data` shapes are mapped
+defensively and need one live verification pass (misreads degrade safely to
+`manual`); EVCC restores limits lazily (only while the car is awake — never
+wakes a sleeping car just for a limit); web UI does not yet surface `owners`
+(API serves it). Live validation runbook: an evening with (a) an EVCC session
+ended by battery-buffer, (b) a manual app start, (c) the overnight schedule —
+expect no `[session-monitor]` stop on the scheduled charge, limit restored to
+the user value, `owners` timeline `evcc → scheduled`, and the car completing
+to the user limit by the schedule's deadline.
+
 ### 2026-11-14 — PR #86 (P2 step 5) landed manually (GitHub mergeability flake)
 
 GitHub's mergeability UI reported conflicts again after `origin/main` moved
