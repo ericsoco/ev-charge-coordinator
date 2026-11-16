@@ -42,6 +42,12 @@ export interface DecisionInput {
   home: HomeLocation | null;
   /** Decision-time fix (Option B); null = fetch failed or never attempted. */
   vehicleLocation: VehicleLocation | null;
+  /**
+   * Prioritize-scheduled-charging (D5): an OEM start-at charging window is
+   * active or begins within the configured lead. Computed by the edge with
+   * the preference applied — the engine just declines on the fact.
+   */
+  scheduleWindowStartingSoon: boolean;
 }
 
 export interface DecisionOutcome {
@@ -95,6 +101,15 @@ export function evaluateDecision(input: DecisionInput): DecisionOutcome {
   }
   if (input.chargingState === 'Charging') {
     return declined('already_charging', 'vehicle is already charging');
+  }
+  // Prioritize scheduled charging (2026-11-14): never start a managed session
+  // that a configured OEM schedule is about to supersede — the scheduled
+  // charge owns this plug-in.
+  if (input.scheduleWindowStartingSoon) {
+    return declined(
+      'scheduled_window',
+      'an OEM charging schedule is active or starts soon — prioritizing it'
+    );
   }
 
   const cfg = input.energyConfig;

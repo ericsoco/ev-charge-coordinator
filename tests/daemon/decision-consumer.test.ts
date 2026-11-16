@@ -16,7 +16,7 @@ import { DEFAULT_WEATHER_POLICY, type WeatherPolicy } from '../../src/utils/weat
 import { createDecisionConsumer, type DecisionConsumerDeps } from '../../src/daemon/decisionConsumer.js';
 import type { VehiclePlugInContext } from '../../src/daemon/EvPoller.js';
 import type { NotificationEvent } from '../../src/notifiers/types.js';
-import type { EVStatus } from '../../src/types/ev.js';
+import type { ChargingScheduleSnapshot, EVStatus } from '../../src/types/ev.js';
 import type { EnergyConfig } from '../../src/utils/energy.js';
 
 const HOME = { latitude: 37.7749, longitude: -122.4194 };
@@ -541,6 +541,58 @@ describe('weather-adjusted reserve (decision wiring)', () => {
     const row = decisionStore.decisionForSession(db, 7)!;
     expect(row.reasonDetail).toContain('9.4 kWh above 20% buffer');
     expect(row.reasonDetail).not.toContain('weather +');
+  });
+});
+
+describe('prioritize scheduled charging (decision decline, D5)', () => {
+  const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
+
+  /** A start-at window active right now (± a few minutes around the clock). */
+  function activeWindow(): ChargingScheduleSnapshot {
+    const at = new Date();
+    const nowMin = at.getHours() * 60 + at.getMinutes();
+    return {
+      windows: [
+        {
+          kind: 'charging',
+          daysOfWeek: null,
+          startMinute: (nowMin - 5 + 1440) % 1440,
+          endMinute: (nowMin + 5) % 1440,
+          enabled: true,
+        },
+      ],
+    };
+  }
+
+  it('declines scheduled_window when a window is active or starting soon', async () => {
+    await consumer({
+      ...LIVE,
+      getChargingSchedule: async () => activeWindow(),
+      scheduledCharging: { prioritize: true, leadMinutes: 15 },
+    })({ ...CTX, tsMs: Date.now() });
+    const row = decisionStore.decisionForSession(db, 7)!;
+    expect(row.reasonCode).toBe('scheduled_window');
+    expect(commandCalls).toEqual([]);
+  });
+
+  it('preference off ignores the same window', async () => {
+    await consumer({
+      ...LIVE,
+      getChargingSchedule: async () => activeWindow(),
+      scheduledCharging: { prioritize: false, leadMinutes: 15 },
+    })({ ...CTX, tsMs: Date.now() });
+    expect(decisionStore.decisionForSession(db, 7)!.reasonCode).toBe('started');
+  });
+
+  it('fails open on a schedule read failure (EVCC may manage)', async () => {
+    await consumer({
+      ...LIVE,
+      getChargingSchedule: async () => {
+        throw new Error('asleep');
+      },
+    })({ ...CTX, tsMs: Date.now() });
+    expect(decisionStore.decisionForSession(db, 7)!.reasonCode).toBe('started');
+    expect(logs.join('\n')).toContain('schedule read failed');
   });
 });
 

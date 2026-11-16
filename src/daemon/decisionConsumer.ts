@@ -9,9 +9,10 @@
  * the poll loop down.
  */
 import type { DatabaseSync } from 'node:sqlite';
-import type { EVStatus, VehicleLocation } from '../types/ev.js';
+import type { ChargingScheduleSnapshot, EVStatus, VehicleLocation } from '../types/ev.js';
 import type { HomeLocation } from '../utils/credentials.js';
-import type { AutoStartConfig } from '../utils/daemonConfig.js';
+import type { AutoStartConfig, ScheduledChargingConfig } from '../utils/daemonConfig.js';
+import { findStartingWindow } from '../utils/schedule.js';
 import type { EnergyConfig } from '../utils/energy.js';
 import { resolveEnergyConfig } from '../utils/config.js';
 import {
@@ -65,6 +66,10 @@ export interface DecisionConsumerDeps {
   };
   /** Delay before the single complete-rejection retry; tests pass 1. */
   startRetryDelayMs?: number;
+  /** OEM schedule introspection for the prioritize-scheduled decline (optional). */
+  getChargingSchedule?: () => Promise<ChargingScheduleSnapshot | null>;
+  /** Prioritize-scheduled-charging policy (D5); omitted = shipped defaults. */
+  scheduledCharging?: Pick<ScheduledChargingConfig, 'prioritize' | 'leadMinutes'>;
   /** Injectable so tests avoid config files; default reads energy config.json. */
   getEnergyConfig?: () => EnergyConfig | null;
   log?: (message: string) => void;
@@ -153,6 +158,26 @@ export function createDecisionConsumer(
         deps.weatherPolicy ?? DEFAULT_WEATHER_POLICY
       );
 
+      // Prioritize scheduled charging (D5): fail OPEN on a schedule read
+      // failure — a broken read must not block EVCC entirely (the scheduled
+      // charge self-heals later; a stolen window does not).
+      let scheduleWindowStartingSoon = false;
+      const schedulePolicy = deps.scheduledCharging ?? { prioritize: true, leadMinutes: 15 };
+      if (schedulePolicy.prioritize && deps.getChargingSchedule) {
+        try {
+          const snapshot = await deps.getChargingSchedule();
+          scheduleWindowStartingSoon =
+            snapshot !== null &&
+            findStartingWindow(snapshot, ctx.tsMs, schedulePolicy.leadMinutes * 60_000) !== null;
+        } catch (error) {
+          deps.log?.(
+            `[decision] schedule read failed (${
+              error instanceof Error ? error.message : String(error)
+            }) — failing open (EVCC may manage)`
+          );
+        }
+      }
+
       let outcome = evaluateDecision({
         sessionAlreadyDecided,
         event: ctx.event,
@@ -166,6 +191,7 @@ export function createDecisionConsumer(
         dryRun: deps.dryRun,
         home,
         vehicleLocation,
+        scheduleWindowStartingSoon,
       });
       if (observed !== null && outcome.limitedBy !== null && outcome.reasonDetail !== null) {
         outcome = {

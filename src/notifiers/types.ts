@@ -55,6 +55,19 @@ export interface SessionRetargetedEvent {
   detail: string;
 }
 
+/**
+ * EVCC released control of a plug-in (explicit `release-charging`, or a
+ * scheduled-charging hand-over). The car is left charging as configured.
+ */
+export interface SessionReleasedEvent {
+  type: 'session-released';
+  tsMs: number;
+  sessionId: number | null;
+  vehicleId: string;
+  /** Why control moved (hand-over reason or the user's release wording). */
+  detail: string;
+}
+
 export interface FailureEvent {
   type: 'failure';
   tsMs: number;
@@ -74,6 +87,7 @@ export type NotificationEvent =
   | ChargingStartedEvent
   | ChargingStoppedEvent
   | SessionRetargetedEvent
+  | SessionReleasedEvent
   | FailureEvent
   | TestEvent;
 

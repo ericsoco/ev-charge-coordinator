@@ -35,6 +35,22 @@ export interface AutoStartConfig {
   filters: DecisionFilterConfig[];
 }
 
+/**
+ * "Prioritize scheduled charging" policy (2026-11-14 ownership work): when
+ * an OEM charging schedule wants to charge, EVCC yields instead of managing.
+ * - `prioritize` (default on): plug-in decisions decline inside schedule
+ *   windows (+ lead) and a managed session hands over when a window opens.
+ * - `leadMinutes`: the plug-in decline fires when a start-at window begins
+ *   within this many minutes ("don't start a session about to be superseded").
+ * - `handOverAt` ("HH:MM", local; null = off): daily auto-release fallback
+ *   for OEMs whose schedules EVCC cannot introspect.
+ */
+export interface ScheduledChargingConfig {
+  prioritize: boolean;
+  leadMinutes: number;
+  handOverAt: string | null;
+}
+
 export interface DaemonConfig {
   /** Home-battery sample cadence, seconds. */
   batterySampleSec: number;
@@ -64,6 +80,8 @@ export interface DaemonConfig {
   retentionDays: number;
   /** Auto-start decision settings (nested block, validated field-by-field). */
   autoStart: AutoStartConfig;
+  /** Scheduled-charging coexistence policy (nested block, validated separately). */
+  scheduledCharging: ScheduledChargingConfig;
   /**
    * Notification clients invoked for every typed event; all are called and
    * failures are isolated. `[]` disables notifications entirely.
@@ -83,6 +101,11 @@ export const DEFAULT_DAEMON_CONFIG: Readonly<DaemonConfig> = Object.freeze<Daemo
   autoStart: {
     enabled: false,
     filters: [{ type: 'always' }],
+  },
+  scheduledCharging: {
+    prioritize: true,
+    leadMinutes: 15,
+    handOverAt: null,
   },
   notifiers: cloneNotifiers(DEFAULT_NOTIFIERS),
 });
@@ -185,8 +208,8 @@ function checkRange(min: number, max: number): (value: number) => string | null 
   };
 }
 
-/** Numeric tunables only — the nested `autoStart`/`notifiers` blocks validate separately. */
-type NumericDaemonField = Exclude<keyof DaemonConfig, 'autoStart' | 'notifiers'>;
+/** Numeric tunables only — the nested blocks validate separately. */
+type NumericDaemonField = Exclude<keyof DaemonConfig, 'autoStart' | 'scheduledCharging' | 'notifiers'>;
 
 const FIELD_CHECKS: { [K in NumericDaemonField]: (value: number) => string | null } = {
   batterySampleSec: checkRange(10, 86_400),
@@ -200,7 +223,7 @@ const FIELD_CHECKS: { [K in NumericDaemonField]: (value: number) => string | nul
 };
 
 const FIELD_NAMES = Object.keys(DEFAULT_DAEMON_CONFIG).filter(
-  (name) => name !== 'autoStart' && name !== 'notifiers'
+  (name) => name !== 'autoStart' && name !== 'scheduledCharging' && name !== 'notifiers'
 ) as NumericDaemonField[];
 
 function show(value: unknown): string {
@@ -218,6 +241,7 @@ function defaultConfig(): DaemonConfig {
   return {
     ...DEFAULT_DAEMON_CONFIG,
     autoStart: cloneAutoStart(DEFAULT_DAEMON_CONFIG.autoStart),
+    scheduledCharging: { ...DEFAULT_DAEMON_CONFIG.scheduledCharging },
     notifiers: cloneNotifiers(DEFAULT_DAEMON_CONFIG.notifiers),
   };
 }
@@ -292,6 +316,63 @@ function resolveAutoStart(
   return { value, problems: [] };
 }
 
+/**
+ * Validate the nested `scheduledCharging` block (absent fields keep their
+ * defaults). Same contract as resolveAutoStart: any problem returns null.
+ */
+function resolveScheduledCharging(
+  raw: unknown,
+  file: string
+): { value: ScheduledChargingConfig | null; problems: string[] } {
+  const value = { ...DEFAULT_DAEMON_CONFIG.scheduledCharging };
+  if (raw === undefined || raw === null) return { value, problems: [] };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return {
+      value: null,
+      problems: [`${file}: scheduledCharging = ${show(raw)} (must be an object)`],
+    };
+  }
+
+  const problems: string[] = [];
+  const record = raw as Record<string, unknown>;
+  const prioritize = record.prioritize;
+  if (prioritize !== undefined && prioritize !== null) {
+    if (typeof prioritize !== 'boolean') {
+      problems.push(`${file}: scheduledCharging.prioritize = ${show(prioritize)} (must be a boolean)`);
+    } else {
+      value.prioritize = prioritize;
+    }
+  }
+
+  const leadMinutes = record.leadMinutes;
+  if (leadMinutes !== undefined && leadMinutes !== null) {
+    const problem = checkRange(0, 720)(leadMinutes as number);
+    if (typeof leadMinutes !== 'number' || problem !== null) {
+      problems.push(
+        `${file}: scheduledCharging.leadMinutes = ${show(leadMinutes)} (${
+          typeof leadMinutes !== 'number' ? 'must be a number' : problem
+        })`
+      );
+    } else {
+      value.leadMinutes = leadMinutes;
+    }
+  }
+
+  const handOverAt = record.handOverAt;
+  if (handOverAt !== undefined && handOverAt !== null) {
+    if (typeof handOverAt !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(handOverAt)) {
+      problems.push(
+        `${file}: scheduledCharging.handOverAt = ${show(handOverAt)} (must be "HH:MM" or null)`
+      );
+    } else {
+      value.handOverAt = handOverAt;
+    }
+  }
+
+  if (problems.length > 0) return { value: null, problems };
+  return { value, problems: [] };
+}
+
 export interface ResolvedDaemonConfig {
   /** Complete, defaults-merged config — null when anything is invalid. */
   config: DaemonConfig | null;
@@ -346,6 +427,10 @@ export function resolveDaemonConfig(file: string = daemonConfigPath()): Resolved
   const autoStart = resolveAutoStart(record.autoStart, file);
   problems.push(...autoStart.problems);
   if (autoStart.value !== null) config.autoStart = autoStart.value;
+
+  const scheduledCharging = resolveScheduledCharging(record.scheduledCharging, file);
+  problems.push(...scheduledCharging.problems);
+  if (scheduledCharging.value !== null) config.scheduledCharging = scheduledCharging.value;
 
   // Notifier types + validation are owned by src/notifiers (daemon delegates).
   const notifiers = validateNotifierEntries(record.notifiers, file);
