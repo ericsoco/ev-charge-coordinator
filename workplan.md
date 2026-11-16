@@ -321,6 +321,18 @@ expect no `[session-monitor]` stop on the scheduled charge, limit restored to
 the user value, `owners` timeline `evcc → scheduled`, and the car completing
 to the user limit by the schedule's deadline.
 
+**Review follow-ups (2026-11-16, same branch/PR #90):** the `15` lead-minutes
+default hoisted to `DEFAULT_SCHEDULED_LEAD_MINUTES` (daemonConfig — one
+source for the config default + both daemon fallbacks); the `managed` flag
+renamed to `managedSession` (SessionStopInput/ReTargetInput fields, hand-over
+local, test fixtures — `isManagedEpisode` kept as a distinct token). Gate
+green both times. Open question answered in-thread: action-taking code stays
+in the per-stage I/O edges (engine.ts is pure by design), with a proposed
+follow-up to extract a shared `releaseControl()` (handover ↔ `release-charging`
+duplicate the release sequence) and optionally converge car writes behind
+the existing `ActuatorPort` seam.
+
+
 ### 2026-11-14 — PR #86 (P2 step 5) landed manually (GitHub mergeability flake)
 
 GitHub's mergeability UI reported conflicts again after `origin/main` moved
