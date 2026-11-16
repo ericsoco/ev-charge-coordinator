@@ -51,6 +51,14 @@ export interface ScheduledChargingConfig {
   handOverAt: string | null;
 }
 
+/**
+ * Default plug-in decline lead, in minutes ("a start-at schedule window
+ * begins within this many minutes" — don't start a session about to be
+ * superseded). One source for the config default and every no-config
+ * fallback in the daemon.
+ */
+export const DEFAULT_SCHEDULED_LEAD_MINUTES = 15;
+
 export interface DaemonConfig {
   /** Home-battery sample cadence, seconds. */
   batterySampleSec: number;
@@ -104,7 +112,7 @@ export const DEFAULT_DAEMON_CONFIG: Readonly<DaemonConfig> = Object.freeze<Daemo
   },
   scheduledCharging: {
     prioritize: true,
-    leadMinutes: 15,
+    leadMinutes: DEFAULT_SCHEDULED_LEAD_MINUTES,
     handOverAt: null,
   },
   notifiers: cloneNotifiers(DEFAULT_NOTIFIERS),
