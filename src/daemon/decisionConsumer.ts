@@ -179,6 +179,11 @@ export function createDecisionConsumer(
       // re-targeting step rewrites it mid-session (last write wins).
       if (outcome.stopTargetPercent !== null) {
         sessionStore.setSessionTarget(deps.db, ctx.sessionId, outcome.stopTargetPercent);
+        // Snapshot the user's charge limit before EVCC writes its own: it is
+        // what a release/foreign-episode restore hands back to the car.
+        if (ctx.chargeLimitPercent != null) {
+          sessionStore.recordSessionUserLimit(deps.db, ctx.sessionId, ctx.chargeLimitPercent);
+        }
       }
 
       // Live and every gate passed: set the limit first, then start (the
@@ -188,6 +193,10 @@ export function createDecisionConsumer(
       let recorded = outcome;
       if (outcome.accepted && outcome.targetPercent !== null) {
         const target = outcome.targetPercent;
+        // Claim the charging episode before the commands fly: the daemon's
+        // attribution sees this row and leaves the episode to EVCC (a claim
+        // whose start never materialized lapses after EVCC_CLAIM_WINDOW_MS).
+        sessionStore.appendSessionOwner(deps.db, ctx.sessionId, 'evcc', ctx.tsMs);
         try {
           await deps.chargeCommands.setChargeLimit(target);
           // The car needs a beat to apply a raised limit: one status read

@@ -427,6 +427,45 @@ describe('session stop target (arming the monitor)', () => {
   });
 });
 
+describe('ownership claim + user-limit capture', () => {
+  const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
+
+  function openSessionCtx(extra: Partial<VehiclePlugInContext> = {}): VehiclePlugInContext {
+    const id = sessionStore.openSession(db, {
+      vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 500,
+    });
+    return { ...CTX, sessionId: id, chargeLimitPercent: 80, ...extra };
+  }
+
+  it('a live actuation claims the episode as evcc at command time', async () => {
+    const ctx = openSessionCtx();
+    await consumer(LIVE)(ctx);
+    expect(sessionStore.lastSessionOwner(db, ctx.sessionId)).toMatchObject({
+      owner: 'evcc',
+      fromTsMs: ctx.tsMs,
+    });
+  });
+
+  it('records the pre-EVCC user limit at arming, write-once', async () => {
+    const ctx = openSessionCtx();
+    await consumer(LIVE)(ctx);
+    const row = sessionStore.openSessionFor(db, 'VIN')!;
+    expect(row.userChargeLimitPercent).toBe(80);
+    // A later arming (second decision path) never overwrites the original.
+    sessionStore.recordSessionUserLimit(db, row.id, 90);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.userChargeLimitPercent).toBe(80);
+  });
+
+  it('a dark (dry-run) verdict claims nothing (arming parity still records the limit)', async () => {
+    const ctx = openSessionCtx();
+    await consumer({ ...LIVE, dryRun: true })(ctx);
+    expect(sessionStore.lastSessionOwner(db, ctx.sessionId)).toBeNull();
+    // Arming runs for dark verdicts too (existing contract), so the snapshot
+    // lands — but no episode is claimed without a real start.
+    expect(sessionStore.openSessionFor(db, 'VIN')!.userChargeLimitPercent).toBe(80);
+  });
+});
+
 describe('measured efficiency (decision audit + math)', () => {
   const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
 
