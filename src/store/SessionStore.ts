@@ -406,6 +406,26 @@ export function releaseSession(
   return row ? Number(row.id) : null;
 }
 
+/**
+ * Take control back after a release (an explicit managed start like
+ * `charge-from-battery --start` re-engages EVCC management). Returns the
+ * session id, or null when no such session exists.
+ */
+export function clearSessionRelease(
+  db: DatabaseSync,
+  sessionId: number,
+  siteId: SiteId = HOME_SITE
+): number | null {
+  const row = db
+    .prepare(
+      `UPDATE sessions SET released_ts_ms = NULL
+        WHERE id = ? AND site_id = ?
+        RETURNING id`
+    )
+    .get(sessionId, siteId) as { id: number } | null | undefined;
+  return row ? Number(row.id) : null;
+}
+
 
 /**
  * Recent sessions with a computable efficiency, newest first — the raw feed

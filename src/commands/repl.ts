@@ -38,6 +38,11 @@ export const REPL_COMMANDS: readonly ReplCommand[] = [
     name: 'charge-from-battery',
     description: 'Set the EV charge limit from the energy the solar battery can spare (kWh math)',
   },
+  {
+    name: 'release-charging',
+    description:
+      "Release EVCC's control of the current plug-in: stop charging, restore the user charge limit, and leave the car to its own schedule",
+  },
   { name: 'config', description: 'Show or update configuration' },
   {
     name: 'pair-tesla-key',
@@ -73,6 +78,7 @@ export const VALUE_FLAGS: Readonly<Record<string, readonly string[]>> = {
   ],
   'pair-tesla-key': ['domain', 'vin'],
   sessions: ['limit'],
+  'release-charging': ['limit'],
 };
 
 export const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
@@ -80,6 +86,7 @@ export const BOOLEAN_FLAGS: Readonly<Record<string, readonly string[]>> = {
   config: ['clear-franklin', 'clear-tesla', 'clear-credentials', 'show-public-key', 'help'],
   'pair-tesla-key': ['check-only', 'skip-registration', 'rotate-key', 'help'],
   'charge-from-battery': ['start', 'dry-run', 'help'],
+  'release-charging': ['keep-charging', 'help'],
   status: ['json', 'help'],
   sessions: ['open', 'help'],
 };

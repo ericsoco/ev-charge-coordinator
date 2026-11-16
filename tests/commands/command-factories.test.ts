@@ -26,6 +26,7 @@ import {
 } from '../../src/commands/system.js';
 import {
   createChargeFromBatteryCommand,
+  createReleaseChargingCommand,
   createGetBatterySocCommand,
   createGetChargingStateCommand,
   createGetEvBsocCommand,
@@ -219,6 +220,11 @@ const SPECS: FactorySpec[] = [
     options: ['--start', '--dry-run'],
   },
   {
+    name: 'release-charging',
+    make: (h) => createReleaseChargingCommand({ session: h.session }),
+    options: ['--limit <percent>', '--keep-charging'],
+  },
+  {
     name: 'authenticate',
     make: () => createAuthenticateCommand(),
     options: ['--client-id <id>', '--client-secret <secret>', '--reauth'],
@@ -404,6 +410,7 @@ describe('factory actions route through the session', () => {
     ['get-charging-state', createGetChargingStateCommand],
     ['start-ev-charging', createStartEvChargingCommand],
     ['stop-ev-charging', createStopEvChargingCommand],
+    ['release-charging', createReleaseChargingCommand],
   ])('%s requires Tesla and routes to its handler', async (name, make) => {
     const h = makeHarness();
     await make({ session: h.session }).parseAsync(['node', 'evcc'], { from: 'node' });
@@ -464,6 +471,7 @@ describe('index.ts registration order (--help listing)', () => {
       'StartEvCharging',
       'StopEvCharging',
       'ChargeFromBattery',
+      'ReleaseCharging',
       'Authenticate',
       'Notify',
       'Config',

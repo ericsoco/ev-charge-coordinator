@@ -40,6 +40,7 @@ import {
   getBatterySoc,
   getChargingState,
   getEvBatterySoc,
+  releaseCharging,
   setEvChargeLimit,
   startEvCharging,
   stopEvCharging,
@@ -324,6 +325,24 @@ export async function dispatchCommand(
       await chargeFromBattery(currentContext(), {
         start: options.start === true,
         dryRun: options.dryRun === true,
+      });
+      break;
+    }
+
+    case 'release-charging': {
+      const { options, error } = parseCommandArgs('release-charging', args);
+      if (error) {
+        console.log(paint.warning(error));
+        break;
+      }
+      if (options.help) {
+        printCommandHelp('release-charging');
+        break;
+      }
+      const rawLimit = options.limit;
+      await releaseCharging(currentContext(), {
+        keepCharging: options.keepCharging === true,
+        limit: typeof rawLimit === 'string' ? parseInt(rawLimit) : undefined,
       });
       break;
     }
