@@ -39,6 +39,7 @@ function input(overrides: Partial<ReTargetInput> = {}): ReTargetInput {
     sessionTargetPercent: 55,
     sessionInitialTargetPercent: 55,
     sessionStopReason: null,
+    managed: true,
     homeBatterySocPercent: 70,
     energyConfig: CFG,
     ...overrides,
@@ -617,5 +618,80 @@ describe('runDaemon composition (source pin)', () => {
     const evPollerAt = source.indexOf('createEvPoller', afterSampleAt);
     expect(afterSampleAt).toBeGreaterThan(-1);
     expect(monitorCallAt).toBeGreaterThan(evPollerAt); // monitor lives only in the poll chain
+  });
+});
+
+describe('createReTargeter — ownership gating (the 2026-11-14 rule)', () => {
+  let dir: string;
+  let db: DatabaseSync;
+  let calls: string[];
+  let sessionId: number;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-retarget-own-'));
+    db = openStore(path.join(dir, 'data.sqlite'));
+    calls = [];
+    sessionId = sessionStore.openSession(db, {
+      vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 500,
+    });
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1, socPercent: 70 });
+  });
+
+  afterEach(() => {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function retarget() {
+    return createReTargeter({
+      db,
+      vehicleId: 'VIN',
+      autoStart: { enabled: true, filters: [] },
+      dryRun: false,
+      setChargeLimit: async (percent) => {
+        calls.push(`limit:${percent}`);
+      },
+      startCharging: async () => {
+        calls.push('start');
+      },
+      getEnergyConfig: () => CFG,
+      nowMs: () => 1_000,
+      log: () => {},
+    });
+  }
+
+  const charging = (tsMs: number) => ({
+    tsMs,
+    evSocPercent: 55,
+    chargingState: 'Charging',
+    chargeLimitPercent: 55,
+  });
+
+  it('never re-targets a foreign episode (raw 63 would raise)', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 55);
+    sessionStore.appendSessionOwner(db, sessionId, 'manual', 600);
+    await retarget()(charging(1_000));
+    expect(calls).toEqual([]);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.targetPercent).toBe(55);
+  });
+
+  it('never resumes a released plug-in', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 43);
+    sessionStore.setSessionStopReason(db, sessionId, 'battery_buffer');
+    sessionStore.releaseSession(db, sessionId, 900);
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 35 });
+    await retarget()({ tsMs: 1_000, evSocPercent: 40, chargingState: 'Stopped', chargeLimitPercent: 43 });
+    expect(calls).toEqual([]);
+  });
+
+  it('a resumed EVCC episode is claimed as evcc at command time', async () => {
+    sessionStore.setSessionTarget(db, sessionId, 43);
+    sessionStore.setSessionStopReason(db, sessionId, 'battery_buffer');
+    sessionStore.appendSessionOwner(db, sessionId, 'evcc', 600);
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 35 });
+    await retarget()({ tsMs: 2_000, evSocPercent: 40, chargingState: 'Stopped', chargeLimitPercent: 43 });
+    expect(calls).toEqual(['start']);
+    const owners = sessionStore.sessionOwners(db, sessionId);
+    expect(owners).toMatchObject([{ owner: 'evcc' }, { owner: 'evcc', fromTsMs: 2_000 }]);
   });
 });

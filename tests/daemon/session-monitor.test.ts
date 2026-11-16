@@ -33,6 +33,7 @@ describe('evaluateSessionStop (pure)', () => {
     sessionTargetPercent: 60,
     homeBatterySocPercent: 60,
     bufferPercent: 20,
+    managed: true,
   };
 
   it('not charging never stops, even with every condition met', () => {
@@ -103,6 +104,19 @@ describe('evaluateSessionStop (pure)', () => {
         sessionTargetPercent: null,
         homeBatterySocPercent: null,
         bufferPercent: null,
+        managed: true,
+      })
+    ).toEqual({ stop: false });
+  });
+
+  it('an unmanaged episode is never stopped (ownership rule)', () => {
+    // Buffer breached AND target reached — both must yield to non-management.
+    expect(
+      evaluateSessionStop({
+        ...charging,
+        evSocPercent: 90,
+        homeBatterySocPercent: 5,
+        managed: false,
       })
     ).toEqual({ stop: false });
   });
@@ -316,5 +330,72 @@ describe('createSessionMonitor (edge)', () => {
     await run({ tsMs: 100_000, evSocPercent: 50, chargingState: 'Charging' });
     expect(stopCalls).toBe(1);
     expect(sessionStore.openSessionFor(db, 'VIN')!.stopReason).toBe('target_reached');
+  });
+});
+
+describe('createSessionMonitor — ownership gating (the 2026-11-14 rule)', () => {
+  let dir: string;
+  let db: DatabaseSync;
+  let stopCalls: number;
+  let sessionId: number;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-monitor-own-'));
+    db = openStore(path.join(dir, 'data.sqlite'));
+    stopCalls = 0;
+    sessionId = sessionStore.openSession(db, {
+      vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 500,
+    });
+  });
+
+  afterEach(() => {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const charging = (tsMs: number) => ({
+    tsMs,
+    evSocPercent: 50,
+    chargingState: 'Charging',
+    chargeLimitPercent: 50,
+  });
+
+  function monitor() {
+    return createSessionMonitor({
+      db,
+      vehicleId: 'VIN',
+      autoStart: { enabled: true, filters: [] },
+      dryRun: false,
+      stopCharging: async () => {
+        stopCalls += 1;
+      },
+      getEnergyConfig: () => CFG,
+      log: () => {},
+    });
+  }
+
+  it('never stops a manual episode — buffer breached or target reached', async () => {
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 5 });
+    sessionStore.setSessionTarget(db, sessionId, 45);
+    sessionStore.appendSessionOwner(db, sessionId, 'manual', 600);
+    await monitor()(charging(1_000));
+    expect(stopCalls).toBe(0);
+  });
+
+  it('never stops a released plug-in', async () => {
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 5 });
+    sessionStore.setSessionTarget(db, sessionId, 45);
+    sessionStore.releaseSession(db, sessionId, 900);
+    await monitor()(charging(1_000));
+    expect(stopCalls).toBe(0);
+  });
+
+  it('an EVCC episode is managed exactly as before', async () => {
+    homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 2, socPercent: 5 });
+    sessionStore.setSessionTarget(db, sessionId, 45);
+    sessionStore.appendSessionOwner(db, sessionId, 'evcc', 600);
+    await monitor()(charging(1_000));
+    expect(stopCalls).toBe(1);
+    expect(sessionStore.openSessionFor(db, 'VIN')!.stopReason).toBe('battery_buffer');
   });
 });

@@ -18,6 +18,7 @@ import { resolveEnergyConfig } from '../utils/config.js';
 import * as sessionStore from '../store/SessionStore.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
 import type { ChargingProgressContext } from './EvPoller.js';
+import { isManagedEpisode } from './ownership.js';
 import type { NotificationEvent } from '../notifiers/types.js';
 
 export interface SessionStopInput {
@@ -27,6 +28,13 @@ export interface SessionStopInput {
   sessionTargetPercent: number | null;
   homeBatterySocPercent: number | null;
   bufferPercent: number | null;
+  /**
+   * EVCC started the current episode (and the plug-in is not released).
+   * False ⇒ never stop: a manual/scheduled episode is not EVCC's to manage
+   * (the 2026-11-14 ownership rule — this refines the buffer stop's old
+   * "regardless of who started charging" policy).
+   */
+  managed: boolean;
 }
 
 export type SessionStopVerdict =
@@ -38,10 +46,11 @@ export type SessionStopVerdict =
  * target when both fire. A value that cannot be read skips its check:
  * missing data never stops charging (fail-open for stopping; the engine's
  * fail-loud applies to starting). Equality counts: at the buffer = below,
- * at the target = reached.
+ * at the target = reached. Unmanaged episodes are never stopped.
  */
 export function evaluateSessionStop(input: SessionStopInput): SessionStopVerdict {
   if (input.chargingState !== 'Charging') return { stop: false };
+  if (!input.managed) return { stop: false };
 
   if (
     input.homeBatterySocPercent !== null &&
@@ -171,6 +180,11 @@ export function createSessionMonitor(
         sessionTargetPercent: session?.targetPercent ?? null,
         homeBatterySocPercent: batterySoc,
         bufferPercent: energyConfig?.bufferPercent ?? null,
+        managed: isManagedEpisode({
+          lastOwner:
+            session === null ? null : sessionStore.lastSessionOwner(deps.db, session.id),
+          releasedTsMs: session?.releasedTsMs ?? null,
+        }),
       });
 
       if (!verdict.stop) {
