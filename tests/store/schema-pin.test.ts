@@ -34,6 +34,7 @@ import type {
   EvSampleRow,
   HomeBatterySampleRow,
   HomeEnergyCountersRow,
+  SessionOwnerRow,
   SessionRow,
   WeatherForecastRow,
 } from '../../src/store/types.js';
@@ -88,8 +89,14 @@ const TABLES: {
       'unplug_ts_ms', 'energy_kwh', 'energy_percent', 'elapsed_ms',
       'house_energy_kwh', 'efficiency', 'target_percent', 'stop_reason',
       'initial_target_percent', 'target_change_reason',
+      'user_charge_limit_percent', 'released_ts_ms',
     ],
     notNull: ['site_id', 'vehicle_id', 'home_battery_id', 'plug_ts_ms'],
+  },
+  {
+    table: 'session_owners',
+    columns: ['id', 'site_id', 'session_id', 'owner', 'from_ts_ms'],
+    notNull: ['site_id', 'session_id', 'owner', 'from_ts_ms'],
   },
   {
     table: 'weather_forecasts',
@@ -147,6 +154,10 @@ const sessionFixture: SessionRow = {
   unplugTsMs: null, energyKwh: null, energyPercent: null, elapsedMs: null,
   houseEnergyKwh: null, efficiency: null, targetPercent: null,
   initialTargetPercent: null, targetChangeReason: null, stopReason: null,
+  userChargeLimitPercent: null, releasedTsMs: null,
+};
+const sessionOwnerFixture: SessionOwnerRow = {
+  id: 0, siteId: 'home', sessionId: 0, owner: 'evcc', fromTsMs: 0,
 };
 const forecastFixture: WeatherForecastRow = {
   id: 0, siteId: 'home', fetchedTsMs: 0, hourTsMs: 0, irradianceWm2: null,
@@ -164,6 +175,7 @@ const FIXTURES: Record<string, readonly string[]> = {
   ev_samples: sortedKeys(evSample),
   events: sortedKeys(eventFixture),
   sessions: sortedKeys(sessionFixture),
+  session_owners: sortedKeys(sessionOwnerFixture),
   weather_forecasts: sortedKeys(forecastFixture),
   decisions: sortedKeys(decisionFixture),
 };
@@ -228,7 +240,10 @@ describe('read pin (repository SELECTs ↔ interface keys)', () => {
     homeBattery.insertSample(db, { homeBatteryId: 'GW', tsMs: 1 });
     homeBattery.insertCounters(db, { homeBatteryId: 'GW', tsMs: 1 });
     ev.insertSample(db, { vehicleId: 'VIN', tsMs: 1 });
-    sessions.openSession(db, { vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 1 });
+    const pinSessionId = sessions.openSession(db, {
+      vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 1,
+    });
+    sessions.appendSessionOwner(db, pinSessionId, 'evcc', 1);
     weather.insertForecast(db, [{ hourTsMs: 1 }], 1);
     decisions.insertDecision(db, {
       vehicleId: 'VIN', tsMs: 1, sessionId: 1, accepted: false, dryRun: true,
@@ -240,6 +255,7 @@ describe('read pin (repository SELECTs ↔ interface keys)', () => {
       ['home_energy_counters', homeBattery.latestCounters(db)],
       ['ev_samples', ev.latestSample(db, 'VIN')],
       ['sessions', sessions.openSessionFor(db, 'VIN')],
+      ['session_owners', sessions.lastSessionOwner(db, pinSessionId)],
       ['weather_forecasts', weather.latestVintage(db)[0] ?? null],
       ['decisions', decisions.decisionForSession(db, 1)],
     ];

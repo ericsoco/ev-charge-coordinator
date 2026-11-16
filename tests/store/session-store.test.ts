@@ -303,6 +303,97 @@ describe('monitor columns (target / stop reason)', () => {
   });
 });
 
+describe('ownership timeline (session_owners)', () => {
+  function open(): number {
+    return sessions.openSession(db, { vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 1_000 });
+  }
+
+  it('appends episodes in order and reports the last owner', () => {
+    const id = open();
+    sessions.appendSessionOwner(db, id, 'evcc', 1_100);
+    sessions.appendSessionOwner(db, id, 'scheduled', 2_000);
+    sessions.appendSessionOwner(db, id, 'manual', 3_000);
+
+    expect(sessions.sessionOwners(db, id).map((row) => row.owner)).toEqual([
+      'evcc',
+      'scheduled',
+      'manual',
+    ]);
+    expect(sessions.lastSessionOwner(db, id)).toMatchObject({
+      sessionId: id,
+      owner: 'manual',
+      fromTsMs: 3_000,
+    });
+  });
+
+  it('rejects an owner outside the CHECK enum', () => {
+    const id = open();
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO session_owners (site_id, session_id, owner, from_ts_ms) VALUES ('home', ?, 'alien', 1)"
+        )
+        .run(id)
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('keeps timelines per session', () => {
+    const first = open();
+    const second = open();
+    sessions.appendSessionOwner(db, first, 'evcc', 1_100);
+    sessions.appendSessionOwner(db, second, 'manual', 1_200);
+    expect(sessions.lastSessionOwner(db, first)?.owner).toBe('evcc');
+    expect(sessions.lastSessionOwner(db, second)?.owner).toBe('manual');
+  });
+
+  it('latestEventTs returns the newest event of one kind', () => {
+    sessions.insertEvent(db, { vehicleId: VEHICLE, tsMs: 1_000, kind: 'charging_stop' });
+    sessions.insertEvent(db, { vehicleId: VEHICLE, tsMs: 2_000, kind: 'charging_start' });
+    sessions.insertEvent(db, { vehicleId: VEHICLE, tsMs: 3_000, kind: 'charging_stop' });
+    expect(sessions.latestEventTs(db, VEHICLE, 'charging_stop')).toBe(3_000);
+    expect(sessions.latestEventTs(db, VEHICLE, 'charging_start')).toBe(2_000);
+    expect(sessions.latestEventTs(db, VEHICLE, 'unplug')).toBeNull();
+  });
+});
+
+describe('user limit + release', () => {
+  function open(): number {
+    return sessions.openSession(db, { vehicleId: VEHICLE, homeBatteryId: BATTERY, plugTsMs: 1_000 });
+  }
+
+  it('records the user limit once; later captures never overwrite', () => {
+    const id = open();
+    expect(sessions.recordSessionUserLimit(db, id, 80)).toBe(id);
+    expect(sessions.recordSessionUserLimit(db, id, 90)).toBeNull();
+    expect(sessions.openSessionFor(db, VEHICLE)?.userChargeLimitPercent).toBe(80);
+  });
+
+  it('replaceSessionUserLimit overwrites (explicit set-ev-charge-limit)', () => {
+    const id = open();
+    sessions.recordSessionUserLimit(db, id, 80);
+    expect(sessions.replaceSessionUserLimit(db, id, 90)).toBe(id);
+    expect(sessions.openSessionFor(db, VEHICLE)?.userChargeLimitPercent).toBe(90);
+  });
+
+  it('releaseSession stamps released_ts_ms and clears the stop reason', () => {
+    const id = open();
+    sessions.setSessionTarget(db, id, 45);
+    sessions.setSessionStopReason(db, id, 'battery_buffer');
+    expect(sessions.releaseSession(db, id, 5_000)).toBe(id);
+
+    const row = sessions.openSessionFor(db, VEHICLE);
+    expect(row?.releasedTsMs).toBe(5_000);
+    expect(row?.stopReason).toBeNull();
+    expect(row?.targetPercent).toBe(45); // history preserved
+  });
+
+  it('returns null for unknown sessions', () => {
+    expect(sessions.recordSessionUserLimit(db, 9_999, 80)).toBeNull();
+    expect(sessions.replaceSessionUserLimit(db, 9_999, 80)).toBeNull();
+    expect(sessions.releaseSession(db, 9_999, 1)).toBeNull();
+  });
+});
+
 describe('recentEfficiencySamples', () => {
   function seedEfficiencySession(plugTsMs: number, efficiency: number | null): void {
     const id = sessions.openSession(db, {

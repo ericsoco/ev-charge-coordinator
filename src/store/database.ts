@@ -113,6 +113,31 @@ export function openStoreReadOnly(dbPath: string = storePath()): DatabaseSync {
 }
 
 /**
+ * Read-WRITE connection for CLI commands that must record (ownership claims,
+ * `release-charging`): never migrates — migrations belong to the daemon's
+ * `openStore` — and refuses a version mismatch exactly like
+ * openStoreReadOnly. WAL + busy_timeout keep a write here lock-free beside
+ * the daemon's writer; throws when the file does not exist ("run the daemon
+ * first").
+ */
+export function openStoreWritable(dbPath: string = storePath()): DatabaseSync {
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`Store ${dbPath} does not exist — run the daemon (or start) first.`);
+  }
+  const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA busy_timeout = 5000');
+  const current = readSchemaVersion(db);
+  if (current !== CURRENT_SCHEMA_VERSION) {
+    db.close();
+    throw current < CURRENT_SCHEMA_VERSION
+      ? staleStoreError(dbPath, current)
+      : newerStoreError(dbPath, current);
+  }
+  return db;
+}
+
+/**
  * Run fn inside BEGIN IMMEDIATE/COMMIT; roll back and rethrow if it throws.
  * For multi-row units of work (one sampler tick = sample + counters).
  * The connection must not already hold a transaction.
