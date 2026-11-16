@@ -27,9 +27,10 @@ describe('one-shot service initialization', () => {
       COMMAND_SOURCE.match(
         /requireService\('(Tesla|FranklinWH)', await (?:deps\.)?session\.initialize/g
       ) ?? [];
-    // Six single-service actions, charge-from-battery (both services), and
-    // set-home-location's vehicle flow (Tesla, only when no arguments given).
-    expect(sites).toHaveLength(9);
+    // Seven single-service actions (incl. release-charging), charge-from-battery
+    // (both services), and set-home-location's vehicle flow (Tesla, only when no
+    // arguments given).
+    expect(sites).toHaveLength(10);
   });
 
   it('skips the credential prompt when the proxy itself failed to start', () => {

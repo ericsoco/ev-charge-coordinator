@@ -31,6 +31,7 @@ import {
   createGetBatterySocCommand,
   createGetChargingStateCommand,
   createGetEvBsocCommand,
+  createReleaseChargingCommand,
   createSetEvChargeLimitCommand,
   createStartEvChargingCommand,
   createStopEvChargingCommand,
@@ -114,6 +115,7 @@ program.addCommand(createSetEvChargeLimitCommand({ session }));
 program.addCommand(createStartEvChargingCommand({ session }));
 program.addCommand(createStopEvChargingCommand({ session }));
 program.addCommand(createChargeFromBatteryCommand({ session }));
+program.addCommand(createReleaseChargingCommand({ session }));
 program.addCommand(createAuthenticateCommand());
 program.addCommand(createNotifyCommand(buildNotifyDeps()));
 program.addCommand(createConfigCommand());

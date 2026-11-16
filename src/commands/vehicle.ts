@@ -21,10 +21,25 @@ import {
   DEFAULT_CHARGE_LIMIT_BOUNDS,
   computeChargeLimit,
   energyConfigFieldProblem,
+  stopTargetFor,
   type EnergyConfig,
 } from '../utils/energy.js';
-import { storePath, openStoreReadOnly } from '../store/database.js';
-import { recentEfficiencySamples } from '../store/SessionStore.js';
+import {
+  storePath,
+  openStoreReadOnly,
+  openStoreWritable,
+} from '../store/database.js';
+import {
+  appendSessionOwner,
+  recordSessionUserLimit,
+  recentEfficiencySamples,
+  releaseSession,
+  replaceSessionUserLimit,
+  setSessionTarget,
+  clearSessionRelease,
+  openSessionFor,
+  sessionOwners,
+} from '../store/SessionStore.js';
 import {
   EFFICIENCY_FETCH_LIMIT,
   applyEfficiency,
@@ -77,7 +92,8 @@ export async function getBatterySoc(ctx: CommandContext): Promise<CommandResult>
 
 export async function setEvChargeLimit(
   ctx: CommandContext,
-  percent: number
+  percent: number,
+  options: { dbPath?: string } = {}
 ): Promise<CommandResult> {
   const { minPercent, maxPercent } = DEFAULT_CHARGE_LIMIT_BOUNDS;
   if (Number.isNaN(percent) || percent < minPercent || percent > maxPercent) {
@@ -97,6 +113,20 @@ export async function setEvChargeLimit(
       )
     );
     await ctx.tesla.setChargeLimit(percent);
+    // An explicit user statement through EVCC *is* the user-set limit: keep
+    // the recorded value in sync so a later release restores the right one.
+    try {
+      const db = openStoreWritable(options.dbPath ?? storePath());
+      try {
+        const status = await ctx.tesla.getStatus();
+        const session = openSessionFor(db, status.vin);
+        if (session !== null) replaceSessionUserLimit(db, session.id, percent);
+      } finally {
+        db.close();
+      }
+    } catch {
+      // No store (or no session) — nothing to record; the command still did its job.
+    }
     log(ctx, paint.success(`✓ EV charge limit set to ${percent}%`));
     return { ok: true };
   } catch (error) {
@@ -395,7 +425,8 @@ export async function chargeFromBattery(
     }
 
     log(ctx, paint.info('Getting EV state of charge...'));
-    const evSoc = await ctx.tesla.getStateOfCharge();
+    const evStatus = await ctx.tesla.getStatus();
+    const evSoc = evStatus.battery.soc;
     if (!Number.isFinite(evSoc)) {
       const message = 'EV SoC unavailable';
       log(ctx, paint.warning(message));
@@ -470,6 +501,30 @@ export async function chargeFromBattery(
       return { ok: true };
     }
 
+    // Ownership bookkeeping (best-effort): snapshot the user's limit, arm the
+    // session target (monitor protection + releasability), claim the episode
+    // for EVCC, and take control back after any earlier release — the daemon's
+    // attribution and the release command both read these rows.
+    try {
+      const db = openStoreWritable(options.dbPath ?? storePath());
+      try {
+        const session = openSessionFor(db, evStatus.vin);
+        if (session !== null) {
+          recordSessionUserLimit(db, session.id, evStatus.battery.chargeLimit);
+          setSessionTarget(db, session.id, stopTargetFor(limit));
+          appendSessionOwner(db, session.id, 'evcc', Date.now());
+          if (session.releasedTsMs !== null) clearSessionRelease(db, session.id);
+        }
+      } finally {
+        db.close();
+      }
+    } catch (error) {
+      log(
+        ctx,
+        paint.warning(`Session store unavailable — ownership not recorded (${describeError(error)})`)
+      );
+    }
+
     log(ctx, paint.info('Setting the EV charge limit (waking the vehicle if needed; asleep cars take up to a minute)...'));
     await ctx.tesla.setChargeLimit(limit.targetPercent);
     log(ctx, paint.success(`✓ EV charge limit set to ${limit.targetPercent}%`));
@@ -484,8 +539,126 @@ export async function chargeFromBattery(
   }
 }
 
-// showStatus moved to ./system.ts — it was never vehicle-specific, and the
-// system-status surface (daemon/store/proxies/config) lives there now.
+/**
+ * `release-charging` — end EVCC's management of the current plug-in and hand
+ * the car back: stop charging (default; `--keep-charging` skips the stop for
+ * a seamless hand-over), restore the user-set charge limit, and mark the
+ * session released so the daemon never stops, resumes, or re-targets it
+ * again (the 2026-11-14 ownership rule). The car's own scheduled charging is
+ * never touched — it keeps running exactly as configured in the OEM app.
+ */
+export async function releaseCharging(
+  ctx: CommandContext,
+  options: { keepCharging?: boolean; limit?: number; dbPath?: string } = {}
+): Promise<CommandResult> {
+  if (!ctx.tesla?.isAuthenticated()) {
+    log(ctx, paint.warning('Tesla not connected'));
+    return { ok: false, error: 'Tesla not connected' };
+  }
+  try {
+    log(ctx, paint.info('Preparing the vehicle (waking if needed)...'));
+    await ctx.tesla.wakeUp();
+    const status = await ctx.tesla.getStatus();
+
+    // 1. Stop charging unless the caller wants the seamless variant.
+    if (options.keepCharging) {
+      log(ctx, paint.info('Keeping the car charging — handing over without a stop.'));
+    } else if (status.battery.isCharging) {
+      log(ctx, paint.info('Stopping EV charging...'));
+      await ctx.tesla.stopCharging();
+      log(ctx, paint.success('✓ EV charging stopped'));
+    } else {
+      log(ctx, paint.info('Vehicle is not charging — nothing to stop.'));
+    }
+
+    // 2. Store bookkeeping: release the plug-in and report the ownership story.
+    let userLimit: number | null = options.limit ?? null;
+    try {
+      const db = openStoreWritable(options.dbPath ?? storePath());
+      try {
+        const session = openSessionFor(db, status.vin);
+        if (session === null) {
+          log(
+            ctx,
+            paint.warning('No open session recorded (daemon not running?) — skipping session release.')
+          );
+        } else {
+          if (userLimit === null) userLimit = session.userChargeLimitPercent;
+          releaseSession(db, session.id, Date.now());
+          const owners = sessionOwners(db, session.id);
+          log(ctx, paint.success('✓ EVCC released control of this plug-in (until unplug)'));
+          if (owners.length > 0) {
+            log(ctx, paint.info(`Ownership: ${owners.map((row) => row.owner).join(' → ')}`));
+          }
+        }
+      } finally {
+        db.close();
+      }
+    } catch (error) {
+      log(ctx, paint.warning(`Session store unavailable — ${describeError(error)}`));
+    }
+
+    // 3. Restore the user-set charge limit: flag → recorded → prompt → skip.
+    if (userLimit === null && ctx.interactive && ctx.askNumeric !== undefined) {
+      const raw = await ctx.askNumeric(
+        'Restore the charge limit to which percent? (number, ESC to skip): ',
+        { decimal: false }
+      );
+      if (raw !== null && raw !== '') {
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) userLimit = parsed;
+      }
+    }
+    const { minPercent, maxPercent } = DEFAULT_CHARGE_LIMIT_BOUNDS;
+    if (userLimit !== null) {
+      if (!Number.isFinite(userLimit) || userLimit < minPercent || userLimit > maxPercent) {
+        const message = `Charge limit must be between ${minPercent} and ${maxPercent}`;
+        log(ctx, paint.warning(message));
+        return { ok: false, error: message };
+      }
+      if (userLimit === status.battery.chargeLimit) {
+        log(ctx, paint.info(`Charge limit already at ${userLimit}% — untouched.`));
+      } else {
+        log(ctx, paint.info(`Restoring the user charge limit to ${userLimit}%...`));
+        await ctx.tesla.setChargeLimit(userLimit);
+        log(ctx, paint.success(`✓ EV charge limit restored to ${userLimit}%`));
+      }
+    } else {
+      log(
+        ctx,
+        paint.warning(
+          'No recorded user charge limit — pass --limit <percent> or run set-ev-charge-limit.'
+        )
+      );
+    }
+
+    // 4. Report the car's own schedule (read-only — EVCC never writes schedules).
+    let scheduleReport = 'unknown (OEM schedules not introspectable on this vehicle)';
+    try {
+      const snapshot = await ctx.tesla.getChargingSchedule?.() ?? null;
+      if (snapshot !== null) {
+        const armed = snapshot.windows.filter((window) => window.enabled);
+        scheduleReport =
+          armed.length === 0
+            ? 'none configured'
+            : armed
+                .map(
+                  (window) =>
+                    `${window.kind} window at ${String(Math.floor(window.startMinute / 60)).padStart(2, '0')}:${String(window.startMinute % 60).padStart(2, '0')}`
+                )
+                .join(', ');
+      }
+    } catch {
+      scheduleReport = 'unreadable (vehicle did not answer)';
+    }
+    log(ctx, paint.info(`OEM schedule: ${scheduleReport}`));
+    return { ok: true };
+  } catch (error) {
+    const message = describeError(error);
+    log(ctx, paint.error(`Error: ${message}`));
+    return { ok: false, error: message };
+  }
+}
 
 /**
  * Commander wiring for the vehicle/battery commands.
@@ -593,5 +766,27 @@ export function createChargeFromBatteryCommand(deps: { session: Session }): Comm
       } finally {
         await deps.session.getFranklin()!.disconnect();
       }
+    });
+}
+
+export function createReleaseChargingCommand(deps: { session: Session }): Command {
+  return new Command('release-charging')
+    .allowExcessArguments(false)
+    .description(
+      "Release EVCC's control of the current plug-in: stop charging, restore the user " +
+        'charge limit, and leave the car to its own schedule (until unplug)'
+    )
+    .option('--limit <percent>', 'Charge limit to restore (default: the limit recorded before EVCC changed it)')
+    .option('--keep-charging', 'Do not stop charging — hand over seamlessly')
+    .action(async (options) => {
+      deps.session.requireService('Tesla', await deps.session.initializeTesla());
+      const rawLimit = options.limit as string | undefined;
+      const limit = rawLimit === undefined ? undefined : parseInt(rawLimit);
+      await deps.session.runCommand((ctx) =>
+        releaseCharging(ctx, {
+          keepCharging: options.keepCharging === true,
+          limit,
+        })
+      );
     });
 }

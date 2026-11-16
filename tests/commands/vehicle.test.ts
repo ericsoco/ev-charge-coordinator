@@ -24,10 +24,29 @@ import {
   getBatterySoc,
   getChargingState,
   getEvBatterySoc,
+  releaseCharging,
   setEvChargeLimit,
   startEvCharging,
   stopEvCharging,
 } from '../../src/commands/vehicle.js';
+
+/** EV status fixture; `soc` may be undefined for the unreadable-SoC case. */
+function evStatus(soc: number | undefined) {
+  return {
+    vin: 'VIN-TEST',
+    displayName: 'Test',
+    state: 'online',
+    battery: {
+      soc: soc as number,
+      chargeLimit: 80,
+      isCharging: false,
+      chargingState: 'Stopped',
+      chargeRate: 0,
+      minutesToFull: null,
+      batteryRange: 200,
+    },
+  };
+}
 
 /** The config the handler runs against unless a test overrides the resolution. */
 function makeConfig(buffer = 20): EnergyConfig {
@@ -89,17 +108,8 @@ function makeContext(overrides: {
       : {
           isAuthenticated: () => true,
           getStateOfCharge: async () => 55,
-          getStatus: async () => ({
-            battery: {
-              soc: 55,
-              chargeLimit: 80,
-              isCharging: false,
-              chargingState: 'Stopped',
-              chargeRate: 0,
-              minutesToFull: null,
-              batteryRange: 200,
-            },
-          }),
+          getStatus: async () => evStatus(55),
+          wakeUp: record('wakeUp'),
           setChargeLimit: record('setChargeLimit'),
           startCharging: record('startCharging'),
           stopCharging: record('stopCharging'),
@@ -218,7 +228,7 @@ describe('getChargingState', () => {
 describe('setEvChargeLimit', () => {
   it('forwards a valid limit', async () => {
     const { ctx, calls, out } = makeContext();
-    const result = await setEvChargeLimit(ctx, 80);
+    const result = await setEvChargeLimit(ctx, 80, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(true);
     expect(calls.setChargeLimit[0]).toEqual([80]);
@@ -229,7 +239,7 @@ describe('setEvChargeLimit', () => {
   // rather than clamping silently into a limit the user did not ask for.
   it.each([49, 0, 101, Number.NaN])('rejects %s without calling Tesla', async (bad) => {
     const { ctx, calls } = makeContext();
-    const result = await setEvChargeLimit(ctx, bad);
+    const result = await setEvChargeLimit(ctx, bad, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(calls.setChargeLimit).toBeUndefined();
@@ -243,11 +253,110 @@ describe('setEvChargeLimit', () => {
         },
       },
     });
-    const result = await setEvChargeLimit(ctx, 80);
+    const result = await setEvChargeLimit(ctx, 80, { dbPath: NO_STORE });
 
     expect(result.ok).toBe(false);
     expect(result.error).toBe('vehicle asleep');
     expect(out.join('\n')).toContain('Error: vehicle asleep');
+  });
+});
+
+describe('releaseCharging', () => {
+  /** A real store with one open session, its user limit recorded, EVCC-owned. */
+  function seedStore(dir: string): string {
+    const dbPath = path.join(dir, 'data.sqlite');
+    const db = openStore(dbPath);
+    const id = sessionStore.openSession(db, {
+      vehicleId: 'VIN-TEST', homeBatteryId: 'GW', plugTsMs: 1_000,
+    });
+    sessionStore.recordSessionUserLimit(db, id, 80);
+    sessionStore.setSessionTarget(db, id, 43);
+    sessionStore.appendSessionOwner(db, id, 'evcc', 1_100);
+    db.close();
+    return dbPath;
+  }
+
+  function inspect(dbPath: string) {
+    const db = openStore(dbPath);
+    const row = sessionStore.openSessionFor(db, 'VIN-TEST')!;
+    const owners = sessionStore.sessionOwners(db, row.id);
+    db.close();
+    return { row, owners };
+  }
+
+  it('stops charging, releases the session, and restores the recorded user limit', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-release-'));
+    try {
+      const dbPath = seedStore(dir);
+      const { ctx, out, calls } = makeContext({
+        tesla: {
+          getStatus: async () => ({
+            ...evStatus(43),
+            battery: { ...evStatus(43).battery, chargeLimit: 50, isCharging: true, chargingState: 'Charging' },
+          }),
+        },
+      });
+      const result = await releaseCharging(ctx, { dbPath });
+
+      expect(result.ok).toBe(true);
+      expect(calls.stopCharging).toHaveLength(1);
+      expect(calls.setChargeLimit).toEqual([[80]]);
+      const { row, owners } = inspect(dbPath);
+      expect(row.releasedTsMs).not.toBeNull();
+      expect(row.stopReason).toBeNull();
+      expect(owners.map((entry) => entry.owner)).toEqual(['evcc']);
+      expect(out.join('\n')).toContain('✓ EVCC released control of this plug-in');
+      expect(out.join('\n')).toContain('EV charge limit restored to 80%');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('--keep-charging hands over without a stop; --limit overrides the restore', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-release-'));
+    try {
+      const dbPath = seedStore(dir);
+      const { ctx, calls } = makeContext({
+        tesla: {
+          getStatus: async () => ({ ...evStatus(43), battery: { ...evStatus(43).battery, isCharging: true, chargingState: 'Charging' } }),
+        },
+      });
+      const result = await releaseCharging(ctx, { dbPath, keepCharging: true, limit: 90 });
+
+      expect(result.ok).toBe(true);
+      expect(calls.stopCharging).toBeUndefined();
+      expect(calls.setChargeLimit).toEqual([[90]]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a matching limit untouched and warns when nothing is recorded', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-release-'));
+    try {
+      const dbPath = path.join(dir, 'data.sqlite');
+      const db = openStore(dbPath);
+      sessionStore.openSession(db, { vehicleId: 'VIN-TEST', homeBatteryId: 'GW', plugTsMs: 1_000 });
+      db.close();
+      const { ctx, out, calls } = makeContext();
+      const result = await releaseCharging(ctx, { dbPath });
+
+      expect(result.ok).toBe(true);
+      expect(calls.setChargeLimit).toBeUndefined(); // default fixture limit is 80, no recorded value, non-interactive
+      expect(out.join('\n')).toContain('No recorded user charge limit');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still releases the vehicle side when the store is unavailable', async () => {
+    const { ctx, out, calls } = makeContext();
+    const result = await releaseCharging(ctx, { dbPath: NO_STORE, limit: 75 });
+
+    expect(result.ok).toBe(true);
+    expect(calls.setChargeLimit).toEqual([[75]]);
+    expect(out.join('\n')).toContain('Session store unavailable');
+    expect(out.join('\n')).toContain('OEM schedule:'); // always reports the schedule line
   });
 });
 
@@ -273,7 +382,7 @@ describe('chargeFromBattery', () => {
     // exactly where the EV already is.
     const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 22 },
-      tesla: { getStateOfCharge: async () => 55 },
+      tesla: { getStatus: async () => evStatus(55) },
       buffer: 20,
     });
     const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
@@ -305,7 +414,7 @@ describe('chargeFromBattery', () => {
     // now only the target moving matters: 50.4% -> 51%.
     const { ctx, calls } = makeContext({
       franklin: { getStateOfCharge: async () => 22 },
-      tesla: { getStateOfCharge: async () => 50.4 },
+      tesla: { getStatus: async () => evStatus(50.4) },
       buffer: 20,
     });
     const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
@@ -318,7 +427,7 @@ describe('chargeFromBattery', () => {
     // EV at 80% (60 kWh) + 8.505 kWh -> 68.505 kWh = 91.34% -> 91%.
     const { ctx, calls } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
-      tesla: { getStateOfCharge: async () => 80 },
+      tesla: { getStatus: async () => evStatus(80) },
       buffer: 20,
     });
     const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
@@ -331,7 +440,7 @@ describe('chargeFromBattery', () => {
     // 40% - 20% buffer = 2.7 kWh spare; EV at 20% lands at raw 23.2%.
     const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 40 },
-      tesla: { getStateOfCharge: async () => 20 },
+      tesla: { getStatus: async () => evStatus(20) },
       buffer: 20,
     });
     const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
@@ -355,7 +464,7 @@ describe('chargeFromBattery', () => {
 
   it('refuses to compute when the EV SoC is unreadable', async () => {
     const { ctx, calls, out } = makeContext({
-      tesla: { getStateOfCharge: async () => undefined as unknown as number },
+      tesla: { getStatus: async () => evStatus(undefined) },
     });
     const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
 
@@ -368,7 +477,7 @@ describe('chargeFromBattery', () => {
   it('fails when the EV is already full, rather than writing a no-op limit', async () => {
     const { ctx, calls, out } = makeContext({
       franklin: { getStateOfCharge: async () => 90 },
-      tesla: { getStateOfCharge: async () => 100 },
+      tesla: { getStatus: async () => evStatus(100) },
       buffer: 20,
     });
     const result = await chargeFromBattery(ctx, { start: true, dbPath: NO_STORE });
