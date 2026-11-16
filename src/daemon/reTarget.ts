@@ -45,6 +45,7 @@ import { DEFAULT_WEATHER_POLICY, weatherAdjustment } from '../utils/weather.js';
 import { computeChargeLimit, stopTargetFor, type EnergyConfig } from '../utils/energy.js';
 import * as sessionStore from '../store/SessionStore.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
+import { isManagedEpisode } from './ownership.js';
 import * as evStore from '../store/EvStore.js';
 import * as weatherStore from '../store/WeatherForecastStore.js';
 import { DEFAULT_BATTERY_SAMPLE_MAX_AGE_MS } from './sessionMonitor.js';
@@ -79,6 +80,12 @@ export interface ReTargetInput {
   sessionInitialTargetPercent: number | null;
   /** Non-null only when the MONITOR stopped this session (cleared on start). */
   sessionStopReason: SessionStopReason | null;
+  /**
+   * EVCC started the current episode and the plug-in is not released. False
+   * ⇒ the session is never re-targeted or resumed (the 2026-11-14 ownership
+   * rule — a manual/scheduled episode is not EVCC's to manage).
+   */
+  managed: boolean;
   /** Freshness-gated by the edge: stale reads pass as null (skip, never act). */
   homeBatterySocPercent: number | null;
   /** Effective config: observed-efficiency overlay + weather-adjusted buffer. */
@@ -122,7 +129,7 @@ export function evaluateReTarget(input: ReTargetInput): ReTargetVerdict {
 
   const stored = input.sessionTargetPercent;
   const monitorStopped = input.sessionStopReason !== null;
-  const managesState = input.chargingState === 'Charging' || monitorStopped;
+  const managesState = input.managed && (input.chargingState === 'Charging' || monitorStopped);
 
   let change: ReTargetChange = 'none';
   let newStopTarget: number | null = null;
@@ -155,6 +162,7 @@ export function evaluateReTarget(input: ReTargetInput): ReTargetVerdict {
   // target-reached stop from micro-bursting until the next real raise.
   const effectiveTarget = newStopTarget ?? stored;
   const resume =
+    input.managed &&
     input.chargingState !== 'Charging' &&
     monitorStopped &&
     effectiveTarget !== null &&
@@ -273,6 +281,11 @@ export function createReTargeter(deps: ReTargeterDeps): ReTargeter {
         sessionTargetPercent: session?.targetPercent ?? null,
         sessionInitialTargetPercent: session?.initialTargetPercent ?? null,
         sessionStopReason: session?.stopReason ?? null,
+        managed: isManagedEpisode({
+          lastOwner:
+            session === null ? null : sessionStore.lastSessionOwner(deps.db, session.id),
+          releasedTsMs: session?.releasedTsMs ?? null,
+        }),
         homeBatterySocPercent: batterySoc,
         energyConfig,
       });
@@ -314,6 +327,9 @@ export function createReTargeter(deps: ReTargeterDeps): ReTargeter {
           sessionStore.setSessionTarget(deps.db, session.id, verdict.newStopTarget, verdict.detail);
         }
         if (verdict.resume) {
+          // Claim the resumed episode: EVCC is starting it (the same rule as
+          // the decision consumer's actuation claim).
+          sessionStore.appendSessionOwner(deps.db, session.id, 'evcc', ctx.tsMs);
           await deps.startCharging();
           // The observation we acted on: the battery tick stays quiet until a
           // fresh rich read supersedes it (no duplicate start while the car
