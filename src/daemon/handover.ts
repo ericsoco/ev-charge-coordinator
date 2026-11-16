@@ -17,7 +17,11 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { ChargingScheduleSnapshot } from '../types/ev.js';
-import type { AutoStartConfig, ScheduledChargingConfig } from '../utils/daemonConfig.js';
+import {
+  DEFAULT_SCHEDULED_LEAD_MINUTES,
+  type AutoStartConfig,
+  type ScheduledChargingConfig,
+} from '../utils/daemonConfig.js';
 import { findActivatedChargingWindow, handOverReached } from '../utils/schedule.js';
 import * as sessionStore from '../store/SessionStore.js';
 import { isManagedEpisode } from './ownership.js';
@@ -60,7 +64,11 @@ export function createHandoverStage(
   deps: HandoverDeps
 ): (ctx: ChargingProgressContext) => Promise<void> {
   const log = deps.log ?? (() => {});
-  const policy = deps.scheduledCharging ?? { prioritize: true, leadMinutes: 15, handOverAt: null };
+  const policy = deps.scheduledCharging ?? {
+    prioritize: true,
+    leadMinutes: DEFAULT_SCHEDULED_LEAD_MINUTES,
+    handOverAt: null,
+  };
   // TTL cache: window state does not change tick-to-tick, and vehicle_data
   // reads are billed — never fetch per tick.
   let snapshotCache: { atMs: number; snapshot: ChargingScheduleSnapshot | null } | null = null;

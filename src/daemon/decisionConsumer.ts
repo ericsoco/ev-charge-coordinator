@@ -11,7 +11,11 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { ChargingScheduleSnapshot, EVStatus, VehicleLocation } from '../types/ev.js';
 import type { HomeLocation } from '../utils/credentials.js';
-import type { AutoStartConfig, ScheduledChargingConfig } from '../utils/daemonConfig.js';
+import {
+  DEFAULT_SCHEDULED_LEAD_MINUTES,
+  type AutoStartConfig,
+  type ScheduledChargingConfig,
+} from '../utils/daemonConfig.js';
 import { findStartingWindow } from '../utils/schedule.js';
 import type { EnergyConfig } from '../utils/energy.js';
 import { resolveEnergyConfig } from '../utils/config.js';
@@ -162,7 +166,10 @@ export function createDecisionConsumer(
       // failure — a broken read must not block EVCC entirely (the scheduled
       // charge self-heals later; a stolen window does not).
       let scheduleWindowStartingSoon = false;
-      const schedulePolicy = deps.scheduledCharging ?? { prioritize: true, leadMinutes: 15 };
+      const schedulePolicy = deps.scheduledCharging ?? {
+        prioritize: true,
+        leadMinutes: DEFAULT_SCHEDULED_LEAD_MINUTES,
+      };
       if (schedulePolicy.prioritize && deps.getChargingSchedule) {
         try {
           const snapshot = await deps.getChargingSchedule();
