@@ -97,7 +97,12 @@ beforeAll(async () => {
   sessionStore.setSessionTarget(db, closedId, 55);
   sessionStore.setSessionTarget(db, closedId, 60, 'raised 55 → 60 (solar surplus)');
   sessionStore.setSessionStopReason(db, closedId, 'target_reached');
-  sessionStore.openSession(db, { vehicleId: VIN, homeBatteryId: GW, plugTsMs: NOW - 100_000 });
+  sessionStore.appendSessionOwner(db, closedId, 'evcc', NOW - 640_000);
+  sessionStore.appendSessionOwner(db, closedId, 'scheduled', NOW - 300_000);
+  const openId = sessionStore.openSession(db, {
+    vehicleId: VIN, homeBatteryId: GW, plugTsMs: NOW - 100_000,
+  });
+  sessionStore.appendSessionOwner(db, openId, 'manual', NOW - 90_000);
 
   handle = await startApiServer({
     db,
@@ -290,6 +295,13 @@ describe('GET /api/sessions', () => {
       open: false,
     });
     expect(closed.unplugTsMs).toBe(NOW - 250_000);
+
+    // Ownership timeline (who started each charging episode), oldest first.
+    expect(open.owners).toEqual([{ owner: 'manual', from: NOW - 90_000 }]);
+    expect(closed.owners).toEqual([
+      { owner: 'evcc', from: NOW - 640_000 },
+      { owner: 'scheduled', from: NOW - 300_000 },
+    ]);
   });
 
   it('rejects bad pagination with 400', async () => {

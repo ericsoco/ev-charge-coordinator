@@ -49,6 +49,7 @@ const CLOSED: SessionSummary = {
   evSocEndPercent: 42,
   batterySocStartPercent: 71,
   batterySocEndPercent: 65,
+  owners: [{ owner: 'evcc', from: 1762000000000 }],
 };
 
 const OPEN: SessionSummary = {
@@ -68,6 +69,7 @@ const OPEN: SessionSummary = {
   evSocEndPercent: null,
   batterySocStartPercent: 24,
   batterySocEndPercent: null,
+  owners: [],
 };
 
 function series(): SeriesResult {
