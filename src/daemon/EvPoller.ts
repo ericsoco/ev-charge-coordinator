@@ -25,6 +25,8 @@ import * as homeBatteryStore from '../store/HomeBatteryStore.js';
 import * as sessionStore from '../store/SessionStore.js';
 import * as decisionStore from '../store/DecisionStore.js';
 import { detectTransitions } from './eventDetector.js';
+import { foreignOwner, needsOwnerAttribution } from './ownership.js';
+import { findActiveWindow } from '../utils/schedule.js';
 import type { NotificationEvent } from '../notifiers/types.js';
 import { computeSessionAggregates } from './sessionAggregates.js';
 import type { ScheduledTask } from './scheduler.js';
@@ -60,6 +62,8 @@ export interface VehiclePlugInContext {
   event: EventKind;
   chargingState: string;
   evSocPercent: number | null;
+  /** Charge limit at the observation (the pre-EVCC user limit at plug-in). */
+  chargeLimitPercent?: number | null;
 }
 
 /** What the session-monitor stage receives on every rich read. */
@@ -67,6 +71,8 @@ export interface ChargingProgressContext {
   tsMs: number;
   evSocPercent: number | null;
   chargingState: string;
+  /** Charge limit at the observation; the hand-over stage compares it. */
+  chargeLimitPercent?: number | null;
   /**
    * Which stage produced the tick (diagnostics only): this poller's rich
    * read, or the re-targeter's battery-sample path — the latter exists so a
@@ -80,8 +86,8 @@ const ASLEEP_HEARTBEAT_MS = 3_600_000;
 
 export interface EvPollerDeps {
   db: DatabaseSync;
-  /** Only these two reads are used; tests pass fakes. */
-  ev: Pick<EVService, 'getVehicleState' | 'getStatus'>;
+  /** Only these reads are used; tests pass fakes. getChargingSchedule is optional. */
+  ev: Pick<EVService, 'getVehicleState' | 'getStatus' | 'getChargingSchedule'>;
   vehicleId: string;
   homeBatteryId: string;
   /** Tick cadence (evStatusPollSec), seconds. */
@@ -186,6 +192,47 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
   };
 
   /**
+   * Ownership attribution (the "who started it" rule): one row per charging
+   * episode. Runs on every rich read while charging — the same rule covers
+   * observed transitions and daemon-restart reconciliation. EVCC's own
+   * starts are pre-claimed at command time, so anything unclaimed is
+   * foreign: 'scheduled' when an OEM schedule window is active, else
+   * 'manual' (a documented heuristic — management treats both alike).
+   */
+  const attributeOwner = async (tsMs: number, battery: { chargingState: string }): Promise<void> => {
+    if (battery.chargingState !== 'Charging') return;
+    const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
+    if (open === null) return;
+    const lastOwner = sessionStore.lastSessionOwner(deps.db, open.id);
+    const lastStopTsMs = sessionStore.latestEventTs(deps.db, deps.vehicleId, 'charging_stop');
+    if (!needsOwnerAttribution({ chargingState: battery.chargingState, lastOwner, lastStopTsMs })) {
+      return;
+    }
+
+    let scheduleActive = false;
+    if (deps.ev.getChargingSchedule) {
+      try {
+        const snapshot = await deps.ev.getChargingSchedule();
+        scheduleActive = snapshot !== null && findActiveWindow(snapshot, tsMs) !== null;
+      } catch (error) {
+        log(
+          `[ev-poll] schedule read failed (${
+            error instanceof Error ? error.message : String(error)
+          }) — labeling the episode 'manual'`
+        );
+      }
+    }
+    const owner = foreignOwner(scheduleActive);
+    // Episode start: the charging_start event this episode produced when we
+    // saw it, else now (restart mid-episode or a pre-attribution episode).
+    const startTs = sessionStore.latestEventTs(deps.db, deps.vehicleId, 'charging_start');
+    const fromTsMs =
+      startTs !== null && (lastStopTsMs === null || startTs > lastStopTsMs) ? startTs : tsMs;
+    sessionStore.appendSessionOwner(deps.db, open.id, owner, fromTsMs);
+    log(`[ev-poll] charging episode owned by ${owner} (session ${open.id})`);
+  };
+
+  /**
    * Init reconciliation (first rich read only): a plugged, not-charging car
    * with no session is the plug-in missed while the daemon was not running —
    * record and evaluate it; an open session without a decision gets that
@@ -194,7 +241,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
    */
   const reconcileInitPlugIn = async (
     tsMs: number,
-    battery: { chargingState: string; soc: number }
+    battery: { chargingState: string; soc: number; chargeLimit?: number }
   ): Promise<void> => {
     if (battery.chargingState === 'Disconnected' || battery.chargingState === 'Charging') {
       return;
@@ -230,6 +277,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         event: 'plug_in',
         chargingState: battery.chargingState,
         evSocPercent: battery.soc,
+        chargeLimitPercent: battery.chargeLimit ?? null,
       });
       return;
     }
@@ -242,6 +290,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         event: 'plug_in',
         chargingState: battery.chargingState,
         evSocPercent: battery.soc,
+        chargeLimitPercent: battery.chargeLimit ?? null,
       });
     } else {
       log(`[ev-poll] init: session ${open.id} already decided — skipping`);
@@ -390,6 +439,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
             event: event.kind,
             chargingState: battery.chargingState,
             evSocPercent: battery.soc,
+            chargeLimitPercent: battery.chargeLimit,
           });
         } else if (event.kind === 'charging_start' || event.kind === 'charging_stop') {
           const open = sessionStore.openSessionFor(deps.db, deps.vehicleId);
@@ -423,6 +473,10 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         }
       }
 
+      // Ownership attribution runs before the management chain so the same
+      // tick's monitor/re-target verdicts already see the episode's owner.
+      await attributeOwner(tsMs, battery);
+
       // Session monitor (P1c step 1): every rich read, after the transition
       // loop so a same-tick plug-in's decision has already armed the session
       // target. The stage itself gates on charging and re-reads the mutable
@@ -431,6 +485,7 @@ export function createEvPoller(deps: EvPollerDeps): ScheduledTask {
         tsMs,
         evSocPercent: battery.soc,
         chargingState: battery.chargingState,
+        chargeLimitPercent: battery.chargeLimit,
         source: 'ev-poll',
       });
 
