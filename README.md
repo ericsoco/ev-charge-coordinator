@@ -597,10 +597,22 @@ append-only timeline (`session_owners`) and exposed on `GET /api/sessions`
 - When a foreign episode starts, EVCC **restores the user-set charge limit**
   (the value recorded before EVCC's first limit write), so an OEM-scheduled
   charge completes to *your* limit — not EVCC's energy-budget target.
+- When EVCC's **own** episode concludes (the car stops charging — target
+  reached, buffer stop, or a manual stop), EVCC restores the user-set limit
+  on the next read, while the car is still awake: any idle gap before the
+  next charge — e.g. an overnight scheduled charge — then holds *your*
+  limit, so a schedule whose SoC sits at EVCC's leftover target can still
+  start (the 2026-11-16 incident). A later EVCC resume re-asserts its own
+  limit first, so solar top-ups keep working.
 - Attribution: "did EVCC start it?" is deterministic (EVCC knows its own
   commands); manual-vs-scheduled is a documented heuristic (a manual start
   inside an active schedule window labels as `scheduled`) — management
-  behavior is identical either way.
+  behavior is identical either way. A charge-by/departure schedule maps to
+  `[departure − 12h, departure)` (`DEPARTURE_LOOKBACK_MIN`) — **our**
+  attribution heuristic, not a Tesla-documented lead time: the car computes
+  its own start (`end − time-needed`, per Tesla's docs) inside that span and
+  the API never exposes it. The window only labels owners; it never triggers
+  a hand-over.
 
 **Prioritize scheduled charging** (`daemon-config.json` → `scheduledCharging`,
 default **on**) makes EVCC actively yield:
@@ -616,9 +628,12 @@ default **on**) makes EVCC actively yield:
 - `prioritize` — plug-in auto-start declines (`scheduled_window`) when a
   start-at schedule window is active or begins within `leadMinutes` ("don't
   start a session about to be superseded"), and a managed session **hands
-  over** when a window activates mid-episode: EVCC releases control without
-  stopping the car and restores your charge limit — the scheduled charge
-  seamlessly continues (`⏭️ EVCC released control` notification).
+  over** when a start-at window activates or `handOverAt` passes — charging
+  *or idle*: EVCC releases control without stopping the car and restores
+  your charge limit — the scheduled charge seamlessly continues (`⏭️ EVCC
+  released control` notification). Departure (charge-by) schedules don't
+  trigger this release; the episode-conclusion restore above is what hands
+  them back your limit.
 - `leadMinutes` — the plug-in decline lead (default 15).
 - `handOverAt` — optional daily `"HH:MM"` auto-release fallback for OEMs
   whose schedules EVCC cannot introspect (unset = off).
