@@ -466,6 +466,57 @@ describe('ownership claim + user-limit capture', () => {
   });
 });
 
+describe('store-bookkeeping failure aborts the start loudly', () => {
+  const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
+
+  function openSessionCtx(): VehiclePlugInContext {
+    const id = sessionStore.openSession(db, {
+      vehicleId: 'VIN', homeBatteryId: 'GW', plugTsMs: 500,
+    });
+    return { ...CTX, sessionId: id, chargeLimitPercent: 80 };
+  }
+
+  async function runWithEvents(ctx: VehiclePlugInContext): Promise<NotificationEvent[]> {
+    const events: NotificationEvent[] = [];
+    await consumer({
+      ...LIVE,
+      notify: async (event) => {
+        events.push(event);
+      },
+    })(ctx);
+    return events;
+  }
+
+  it('a wedged sessions table aborts before any car command (the incident shape)', async () => {
+    db.exec('ALTER TABLE sessions DROP COLUMN user_charge_limit_percent');
+    const ctx = openSessionCtx();
+    const events = await runWithEvents(ctx);
+
+    expect(commandCalls).toEqual([]); // no setChargeLimit, no startCharging
+    expect(logs.join('\n')).toContain('auto-start aborted: store bookkeeping failed');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'failure', component: 'decision' });
+    const row = decisionStore.decisionForSession(db, ctx.sessionId)!;
+    expect(row.reasonCode).toBe('service_error');
+    expect(row.accepted).toBe(0);
+    expect(row.reasonDetail).toContain('auto-start aborted');
+  });
+
+  it('a missing session_owners table aborts the claim before any car command', async () => {
+    db.exec('DROP TABLE session_owners');
+    const ctx = openSessionCtx();
+    const events = await runWithEvents(ctx);
+
+    expect(commandCalls).toEqual([]);
+    expect(logs.join('\n')).toContain('auto-start aborted: store bookkeeping failed');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'failure', component: 'decision' });
+    const row = decisionStore.decisionForSession(db, ctx.sessionId)!;
+    expect(row.reasonCode).toBe('service_error');
+    expect(row.reasonDetail).toContain('no such table: session_owners');
+  });
+});
+
 describe('measured efficiency (decision audit + math)', () => {
   const LIVE: Partial<DecisionConsumerDeps> = { autoStart: { enabled: true, filters: [] } };
 

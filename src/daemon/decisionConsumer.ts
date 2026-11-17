@@ -35,7 +35,7 @@ import * as decisionStore from '../store/DecisionStore.js';
 import * as weatherStore from '../store/WeatherForecastStore.js';
 import * as sessionStore from '../store/SessionStore.js';
 import * as homeBattery from '../store/HomeBatteryStore.js';
-import { evaluateDecision } from './engine.js';
+import { evaluateDecision, type DecisionOutcome } from './engine.js';
 import type { VehiclePlugInContext } from './EvPoller.js';
 import type { NotificationEvent } from '../notifiers/types.js';
 
@@ -102,6 +102,50 @@ async function emitNotify(deps: DecisionConsumerDeps, event: NotificationEvent):
   } catch (error) {
     deps.log?.(
       `[decision] notify failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/**
+ * Bookkeeping (target arming, user-limit snapshot, ownership claim) is
+ * load-bearing: an un-armed session has no monitor stop and an un-claimed
+ * episode is not EVCC's to manage. A write failure therefore aborts the
+ * start loudly — log + one failure push + a service_error decision row —
+ * never actuating on a half-recorded state.
+ */
+async function abortOnBookkeepingFailure(
+  deps: DecisionConsumerDeps,
+  ctx: VehiclePlugInContext,
+  outcome: DecisionOutcome,
+  error: unknown
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  const detail = `auto-start aborted: store bookkeeping failed: ${message}`;
+  deps.log?.(`[decision] session ${ctx.sessionId}: ${detail}`);
+  await emitNotify(deps, {
+    type: 'failure',
+    tsMs: ctx.tsMs,
+    component: 'decision',
+    message: detail,
+  });
+  try {
+    decisionStore.insertDecision(deps.db, {
+      vehicleId: deps.vehicleId,
+      homeBatteryId: deps.homeBatteryId,
+      tsMs: ctx.tsMs,
+      sessionId: ctx.sessionId,
+      accepted: false,
+      dryRun: outcome.dryRun,
+      reasonCode: 'service_error',
+      reasonDetail: detail,
+      filterResultsJson: JSON.stringify(outcome.filterResults),
+      limitedBy: outcome.limitedBy,
+    });
+  } catch (rowError) {
+    deps.log?.(
+      `[decision] could not record the aborted decision: ${
+        rowError instanceof Error ? rowError.message : String(rowError)
+      }`
     );
   }
 }
@@ -211,11 +255,16 @@ export function createDecisionConsumer(
       // the computed stop target on the session. Mutable — a later
       // re-targeting step rewrites it mid-session (last write wins).
       if (outcome.stopTargetPercent !== null) {
-        sessionStore.setSessionTarget(deps.db, ctx.sessionId, outcome.stopTargetPercent);
-        // Snapshot the user's charge limit before EVCC writes its own: it is
-        // what a release/foreign-episode restore hands back to the car.
-        if (ctx.chargeLimitPercent != null) {
-          sessionStore.recordSessionUserLimit(deps.db, ctx.sessionId, ctx.chargeLimitPercent);
+        try {
+          sessionStore.setSessionTarget(deps.db, ctx.sessionId, outcome.stopTargetPercent);
+          // Snapshot the user's charge limit before EVCC writes its own: it is
+          // what a release/foreign-episode restore hands back to the car.
+          if (ctx.chargeLimitPercent != null) {
+            sessionStore.recordSessionUserLimit(deps.db, ctx.sessionId, ctx.chargeLimitPercent);
+          }
+        } catch (error) {
+          await abortOnBookkeepingFailure(deps, ctx, outcome, error);
+          return;
         }
       }
 
@@ -229,7 +278,12 @@ export function createDecisionConsumer(
         // Claim the charging episode before the commands fly: the daemon's
         // attribution sees this row and leaves the episode to EVCC (a claim
         // whose start never materialized lapses after EVCC_CLAIM_WINDOW_MS).
-        sessionStore.appendSessionOwner(deps.db, ctx.sessionId, 'evcc', ctx.tsMs);
+        try {
+          sessionStore.appendSessionOwner(deps.db, ctx.sessionId, 'evcc', ctx.tsMs);
+        } catch (error) {
+          await abortOnBookkeepingFailure(deps, ctx, outcome, error);
+          return;
+        }
         try {
           await deps.chargeCommands.setChargeLimit(target);
           // The car needs a beat to apply a raised limit: one status read
