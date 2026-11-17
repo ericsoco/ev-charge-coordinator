@@ -38,9 +38,13 @@ python3 -m venv .venv && .venv/bin/pip install -r python/requirements.txt  # Pyt
 ## Key Files
 - `src/types/battery.ts`: BatteryService interface
 - `src/types/ev.ts`: EVService interface
-- `src/store/`: SQLite store — `database.ts` (open/migrate/WAL), `migrations/` (versioned
-  DDL), `*Store.ts` repositories, `types.ts` row interfaces; schema↔code is enforced by
-  `tests/store/schema-pin.test.ts`
+- `src/store/`: SQLite store — `database.ts` (open/migrate/WAL + schema guard: every open
+  verifies the real schema against `schema.ts`'s expected-schema manifest, because the
+  `user_version` stamp can lie), `migrations/` (versioned DDL — **migration numbers are
+  allocated at merge time**: renumber a not-yet-landed branch's migration on rebase,
+  never ship a number another branch already stamped into stores), `*Store.ts`
+  repositories, `types.ts` row interfaces; schema↔code is enforced by
+  `tests/store/schema-pin.test.ts` (same manifest)
 - `python/franklin_proxy.py`: Proxies requests to franklinwh Python library
 - `web/`: Svelte 5 + Vite app (Now/Then/Messages tabs) — npm workspace `evcc-web`;
   tests live in `web/tests/` (mirroring the root `tests/` pattern); dev server
