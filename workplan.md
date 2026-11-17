@@ -267,9 +267,46 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
-<<<<<<< Updated upstream
-### 2026-11-15 — session ownership + scheduled-charging coexistence (branch `feat/session-ownership`)
-=======
+### 2026-11-16 — incident: migration-006 collision wedged the live store; schema guard + loud bookkeeping abort (branch `fix/store-schema-guard`)
+
+**Incident (user report):** `[re-target] failed: no such column: user_charge_limit_percent`
+every tick (ntfy + daemon logs) and the car would not auto-charge. **Root cause: two
+branches shipped migration `006`** — `p2/step7-messages-push` (`006-notifications-push`,
+version 6; stamped into the live store when the daemon ran from that branch 11-14/15)
+and `feat/session-ownership` (`006-session-ownership`, version 6). `migrate()` trusts
+`PRAGMA user_version`, saw 6, and skipped the ownership DDL forever: `sessions` lacked
+`user_charge_limit_percent`/`released_ts_ms` and `session_owners` never existed. Every
+session SELECT threw; the auto-start path threw in `recordSessionUserLimit`/
+`appendSessionOwner` before any Tesla command — no start, no decision row.
+
+**Repair (Phase 0, live 2026-11-16):** online `.backup` →
+`~/.ev-charge-coordinator/backups/data-2026-11-16-pre-006-rewind.sqlite` →
+`PRAGMA user_version = 5` (one stale read at the WAL/checkpoint boundary re-verified
+clean) → daemon rebuild + restart applied `006-session-ownership` normally. Verified:
+version 6, `session_owners` + both columns present, `decisions` CHECK gained
+`scheduled_window`, no further column errors.
+
+**Hardening (Phase 1, this branch):**
+
+1. **Runtime schema guard** — `src/store/schema.ts` (expected-schema manifest, shared
+   with `tests/store/schema-pin.test.ts`) + `verifySchema()` in `store/database.ts`
+   (all three openers): the real tables/columns must match the manifest after
+   migrate()/version checks, so a lying stamp fails loudly at open (missing artifacts +
+   repair steps) instead of per-tick `no such column`. Regression tests reproduce the
+   collision (v5 schema stamped 6).
+2. **`decisionConsumer` bookkeeping abort** — arming / user-limit snapshot / ownership-
+   claim failures now abort the start loudly (`auto-start aborted: store bookkeeping
+   failed: …` + one `failure` push + a `service_error` decision row) instead of a
+   silent log-only swallow with the car left uncharged.
+3. AGENTS.md records the guard + the **migration numbers are allocated at merge time**
+   rule (renumber a not-yet-landed branch's migration on rebase); the workplan conflict
+   committed in `1698b48` is resolved here.
+
+**Follow-up (owner: the `p2/step7-messages-push` agent, per user):** rebase + retool
+that branch's migration on top of the ownership 006 — it must land as **007** and be
+idempotent (`notifications`/`push_subscriptions` already exist in the live store from
+its own earlier run).
+
 ### 2026-11-16 — consideration: where action-taking code lives (write-surface visibility)
 
 **Question raised in PR #90 review:** `daemon/handover.ts` executes actions
@@ -324,8 +361,7 @@ plus test fixtures; (3) is docs-only. If adopted: (1)+(3) first on a fresh
 branch, (2) only if the extra indirection keeps paying for itself.
 
 
-### 2026-11-14 — P2 step 7 complete: Messages list + Web Push
->>>>>>> Stashed changes
+### 2026-11-15 — session ownership + scheduled-charging coexistence (branch `feat/session-ownership`)
 
 **Problem (user report, evidence-backed):** EVCC aborted OEM-scheduled overnight
 charging — `[session-monitor] stopped charging (battery_buffer)` at 2026-11-13
@@ -390,6 +426,11 @@ follow-up to extract a shared `releaseControl()` (handover ↔ `release-charging
 duplicate the release sequence) and optionally converge car writes behind
 the existing `ActuatorPort` seam.
 
+### 2026-11-14 — P2 step 7 (Messages list + Web Push) — pending on `p2/step7-messages-push`
+
+Not yet landed on `main` — the entry body travels with that branch's rebase,
+which must also retool its store migration on top of the ownership migration
+006 (both claimed version 6; see the 2026-11-16 incident entry above).
 
 ### 2026-11-14 — PR #86 (P2 step 5) landed manually (GitHub mergeability flake)
 
