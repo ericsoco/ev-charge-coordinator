@@ -1,14 +1,23 @@
 /**
- * Hand-over stage (2026-11-14 ownership work) — two jobs on every rich read:
+ * Hand-over stage (2026-11-14 ownership work; + 2026-11-17 episode-conclusion
+ * restore) — three jobs on every rich read:
  *
- * 1. Restore the user-set charge limit on a foreign (manual/scheduled)
+ * 1. Restore the user-set charge limit when EVCC's OWN episode concludes
+ *    (car stopped charging; the claim predates the stop): the idle gap
+ *    before the next charge — e.g. an overnight scheduled charge — must
+ *    hold the USER's limit, not EVCC's budget target (2026-11-16: EVCC's
+ *    54% left on the car made the departure schedule a no-op all night).
+ *    Once per conclusion; a failed write retries next tick.
+ * 2. Restore the user-set charge limit on a foreign (manual/scheduled)
  *    episode: EVCC's managed episode left its own limit on the car; when
  *    someone else owns the charge, the car must charge to the USER's limit.
  *    Once per episode — never clobbers a mid-episode user change.
- * 2. Prioritize scheduled charging (preference, default on): when a start-at
- *    schedule window activates mid-managed-episode (or the `handOverAt`
- *    fallback time passes), release EVCC's control WITHOUT stopping the car
- *    — the scheduled session seamlessly continues to the user's limit.
+ * 3. Prioritize scheduled charging (preference, default on): when a start-at
+ *    schedule window activates (or the `handOverAt` fallback time passes)
+ *    during a managed plug-in — charging or idle — release EVCC's control
+ *    WITHOUT stopping the car: the scheduled session seamlessly continues to
+ *    the user's limit. Departure windows never trigger this (they are an
+ *    attribution heuristic only).
  *
  * Live gating mirrors the monitor/re-targeter (autoStart.enabled && !dry-run;
  * shadow logs would-restore / would-release once per episode). Never throws —
@@ -75,6 +84,9 @@ export function createHandoverStage(
   // Once-per-episode flags (restart-safe: a restart may restore once more —
   // idempotent by the limit comparison).
   let restoreAttemptedFor: number | null = null;
+  // Conclusion restore key: the stopping event's ts. A new stop re-arms it;
+  // set only after a successful live write so a failed write retries.
+  let conclusionRestoredFor: number | null = null;
   let shadowReleased = false;
   // Previous tick's clock for interval checks; null on the first tick, which
   // then looks back one cache window so a restart cannot miss an activation.
@@ -109,8 +121,49 @@ export function createHandoverStage(
       const nowMs = ctx.tsMs;
       const fromMs = lastTickMs ?? nowMs - SCHEDULE_CACHE_MS;
 
-      // 1. Restore the user limit on a foreign episode (D4) — once per episode.
       const userLimit = session.userChargeLimitPercent;
+      // A conclusion restore in this tick pre-empts job 3's redundant write
+      // (ctx.chargeLimitPercent still reads the pre-write value this tick).
+      let restoredThisTick = false;
+
+      // 1. Restore the user limit when EVCC's own episode concludes — the car
+      //    just stopped and is still awake, so the idle gap ahead (e.g. an
+      //    overnight scheduled charge) finds the USER's limit on it. The claim
+      //    predating the stop distinguishes "concluded" from the start/resume
+      //    gap where EVCC's limit must stay put until charging begins.
+      if (
+        managedSession &&
+        ctx.chargingState !== 'Charging' &&
+        userLimit != null &&
+        ctx.chargeLimitPercent != null &&
+        ctx.chargeLimitPercent !== userLimit &&
+        lastOwner !== null
+      ) {
+        const lastStopTsMs = sessionStore.latestEventTs(deps.db, deps.vehicleId, 'charging_stop');
+        if (
+          lastStopTsMs !== null &&
+          lastOwner.fromTsMs <= lastStopTsMs &&
+          conclusionRestoredFor !== lastStopTsMs
+        ) {
+          if (live) {
+            await deps.setChargeLimit(userLimit);
+            conclusionRestoredFor = lastStopTsMs;
+            restoredThisTick = true;
+            log(
+              `[hand-over] episode concluded — restored the user charge limit to ${userLimit}% ` +
+                `(EVCC had left ${ctx.chargeLimitPercent}%)`
+            );
+          } else {
+            conclusionRestoredFor = lastStopTsMs;
+            log(
+              `[hand-over] would restore the user charge limit to ${userLimit}% — episode concluded; ` +
+                'shadow mode (autoStart disabled or --dry-run), not actuating'
+            );
+          }
+        }
+      }
+
+      // 2. Restore the user limit on a foreign episode (D4) — once per episode.
       if (
         ctx.chargingState === 'Charging' &&
         !managedSession &&
@@ -135,14 +188,11 @@ export function createHandoverStage(
         }
       }
 
-      // 2. Prioritize scheduled charging: hand over when a start-at window
-      //    activates mid-managed-episode or the handOverAt fallback passes.
-      if (
-        policy.prioritize &&
-        managedSession &&
-        ctx.chargingState === 'Charging' &&
-        session.releasedTsMs === null
-      ) {
+      // 3. Prioritize scheduled charging: hand over when a start-at window
+      //    activates or the handOverAt fallback passes — charging OR idle (an
+      //    idle managed session must yield too; its leftover limit would
+      //    otherwise block the very schedule it is handing over to).
+      if (policy.prioritize && managedSession && session.releasedTsMs === null) {
         const snapshot = await cachedSnapshot(nowMs);
         const activated =
           snapshot !== null ? findActivatedChargingWindow(snapshot, fromMs, nowMs) : null;
@@ -158,7 +208,8 @@ export function createHandoverStage(
             if (
               userLimit != null &&
               ctx.chargeLimitPercent != null &&
-              ctx.chargeLimitPercent !== userLimit
+              ctx.chargeLimitPercent !== userLimit &&
+              !restoredThisTick
             ) {
               await deps.setChargeLimit(userLimit);
             }
