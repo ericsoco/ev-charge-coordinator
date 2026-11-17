@@ -1,9 +1,10 @@
 /**
  * Schema pin — the three-way drift guard for the store.
  *
- * DDL (migrations/001-initial-schema.ts) ↔ row interfaces (types.ts) ↔
+ * The expected schema lives in src/store/schema.ts (shared with the runtime
+ * schema guard in store/database.ts) ↔ row interfaces (types.ts) ↔
  * aliased repository SELECTs. A schema change must touch all three in one
- * commit: the migration, the interface, and these pinned lists. No codegen —
+ * commit: the migration, the interface, and the pinned manifest. No codegen —
  * introspection plus compile-time-checked fixtures do the pinning:
  *
  * 1. table_info pins column order + NOT NULL + the id primary key;
@@ -15,7 +16,7 @@
  *    moment an interface changes.
  *
  * PRAGMA table names cannot be bound; the interpolated names come from the
- * pinned TABLES literal below.
+ * pinned EXPECTED_SCHEMA manifest.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
@@ -23,6 +24,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { DatabaseSync } from 'node:sqlite';
 import { openStore } from '../../src/store/database.js';
+import { EXPECTED_SCHEMA } from '../../src/store/schema.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
 import * as ev from '../../src/store/EvStore.js';
 import * as sessions from '../../src/store/SessionStore.js';
@@ -39,85 +41,7 @@ import type {
   WeatherForecastRow,
 } from '../../src/store/types.js';
 
-/**
- * DDL truth: creation-order columns and the explicitly declared NOT NULL set
- * per table. Note on `id`: it is a rowid alias — implicitly non-NULL — but
- * SQLite reports its `notnull` flag as 0 unless NOT NULL is written
- * literally, so `id`'s non-nullness is pinned by the pk assertion below
- * rather than by the notNull lists.
- */
-const TABLES: {
-  table: string;
-  columns: readonly string[];
-  notNull: readonly string[];
-}[] = [
-  {
-    table: 'home_battery_samples',
-    columns: [
-      'id', 'site_id', 'home_battery_id', 'ts_ms', 'soc_percent', 'soc_kwh',
-      'power_w', 'home_load_w', 'solar_w', 'grid_w',
-    ],
-    notNull: ['site_id', 'home_battery_id', 'ts_ms'],
-  },
-  {
-    table: 'home_energy_counters',
-    columns: [
-      'id', 'site_id', 'home_battery_id', 'ts_ms', 'battery_charge_kwh',
-      'battery_discharge_kwh', 'grid_import_kwh', 'grid_export_kwh',
-      'solar_kwh', 'home_use_kwh',
-    ],
-    notNull: ['site_id', 'home_battery_id', 'ts_ms'],
-  },
-  {
-    table: 'ev_samples',
-    columns: [
-      'id', 'site_id', 'vehicle_id', 'ts_ms', 'state', 'charging_state',
-      'soc_percent', 'charge_limit_soc', 'charge_rate_kw', 'minutes_to_full',
-      'charge_energy_added_kwh', 'at_home',
-    ],
-    notNull: ['site_id', 'vehicle_id', 'ts_ms'],
-  },
-  {
-    table: 'events',
-    columns: ['id', 'site_id', 'vehicle_id', 'ts_ms', 'kind', 'from_state', 'to_state'],
-    notNull: ['site_id', 'vehicle_id', 'ts_ms', 'kind'],
-  },
-  {
-    table: 'sessions',
-    columns: [
-      'id', 'site_id', 'vehicle_id', 'home_battery_id', 'plug_ts_ms',
-      'unplug_ts_ms', 'energy_kwh', 'energy_percent', 'elapsed_ms',
-      'house_energy_kwh', 'efficiency', 'target_percent', 'stop_reason',
-      'initial_target_percent', 'target_change_reason',
-      'user_charge_limit_percent', 'released_ts_ms',
-    ],
-    notNull: ['site_id', 'vehicle_id', 'home_battery_id', 'plug_ts_ms'],
-  },
-  {
-    table: 'session_owners',
-    columns: ['id', 'site_id', 'session_id', 'owner', 'from_ts_ms'],
-    notNull: ['site_id', 'session_id', 'owner', 'from_ts_ms'],
-  },
-  {
-    table: 'weather_forecasts',
-    columns: [
-      'id', 'site_id', 'fetched_ts_ms', 'hour_ts_ms', 'irradiance_wm2',
-      'temperature_c', 'raw_json',
-    ],
-    notNull: ['site_id', 'fetched_ts_ms', 'hour_ts_ms'],
-  },
-  {
-    table: 'decisions',
-    columns: [
-      'id', 'site_id', 'vehicle_id', 'home_battery_id', 'ts_ms', 'session_id',
-      'accepted', 'dry_run', 'reason_code', 'reason_detail',
-      'filter_results_json', 'limited_by',
-    ],
-    notNull: [
-      'site_id', 'vehicle_id', 'ts_ms', 'accepted', 'dry_run', 'reason_code',
-    ],
-  },
-];
+/** DDL truth: the pinned EXPECTED_SCHEMA manifest (src/store/schema.ts). */
 
 /** The aliasing rule every store SELECT follows: snake_case → camelCase. */
 function toCamel(snake: string): string {
@@ -193,9 +117,9 @@ afterAll(() => {
   fs.rmSync(dbDir, { recursive: true, force: true });
 });
 
-describe('DDL pin (introspected vs the literal list)', () => {
+describe('DDL pin (introspected vs the pinned manifest)', () => {
   it('column order, NOT NULL set, and id primary key match', () => {
-    for (const { table, columns, notNull } of TABLES) {
+    for (const { table, columns, notNull } of EXPECTED_SCHEMA) {
       const info = db.prepare(`PRAGMA table_info(${table})`).all() as unknown as {
         name: string;
         notnull: number;
@@ -223,14 +147,14 @@ describe('DDL pin (introspected vs the literal list)', () => {
 
 describe('interface pin (DDL columns ↔ row-interface keys)', () => {
   it('every column camel-converts to an interface key, per table', () => {
-    for (const { table, columns } of TABLES) {
+    for (const { table, columns } of EXPECTED_SCHEMA) {
       const keys = FIXTURES[table];
       expect(columns.map(toCamel).sort(), table).toEqual([...keys]);
     }
   });
 
   it('every table has a pinned row interface', () => {
-    const unpinned = TABLES.map((t) => t.table).filter((name) => !(name in FIXTURES));
+    const unpinned = EXPECTED_SCHEMA.map((t) => t.table).filter((name) => !(name in FIXTURES));
     expect(unpinned).toEqual([]);
   });
 });

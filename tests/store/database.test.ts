@@ -10,7 +10,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
-import { openStore, storePath, withTransaction } from '../../src/store/database.js';
+import {
+  openStore,
+  openStoreReadOnly,
+  openStoreWritable,
+  storePath,
+  withTransaction,
+} from '../../src/store/database.js';
 import { CURRENT_SCHEMA_VERSION } from '../../src/store/migrations/index.js';
 import { makeLegacyStoreAt } from './legacy-store.js';
 import * as homeBattery from '../../src/store/HomeBatteryStore.js';
@@ -171,6 +177,69 @@ describe('legacy stores (stale-schema recovery)', () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe('schema guard (the version stamp can lie)', () => {
+  /**
+   * The stamp-lie: another build stamped the store "current" via its own
+   * same-numbered migration, so the schema is behind the stamp and migrate()
+   * will never catch it up. Reproduces the 2026-11-16 incident shape (a v5
+   * schema stamped 6).
+   */
+  function stampVersion(version: number): void {
+    const stamper = new DatabaseSync(dbPath);
+    stamper.exec(`PRAGMA user_version = ${version}`);
+    stamper.close();
+  }
+
+  it('openStore refuses a stamped-current store with an older schema', () => {
+    makeLegacyStoreAt(dbPath, 5);
+    stampVersion(CURRENT_SCHEMA_VERSION);
+
+    expect(() => openStore(dbPath)).toThrow(/stamp does not match/);
+  });
+
+  it('the refusal names the missing artifacts and the repair', () => {
+    makeLegacyStoreAt(dbPath, 5);
+    stampVersion(CURRENT_SCHEMA_VERSION);
+
+    let message = '';
+    try {
+      openStore(dbPath);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('table session_owners');
+    expect(message).toContain('column sessions.user_charge_limit_percent');
+    expect(message).toContain('column sessions.released_ts_ms');
+    expect(message).toContain('PRAGMA user_version');
+  });
+
+  it('read-only and writable opens refuse the same store', () => {
+    makeLegacyStoreAt(dbPath, 5);
+    stampVersion(CURRENT_SCHEMA_VERSION);
+
+    expect(() => openStoreReadOnly(dbPath)).toThrow(/stamp does not match/);
+    expect(() => openStoreWritable(dbPath)).toThrow(/stamp does not match/);
+  });
+
+  it('the refusal leaves the store untouched (the stamp still lies)', () => {
+    makeLegacyStoreAt(dbPath, 5);
+    stampVersion(CURRENT_SCHEMA_VERSION);
+
+    expect(() => openStore(dbPath)).toThrow();
+    const check = new DatabaseSync(dbPath, { readOnly: true });
+    expect(pragma(check, 'user_version')).toBe(CURRENT_SCHEMA_VERSION);
+    check.close();
+  });
+
+  it('an honest store at the current version passes the guard', () => {
+    const db = openStore(dbPath); // fresh: migrated + verified
+    db.close();
+    expect(() => openStore(dbPath)).not.toThrow();
+    expect(() => openStoreReadOnly(dbPath)).not.toThrow();
+    expect(() => openStoreWritable(dbPath)).not.toThrow();
   });
 });
 

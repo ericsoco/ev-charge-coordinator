@@ -11,6 +11,7 @@ import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
 import { getConfigDir } from '../utils/credentials.js';
 import { CURRENT_SCHEMA_VERSION, MIGRATIONS } from './migrations/index.js';
+import { EXPECTED_SCHEMA } from './schema.js';
 
 /** The store lives beside config.json — same owner-only directory. */
 export function storePath(): string {
@@ -39,6 +40,40 @@ function staleStoreError(dbPath: string, current: number): Error {
       `${CURRENT_SCHEMA_VERSION}. The daemon applies migrations when it starts — ` +
       `run it once with this build, then retry.`
   );
+}
+
+function schemaMismatchError(dbPath: string, current: number, missing: string[]): Error {
+  return new Error(
+    `Store ${dbPath} is stamped schema version ${current} but is missing ` +
+      `${missing.join(', ')} — the stamp does not match the schema (likely stamped ` +
+      `by a different build's same-numbered migration). Repair: back up the store, ` +
+      `rewind the stamp to the newest version whose schema is actually present ` +
+      `(PRAGMA user_version = <n>), then run this build again so migrations can apply.`
+  );
+}
+
+/**
+ * The post-open schema guard: every expected table and column must actually
+ * exist (PRAGMA table_info). Catches a version stamp that lies before any
+ * query meets a missing column at runtime. Table names come from the pinned
+ * EXPECTED_SCHEMA manifest (PRAGMA names cannot be bound).
+ */
+function verifySchema(db: DatabaseSync, dbPath: string): void {
+  const missing: string[] = [];
+  for (const { table, columns } of EXPECTED_SCHEMA) {
+    const info = db.prepare(`PRAGMA table_info(${table})`).all() as unknown as { name: string }[];
+    if (info.length === 0) {
+      missing.push(`table ${table}`);
+      continue;
+    }
+    const present = new Set(info.map((column) => column.name));
+    for (const column of columns) {
+      if (!present.has(column)) missing.push(`column ${table}.${column}`);
+    }
+  }
+  if (missing.length > 0) {
+    throw schemaMismatchError(dbPath, readSchemaVersion(db), missing);
+  }
 }
 
 /**
@@ -83,6 +118,7 @@ export function openStore(dbPath: string = storePath()): DatabaseSync {
   db.exec('PRAGMA busy_timeout = 5000');
   try {
     migrate(db, dbPath);
+    verifySchema(db, dbPath);
   } catch (error) {
     db.close();
     throw error;
@@ -109,6 +145,12 @@ export function openStoreReadOnly(dbPath: string = storePath()): DatabaseSync {
       ? staleStoreError(dbPath, current)
       : newerStoreError(dbPath, current);
   }
+  try {
+    verifySchema(db, dbPath);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
   return db;
 }
 
@@ -133,6 +175,12 @@ export function openStoreWritable(dbPath: string = storePath()): DatabaseSync {
     throw current < CURRENT_SCHEMA_VERSION
       ? staleStoreError(dbPath, current)
       : newerStoreError(dbPath, current);
+  }
+  try {
+    verifySchema(db, dbPath);
+  } catch (error) {
+    db.close();
+    throw error;
   }
   return db;
 }
