@@ -267,6 +267,49 @@ Display-only in v1. Out of scope: actuation (fast-follow), multi-user, native ap
 
 <!-- Append dated entries below after each Act response, per AGENTS.md. -->
 
+### 2026-11-17 — hand-over: restore at episode conclusion + idle release (branch `fix/handover-episode-conclusion-restore`)
+
+**Incident (user report, evidence-backed):** the 2026-11-16 afternoon session
+(40) charged to EVCC's 54% target, ended `Complete` at 17:41, and EVCC's 54%
+stayed on the car all night — the user's 6am departure schedule found
+SoC 54 ≥ limit 54, never started charging, and no foreign episode ever
+appeared for the D4 restore to catch. Store: `user_charge_limit_percent = 60`
+correctly snapshotted, `released_ts_ms` NULL, owners = `evcc` only, every
+overnight `ev_sample.charge_limit_soc = 54`. Root cause: **both restore paths
+are contingent on charging happening, but the leftover limit is what prevents
+the charging**; the release path additionally required `Charging` (car was
+`Complete`) and only detects start-at windows (their schedule is charge-by —
+`DEPARTURE_LOOKBACK_MIN` is an attribution-only heuristic, documented as such
+in README now; Tesla computes the real start `end − time-needed` internally
+and exposes no window).
+
+**Changes (user-approved Option A extended):**
+- `daemon/handover.ts` job 1 (new): restore the user limit when EVCC's own
+  episode **concludes** — managed session, not charging, limit ≠ user limit,
+  and `lastOwner.fromTsMs ≤ latest charging_stop` (the claim predates the
+  stop; the same shape as `needsOwnerAttribution`). The car just stopped and
+  is still awake (~10 min post-charge), so the idle gap ahead holds the
+  USER's limit before any scheduled charge evaluates it — the sleeping-car
+  case resolves because the write lands *before* sleep, not at window time.
+  Once per conclusion (keyed on the stop's ts, set only after a successful
+  write → a failed write retries next tick); shadow logs `would restore`.
+  Start/resume gaps are excluded by the claim-vs-stop test (a resumed
+  episode re-claims with a newer ts, so the next conclusion re-arms it).
+- Hand-over job 3: dropped the `chargingState === 'Charging'` gate —
+  start-at activation and `handOverAt` now release an idle managed session
+  too (its leftover limit would otherwise block the very schedule it hands
+  over to); `restoredThisTick` suppresses the redundant second write when a
+  conclusion restore landed in the same tick.
+- Departure-window release trigger: **dropped** — the 12h lookback stays
+  attribution-only (pinned by test); correctness no longer depends on
+  catching an awake moment inside an arbitrary window.
+- Tests: 8 new in `tests/daemon/handover.test.ts` (conclusion restore once /
+  start-gap no-op / charging no-op / shadow / retry-after-failure / idle
+  start-at release / idle handOverAt / departure-never-releases / incident
+  night end-to-end). README "Charging ownership": conclusion-restore bullet,
+  12h-provenance note, prioritize bullet now says charging-or-idle.
+  Gate: `npm run check` green.
+
 ### 2026-11-16 — incident: migration-006 collision wedged the live store; schema guard + loud bookkeeping abort (branch `fix/store-schema-guard`)
 
 **Incident (user report):** `[re-target] failed: no such column: user_charge_limit_percent`
