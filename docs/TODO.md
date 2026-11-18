@@ -1,3 +1,8 @@
+****
+AFTER ZOOX -- CONTINUE TASK:
+"let's jump ahead to step 7. We'll come back later to pick up steps 5.5 and 6. I'm starting you directly in Act mode, go ahead and do the work locally n a branch but tell me both the complete plan and output when you're done."
+****
+
 FEATURES
 [X] Trigger charging math + session on vehicle plugged in (at home) event. Does Tesla provide a way to push this event?
     [X] Need to (re?) design application as a long-running process
